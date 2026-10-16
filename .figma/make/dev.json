@@ -18,5 +18,5 @@
     "pnpm-lock.yaml"
   ],
   // Files whose changes trigger only a dev server restart (no install).
-  "restartOn": []
+  "restartOn": [".figma/make/site.json"]
 }

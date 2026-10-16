@@ -1,4 +1,6 @@
 {
+  "title": "OddJobs.com",
+  "language": "en",
   "description": "Connects users in Africa with vetted service providers for essential tasks like cleaning and repairs, facilitating secure payments and reviews.",
   "robots": {
     "index": false
