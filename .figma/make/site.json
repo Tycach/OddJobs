@@ -1,0 +1,10 @@
+{
+  "description": "Connects users in Africa with vetted service providers for essential tasks like cleaning and repairs, facilitating secure payments and reviews.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
