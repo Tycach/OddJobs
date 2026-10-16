@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react"
 
 type Role = "consumer" | "provider" | "admin" | "support" | "partner"
-type Screen = "welcome" | "home" | "search" | "map" | "profile" | "post" | "jobs" | "bids" | "checkout" | "track" | "chat" | "review" | "dispute" | "history" | "saved" | "notifications" | "settings" | "providerHome" | "onboarding" | "providerVerification" | "feed" | "jobDetail" | "management" | "wallet" | "reputation" | "training" | "plans" | "analytics" | "ads" | "overview" | "users" | "verification" | "categories" | "moderation" | "adApprovals" | "audit" | "config" | "disputes" | "inbox" | "knowledgeBase" | "programmes" | "impact" | "builder"
+type Screen = "welcome" | "workspace" | "login" | "home" | "search" | "map" | "profile" | "post" | "jobs" | "bids" | "checkout" | "track" | "chat" | "review" | "dispute" | "history" | "saved" | "notifications" | "settings" | "providerHome" | "onboarding" | "providerVerification" | "feed" | "jobDetail" | "management" | "wallet" | "reputation" | "training" | "plans" | "analytics" | "ads" | "overview" | "users" | "verification" | "categories" | "moderation" | "adApprovals" | "audit" | "config" | "disputes" | "inbox" | "knowledgeBase" | "programmes" | "impact" | "builder"
 
 type DemoBid = {
   provider: string
@@ -43,6 +43,7 @@ type DemoStore = {
 }
 
 const demoStorageKey = "oddjobs-demo-v1"
+const demoSessionKey = "oddjobs-demo-session-v1"
 const initialDemoStore: DemoStore = {
   selectedJobId: "OJ-2841",
   selectedBid: {
@@ -139,8 +140,18 @@ const roleHomes: Record<Role, Screen> = {
   partner: "programmes",
 }
 
+const workspaceLabels: Record<Role, string> = {
+  consumer: "Hire someone",
+  provider: "Offer services",
+  admin: "Admin workspace",
+  support: "Support workspace",
+  partner: "Partner workspace",
+}
+
 const roleScreens: Record<Role, readonly Screen[]> = {
   consumer: [
+    "workspace",
+    "login",
     "home",
     "search",
     "map",
@@ -159,6 +170,7 @@ const roleScreens: Record<Role, readonly Screen[]> = {
     "settings",
   ],
   provider: [
+    "login",
     "providerHome",
     "onboarding",
     "providerVerification",
@@ -173,6 +185,7 @@ const roleScreens: Record<Role, readonly Screen[]> = {
     "ads",
   ],
   admin: [
+    "login",
     "overview",
     "users",
     "verification",
@@ -182,8 +195,8 @@ const roleScreens: Record<Role, readonly Screen[]> = {
     "audit",
     "config",
   ],
-  support: ["disputes", "inbox", "moderation", "knowledgeBase"],
-  partner: ["programmes", "impact", "builder"],
+  support: ["login", "disputes", "inbox", "moderation", "knowledgeBase"],
+  partner: ["login", "programmes", "impact", "builder"],
 }
 
 type WorkspaceRoute = {
@@ -222,6 +235,36 @@ function getWorkspaceRoute(pathname: string): WorkspaceRoute {
     (candidate) => candidate === screenSegment,
   )
   return { role, screen: screen ?? roleHomes[role] }
+}
+
+function readDemoSessionRole(): Role | null {
+  try {
+    const savedRole = window.sessionStorage.getItem(demoSessionKey)
+    return (
+      (["consumer", "provider", "admin", "support", "partner"] as const).find(
+        (role) => role === savedRole,
+      ) ?? null
+    )
+  } catch (error) {
+    console.error("Unable to read the OddJobs demo session.", error)
+    return null
+  }
+}
+
+function getAuthenticatedRoute(
+  pathname: string,
+  authenticatedRole: Role | null,
+): WorkspaceRoute {
+  const route = getWorkspaceRoute(pathname)
+  if (
+    route.screen === "welcome" ||
+    route.screen === "workspace" ||
+    route.screen === "login" ||
+    route.role === authenticatedRole
+  ) {
+    return route
+  }
+  return { role: route.role, screen: "login" }
 }
 
 function workspacePath({ role, screen }: WorkspaceRoute) {
@@ -358,12 +401,19 @@ function Icon({ name, size = 20 }: IconProps) {
         <path d="M5 22V3M5 4h13l-2 4 2 4H5" />
       </>
     ),
+    globe: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
+      </>
+    ),
     settings: (
       <>
         <circle cx="12" cy="12" r="3" />
         <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" />
       </>
     ),
+    menu: <path d="M4 6h16M4 12h16M4 18h16" />,
     chart: (
       <>
         <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
@@ -552,9 +602,22 @@ function Sponsored() {
   )
 }
 
-function Welcome({ enter }: { enter: (role: Role) => void }) {
+function Welcome({
+  initialRole = null,
+  initialStage = "role",
+  chooseWorkspace,
+  authenticate,
+  changeWorkspace,
+}: {
+  initialRole?: Role | null
+  initialStage?: "phone" | "role"
+  chooseWorkspace: (role: Role) => void
+  authenticate: (role: Role) => string | null
+  changeWorkspace: () => void
+}) {
   const { store, updateStore } = useDemoStore()
-  const [stage, setStage] = useState<"phone" | "otp" | "role">("phone")
+  const [stage, setStage] = useState<"phone" | "otp" | "role">(initialStage)
+  const [selectedRole] = useState<Role | null>(initialRole)
   const [authMode, setAuthMode] = useState<"phone" | "email">("phone")
   const [phone, setPhone] = useState("")
   const [email, setEmail] = useState("")
@@ -635,11 +698,41 @@ function Welcome({ enter }: { enter: (role: Role) => void }) {
         <section className="auth-card">
           {stage === "phone" && (
             <>
-              <div>
-                <div className="eyebrow">Welcome to OddJobs</div>
-                <h2>Let’s get you started</h2>
-                <p>Enter your phone number to sign in or create an account.</p>
-              </div>
+              {selectedRole && (
+                <>
+                  <button className="back-link" onClick={changeWorkspace}>
+                    ← Change workspace
+                  </button>
+                  <div>
+                    <div className="eyebrow">
+                      {selectedRole === "admin" || selectedRole === "support"
+                        ? "Restricted workspace"
+                        : "Workspace sign in"}
+                    </div>
+                    <h2>Sign in to {workspaceLabels[selectedRole]}</h2>
+                    <p>
+                      Use your phone number or email to continue to your
+                      workspace.
+                    </p>
+                  </div>
+                  {(selectedRole === "admin" || selectedRole === "support") && (
+                    <DemoNotice>
+                      Access is intended to be provisioned by an OddJobs
+                      administrator. This demo cannot verify account
+                      permissions.
+                    </DemoNotice>
+                  )}
+                </>
+              )}
+              {!selectedRole && (
+                <div>
+                  <div className="eyebrow">Welcome to OddJobs</div>
+                  <h2>Let’s get you started</h2>
+                  <p>
+                    Enter your phone number to sign in or create an account.
+                  </p>
+                </div>
+              )}
               {authMode === "phone" ? (
                 <label>
                   Phone number
@@ -744,8 +837,17 @@ function Welcome({ enter }: { enter: (role: Role) => void }) {
                     setAuthError("That demo code is incorrect. Use 1234.")
                     return
                   }
+                  if (!selectedRole) {
+                    setAuthError("Choose a workspace before signing in.")
+                    setStage("role")
+                    return
+                  }
+                  const signInError = authenticate(selectedRole)
+                  if (signInError) {
+                    setAuthError(signInError)
+                    return
+                  }
                   setAuthError("")
-                  setStage("role")
                 }}
               >
                 Verify demo code
@@ -769,30 +871,53 @@ function Welcome({ enter }: { enter: (role: Role) => void }) {
           {stage === "role" && (
             <>
               <div>
-                <div className="eyebrow">One last thing</div>
-                <h2>How will you use OddJobs?</h2>
-                <p>You can switch modes any time from your account.</p>
+                <div className="eyebrow">Choose a workspace</div>
+                <h2>How do you want to use OddJobs?</h2>
+                <p>Choose a workspace, then sign in to continue.</p>
               </div>
-              <button className="role-choice" onClick={() => enter("consumer")}>
-                <span>
-                  <Icon name="search" />
-                </span>
-                <div>
-                  <strong>Hire someone</strong>
-                  <small>Find trusted help for home and work</small>
-                </div>
-                <Icon name="chevron" />
-              </button>
-              <button className="role-choice" onClick={() => enter("provider")}>
-                <span>
-                  <Icon name="briefcase" />
-                </span>
-                <div>
-                  <strong>Offer services</strong>
-                  <small>Find jobs and grow your income</small>
-                </div>
-                <Icon name="chevron" />
-              </button>
+              {([
+                [
+                  "consumer",
+                  "Hire someone",
+                  "Find trusted help for home and work",
+                  "search",
+                ],
+                [
+                  "provider",
+                  "Offer services",
+                  "Find jobs and grow your income",
+                  "briefcase",
+                ],
+                [
+                  "partner",
+                  "Partner workspace",
+                  "Manage programmes and impact",
+                  "chart",
+                ],
+              ] as const).map(([role, title, description, icon]) => (
+                <button
+                  key={role}
+                  className="role-choice"
+                  onClick={() => chooseWorkspace(role)}
+                >
+                  <span>
+                    <Icon name={icon} />
+                  </span>
+                  <div>
+                    <strong>{title}</strong>
+                    <small>{description}</small>
+                  </div>
+                  <Icon name="chevron" />
+                </button>
+              ))}
+              <p className="workspace-access-note">
+                Admin and Support access is provisioned by OddJobs
+                administrators.
+              </p>
+              <DemoNotice>
+                Demo only: sign-in and workspace permissions are not verified by
+                a server.
+              </DemoNotice>
             </>
           )}
           {!store.reduceAds && (
@@ -4307,9 +4432,13 @@ function readDemoStore(): DemoStore {
 }
 
 function AppShell() {
-  const [route, setRoute] = useState<WorkspaceRoute>(() =>
-    getWorkspaceRoute(window.location.pathname),
+  const [demoSessionRole, setDemoSessionRole] = useState<Role | null>(
+    readDemoSessionRole,
   )
+  const [route, setRoute] = useState<WorkspaceRoute>(() =>
+    getAuthenticatedRoute(window.location.pathname, demoSessionRole),
+  )
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [store, setStore] = useState<DemoStore>(readDemoStore)
   const [storageError, setStorageError] = useState("")
   const [online, setOnline] = useState(navigator.onLine)
@@ -4333,19 +4462,65 @@ function AppShell() {
     }
     window.history.pushState(null, "", workspacePath(nextRoute))
     setRoute(nextRoute)
+    setMobileMenuOpen(false)
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
   const go = (next: Screen) => navigate(role, next)
-  const switchRole = (next: Role) => navigate(next, roleHomes[next])
+  const chooseWorkspace = (next: Role) => {
+    navigate(next, "login")
+  }
+  const authenticate = (next: Role) => {
+    try {
+      window.sessionStorage.setItem(demoSessionKey, next)
+    } catch (error) {
+      console.error("Unable to save the OddJobs demo session.", error)
+      return "This browser could not save the demo session. Check storage permissions and try again."
+    }
+    setDemoSessionRole(next)
+    navigate(next, roleHomes[next])
+    return null
+  }
+  const clearDemoSession = () => {
+    try {
+      window.sessionStorage.removeItem(demoSessionKey)
+      setDemoSessionRole(null)
+    } catch (error) {
+      console.error("Unable to clear the OddJobs demo session.", error)
+      setStorageError("The demo session could not be cleared on this device.")
+    }
+  }
   const goWelcome = () => {
+    clearDemoSession()
     const nextRoute: WorkspaceRoute = { role: "consumer", screen: "welcome" }
     window.history.pushState(null, "", workspacePath(nextRoute))
     setRoute(nextRoute)
+    setMobileMenuOpen(false)
+  }
+  const goWorkspacePicker = () => {
+    clearDemoSession()
+    navigate("consumer", "workspace")
   }
 
   useEffect(() => {
+    if (!mobileMenuOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMenuOpen(false)
+    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    window.addEventListener("keydown", closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener("keydown", closeOnEscape)
+    }
+  }, [mobileMenuOpen])
+
+  useEffect(() => {
     const syncRoute = () => {
-      const nextRoute = getWorkspaceRoute(window.location.pathname)
+      const nextRoute = getAuthenticatedRoute(
+        window.location.pathname,
+        demoSessionRole,
+      )
       setRoute(nextRoute)
       const canonicalPath = workspacePath(nextRoute)
       if (window.location.pathname !== canonicalPath) {
@@ -4355,7 +4530,7 @@ function AppShell() {
     window.addEventListener("popstate", syncRoute)
     syncRoute()
     return () => window.removeEventListener("popstate", syncRoute)
-  }, [])
+  }, [demoSessionRole])
 
   useEffect(() => {
     try {
@@ -4383,6 +4558,7 @@ function AppShell() {
   const renderScreen = () => {
     switch (screen) {
       case "welcome":
+      case "workspace":
         return null
       case "home":
         return <Home go={go} />
@@ -4470,44 +4646,38 @@ function AppShell() {
         return <Builder />
     }
   }
-  if (screen === "welcome")
+  if (screen === "welcome" || screen === "workspace" || screen === "login")
     return (
       <DemoContext.Provider value={{ store, updateStore }}>
-        <Welcome enter={(next) => navigate(next, roleHomes[next])} />
+        <Welcome
+          key={`${role}-${screen}`}
+          initialRole={screen === "login" ? role : null}
+          initialStage={screen === "login" ? "phone" : "role"}
+          chooseWorkspace={chooseWorkspace}
+          authenticate={authenticate}
+          changeWorkspace={goWorkspacePicker}
+        />
       </DemoContext.Provider>
     )
   return (
     <DemoContext.Provider value={{ store, updateStore }}>
       <div className={`app role-${role}`}>
         <header className="topbar">
+          <button
+            className="mobile-menu-toggle"
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            aria-controls="mobile-navigation"
+            aria-expanded={mobileMenuOpen}
+            onClick={() => setMobileMenuOpen((open) => !open)}
+          >
+            <Icon name={mobileMenuOpen ? "close" : "menu"} />
+          </button>
           <button className="brand" onClick={goWelcome}>
             <span>O</span>
             <strong>
               OddJobs<em>.com</em>
             </strong>
           </button>
-          <div className="role-switcher" aria-label="Preview workspace">
-            <span className="workspace-preview-label">Preview</span>
-            {([
-              "consumer",
-              "provider",
-              "admin",
-              "support",
-              "partner",
-            ] as Role[]).map((r) => (
-              <button
-                key={r}
-                className={role === r ? "active" : ""}
-                onClick={() => switchRole(r)}
-              >
-                {r === "consumer"
-                  ? "Hire"
-                  : r === "provider"
-                    ? "Work"
-                    : r[0].toUpperCase() + r.slice(1)}
-              </button>
-            ))}
-          </div>
           <div className="top-actions">
             <button
               className="lang"
@@ -4537,6 +4707,68 @@ function AppShell() {
             />
           </div>
         </header>
+        {mobileMenuOpen && (
+          <>
+            <button
+              className="mobile-menu-backdrop"
+              aria-label="Close navigation menu"
+              onClick={() => setMobileMenuOpen(false)}
+            />
+            <aside
+              className="mobile-drawer"
+              id="mobile-navigation"
+              aria-label={`${role} workspace navigation`}
+            >
+              <div className="mobile-drawer-heading">
+                <span className="workspace-label">
+                  {role === "consumer" ? "Your account" : `${role} workspace`}
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="Close menu"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+              <nav className="mobile-drawer-links" aria-label="Workspace pages">
+                {navigation[role].map((item) => (
+                  <button
+                    key={item.screen}
+                    className={screen === item.screen ? "active" : ""}
+                    aria-current={screen === item.screen ? "page" : undefined}
+                    onClick={() => go(item.screen)}
+                  >
+                    <Icon name={item.icon} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+              <button
+                className="mobile-drawer-language mobile-workspace-change"
+                onClick={goWorkspacePicker}
+              >
+                <Icon name="users" />
+                <span>Change workspace</span>
+                <Icon name="chevron" size={16} />
+              </button>
+              <button
+                className="mobile-drawer-language"
+                onClick={() =>
+                  updateStore({
+                    language: store.language === "EN" ? "SW" : "EN",
+                  })
+                }
+              >
+                <Icon name="globe" />
+                <span>Language</span>
+                <strong>
+                  {store.language} / {store.language === "EN" ? "SW" : "EN"}
+                </strong>
+              </button>
+            </aside>
+          </>
+        )}
         {(!online || storageError) && !offlineBannerDismissed && (
           <button
             className="network-banner"
@@ -4566,6 +4798,10 @@ function AppShell() {
             ))}
           </nav>
           <div className="sidebar-bottom">
+            <button onClick={goWorkspacePicker}>
+              <Icon name="users" />
+              <span>Change workspace</span>
+            </button>
             <button
               onClick={() =>
                 navigate(
@@ -4605,19 +4841,6 @@ function AppShell() {
           </div>
         </aside>
         <main className="main">{renderScreen()}</main>
-        <nav className="bottom-nav" aria-label={`${role} workspace pages`}>
-          {navigation[role].map((n) => (
-            <button
-              key={n.screen}
-              className={screen === n.screen ? "active" : ""}
-              aria-current={screen === n.screen ? "page" : undefined}
-              onClick={() => go(n.screen)}
-            >
-              <Icon name={n.icon} />
-              <span>{n.label.split(" ")[0]}</span>
-            </button>
-          ))}
-        </nav>
       </div>
     </DemoContext.Provider>
   )

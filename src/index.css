@@ -34,15 +34,13 @@ h3 { font-size: 16px; line-height: 1.4; }
 
 .app { min-height: 100vh; background: var(--slate-50); }
 .topbar { height: 72px; background: var(--white); border-bottom: 1px solid var(--slate-200); display: flex; align-items: center; padding: 0 28px; position: sticky; top: 0; z-index: 40; }
+.mobile-menu-toggle { display: none; }
+.mobile-menu-backdrop, .mobile-drawer { display: none; }
 .brand { border: 0; background: none; padding: 0; display: flex; align-items: center; gap: 10px; min-width: 220px; cursor: pointer; }
 .brand > span { width: 34px; height: 34px; border-radius: 11px; background: var(--green); color: white; display: grid; place-items: center; font-weight: 700; font-size: 18px; }
 .brand strong { font-size: 19px; letter-spacing: -.04em; }
 .brand em { color: var(--green); font-style: normal; }
-.role-switcher { margin: auto; background: var(--slate-100); padding: 4px; border-radius: 10px; display: flex; gap: 2px; }
-.workspace-preview-label { align-self: center; padding: 0 9px; color: var(--slate-500); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.role-switcher button { min-height: 34px; padding: 0 14px; border: 0; background: transparent; color: var(--slate-500); border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
-.role-switcher button.active { background: white; color: var(--green); box-shadow: 0 1px 3px rgba(15,23,42,.08); }
-.top-actions { min-width: 220px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.top-actions { min-width: 220px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-left: auto; }
 .lang, .icon-button { min-height: 40px; border: 0; background: transparent; cursor: pointer; font-size: 13px; font-weight: 600; }
 .lang span { color: var(--slate-500); }
 .icon-button { width: 40px; display: grid; place-items: center; position: relative; }
@@ -358,7 +356,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .landing-preview h2 { font-size: 30px; max-width: 440px; margin: 16px 0 8px; }
 .landing-preview p { color: rgba(255,255,255,.7); max-width: 410px; margin-bottom: 20px; }
 .copy-field { display: flex; gap: 8px; }
-.bottom-nav { display: none; }
 .demo-notice { border: 1px solid #f3dfb4; border-radius: 9px; background: #fffdf8; color: #7c5700; padding: 10px 12px; font-size: 12px; margin: 10px 0; }
 .empty-state { min-height: 200px; padding: 28px; display: grid; justify-items: center; align-content: center; gap: 10px; border: 1px dashed var(--slate-300); border-radius: var(--radius); text-align: center; background: white; }
 .empty-state > span { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green); }
@@ -386,7 +383,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .upload input[type="file"] { display: block; width: min(100%, 260px); min-height: 36px; padding: 4px; font-size: 11px; }
 .upload > span > input[type="file"] { margin-top: 6px; }
 .copy-field .btn { flex: none; }
-.role-switcher { max-width: min(100%, 610px); }
 .auth-ad .ad-dots i.active { width: 12px; border-radius: 4px; background: var(--amber); }
 
 .auth-shell { min-height: 100vh; background: white; }
@@ -434,34 +430,40 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media (max-width: 760px) {
-  html { scroll-padding-bottom: 88px; }
+  html { scroll-padding-bottom: 24px; }
   body { font-size: 14px; }
   h1 { font-size: 25px; }
   h2 { font-size: 18px; }
-  .topbar { height: 60px; padding: 0 16px; }
+  .topbar { height: 60px; padding: 0 12px; gap: 10px; }
+  .mobile-menu-toggle { width: 40px; height: 40px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--slate-700); cursor: pointer; }
+  .mobile-menu-toggle:hover { background: var(--slate-100); }
   .brand { min-width: 0; }
   .brand > span { width: 32px; height: 32px; }
   .brand strong { font-size: 17px; }
-  .role-switcher { position: fixed; top: 69px; left: 12px; right: 12px; z-index: 35; overflow-x: auto; justify-content: space-between; border: 1px solid var(--slate-200); box-shadow: 0 4px 14px rgba(15,23,42,.08); }
-  .role-switcher button { padding: 0 10px; flex: 1; }
   .top-actions { min-width: 0; margin-left: auto; }
   .top-actions .avatar, .top-actions .icon-button { display: none; }
   .sidebar { display: none; }
-  .main { padding-left: 0; padding-top: 50px; }
-  .content { width: 100%; padding: 24px 16px 92px; }
-  .form-page { padding-bottom: 150px; }
-  .form-actions { scroll-margin-bottom: 92px; }
-  .network-banner { top: auto; bottom: 76px; left: 12px; right: 12px; transform: none; justify-content: space-between; }
+  .main { padding-left: 0; padding-top: 0; }
+  .content { width: 100%; padding: 24px 16px 40px; }
+  .form-page { padding-bottom: 40px; }
+  .form-actions { scroll-margin-bottom: 24px; }
+  .network-banner { top: auto; bottom: 16px; left: 12px; right: 12px; transform: none; justify-content: space-between; }
   .network-banner b { display: none; }
-  .bottom-nav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: 68px; background: rgba(255,255,255,.97); border-top: 1px solid var(--slate-200); z-index: 40; padding: 6px 6px env(safe-area-inset-bottom); justify-content: flex-start; overflow-x: auto; }
-  .bottom-nav button { border: 0; background: none; color: var(--slate-500); display: flex; flex: 0 0 66px; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 58px; font-size: 9px; font-weight: 600; }
-  .bottom-nav button.active { color: var(--green); }
   .page-heading { align-items: flex-start; margin-bottom: 20px; }
   .page-heading { flex-wrap: wrap; }
   .page-heading .heading-action { display: block; width: 100%; }
   .page-heading .heading-action .btn { width: 100%; }
-  .role-switcher { justify-content: flex-start; }
-  .workspace-preview-label { position: sticky; left: 0; background: var(--slate-100); }
+  .mobile-menu-backdrop { display: block; position: fixed; inset: 60px 0 0; z-index: 55; width: 100%; height: calc(100% - 60px); padding: 0; border: 0; background: rgba(15,23,42,.42); cursor: pointer; }
+  .mobile-drawer { position: fixed; inset: 60px auto 0 0; z-index: 60; display: flex; flex-direction: column; width: min(340px, 88vw); padding: 20px 16px max(20px, env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; background: white; border-right: 1px solid var(--slate-200); box-shadow: 10px 0 32px rgba(15,23,42,.14); animation: drawer-enter .18s ease-out; }
+  .mobile-drawer-heading { min-height: 40px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .mobile-drawer-heading .workspace-label { padding: 0; }
+  .mobile-drawer-heading .icon-button { border-radius: 9px; color: var(--slate-500); }
+  .mobile-drawer-links { display: grid; flex: 1; align-content: start; gap: 4px; overflow-y: auto; }
+  .mobile-drawer-links button { min-height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: var(--slate-700); text-align: left; font-weight: 550; cursor: pointer; }
+  .mobile-drawer-links button.active, .mobile-drawer-links button:hover { background: var(--green-soft); color: var(--green); }
+  .mobile-drawer-language { min-height: 46px; display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 8px; border: 0; border-top: 1px solid var(--slate-200); background: transparent; color: var(--slate-700); text-align: left; cursor: pointer; }
+  .mobile-workspace-change { margin-top: auto; }
+  .mobile-drawer-language strong { margin-left: auto; color: var(--green); font-size: 12px; }
   .form-card .upload { flex-wrap: wrap; }
   .welcome-row { margin-bottom: 16px; }
   .welcome-row h1 { font-size: 24px; }
@@ -517,4 +519,13 @@ tbody tr:last-child td { border-bottom: 0; }
   .auth-image > div { display: none; }
   .auth-card { padding: 22px 18px; justify-self: stretch; box-shadow: none; }
   .auth-card h2 { font-size: 22px; }
+}
+
+@keyframes drawer-enter {
+  from { opacity: .75; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-drawer { animation: none; }
 }
