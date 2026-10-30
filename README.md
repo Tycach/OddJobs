@@ -1,9 +1,22 @@
 # OddJobs
 
-OddJobs is a mobile-first React prototype for a marketplace connecting people
-with essential service providers in Kenya. It includes consumer, provider,
-admin, support, and institutional-partner workspace previews, with sample
-Nairobi content and KES pricing.
+OddJobs is a mobile-first marketplace app in phased implementation. Supabase
+OTP sign-in and protected account-profile bootstrap are implemented when Auth
+is configured. Service discovery, jobs, chat, tracking, and payments still use
+prototype content and are not production marketplace flows.
+
+## Project Map
+
+- `src/App.tsx` contains the demo app shell, route handling, and current screens.
+- `src/auth/` contains the Supabase browser auth/session integration.
+- `src/demo/model.ts` contains demo-only shared types and seed data.
+- `src/index.css` contains global styles and shared styling.
+- `apps/api/` is the independently installable Fastify API service; see its
+	README for local setup and current implementation limits.
+- `docs/engineering-guide.md` explains code boundaries and conventions.
+- `docs/marketplace-payments-plan.md` documents the payment and commission
+	research, operating policy, provider questions, and delivery gates.
+- `docs/implementation-roadmap.md` tracks the implementation phases and gates.
 
 ## Run locally
 
@@ -14,14 +27,25 @@ pnpm dev
 
 Create a production build with `pnpm build`.
 
+For Supabase sign-in, copy `.env.example` to `.env.local` and set the public
+Supabase URL and `VITE_SUPABASE_PUBLISHABLE_KEY`. In `apps/api/.env`, set the
+matching `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. The publishable key is
+designed for client use; never put database passwords or the Supabase secret
+key in Vite.
+
+Run the API independently from `apps/api` with `npm install`, `docker compose
+up -d db`, and `npm run dev`. The web app and API have separate package
+manifests, build commands, and runtime configuration.
+
 ## Prototype scope and security
 
-This repository contains a front-end demo, not a production marketplace.
-Workspace routes and role switching are client-side previews, not
-authentication or authorization. Demo records are stored in browser
-`localStorage` and are not protected as confidential data. OTP verification,
-M-Pesa payments, escrow, uploads, exports, and moderation actions are
-simulated; do not enter real personal, identity, or payment information.
+Supabase Auth verifies sign-in and the Fastify API verifies access tokens and
+returns database-assigned roles. The initial profile bootstrap grants only the
+consumer role; elevated roles must be provisioned server-side. Most workspace
+screens still display sample content, partly persisted in browser
+`localStorage`; do not treat it as real user or business data. M-Pesa payments,
+escrow, uploads, exports, moderation actions, and live tracking remain
+simulated. Do not enter real identity documents or payment information.
 
 Production use requires a trusted backend to authenticate users and enforce
 role-based permissions on every protected operation. Payment credentials and

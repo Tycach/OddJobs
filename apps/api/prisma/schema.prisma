@@ -1,0 +1,201 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  importFileExtension = "ts"
+  previewFeatures     = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DELETED
+
+  @@map("user_status")
+}
+
+enum AppRole {
+  CONSUMER
+  PROVIDER
+  ADMIN
+  SUPPORT
+  PARTNER
+
+  @@map("app_role")
+}
+
+enum AuthProvider {
+  PHONE
+  EMAIL
+
+  @@map("auth_provider")
+}
+
+enum VerificationStatus {
+  NOT_STARTED
+  IN_REVIEW
+  VERIFIED
+  REJECTED
+
+  @@map("verification_status")
+}
+
+enum JobStatus {
+  OPEN
+  AWARDED
+  IN_PROGRESS
+  COMPLETION_PENDING
+  COMPLETED
+  CANCELLED
+  DISPUTED
+
+  @@map("job_status")
+}
+
+enum QuoteStatus {
+  SUBMITTED
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+  EXPIRED
+
+  @@map("quote_status")
+}
+
+model User {
+  id              String                @id @default(uuid()) @db.Uuid
+  displayName     String                @map("display_name") @db.VarChar(120)
+  status          UserStatus            @default(PENDING)
+  identities      AuthIdentity[]
+  roleAssignments UserRoleAssignment[]
+  sessions        Session[]
+  providerProfile ProviderProfile?
+  customerJobs    Job[]                 @relation("CustomerJobs")
+  quotes          Quote[]
+  messages        Message[]
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@map("users")
+}
+
+model AuthIdentity {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @map("user_id") @db.Uuid
+  provider   AuthProvider
+  subject    String       @db.VarChar(320)
+  verifiedAt DateTime?    @map("verified_at") @db.Timestamptz(3)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
+model UserRoleAssignment {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  role       AppRole
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@index([role, assignedAt])
+  @@map("user_role_assignments")
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash") @db.Char(64)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model ProviderProfile {
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @unique @map("user_id") @db.Uuid
+  publicName         String             @map("public_name") @db.VarChar(120)
+  bio                String?            @db.VarChar(2000)
+  region             String?            @db.VarChar(120)
+  verificationStatus VerificationStatus @default(NOT_STARTED) @map("verification_status")
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([verificationStatus, region])
+  @@map("provider_profiles")
+}
+
+model Job {
+  id            String      @id @default(uuid()) @db.Uuid
+  customerId    String      @map("customer_id") @db.Uuid
+  title         String      @db.VarChar(160)
+  description   String      @db.VarChar(5000)
+  category      String      @db.VarChar(80)
+  locationLabel String      @map("location_label") @db.VarChar(160)
+  /// Integer minor currency units; the provider adapter converts to rail units.
+  budgetMinor   BigInt?     @map("budget_minor")
+  currency      String      @default("KES") @db.Char(3)
+  status        JobStatus   @default(OPEN)
+  requestedFor  DateTime?   @map("requested_for") @db.Timestamptz(3)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  customer      User        @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Restrict)
+  quotes        Quote[]
+  messages      Message[]
+
+  @@index([customerId, createdAt])
+  @@index([status, category, createdAt])
+  @@map("jobs")
+}
+
+model Quote {
+  id          String      @id @default(uuid()) @db.Uuid
+  jobId       String      @map("job_id") @db.Uuid
+  providerId  String      @map("provider_id") @db.Uuid
+  revision    Int         @default(1)
+  /// Integer minor currency units; the provider adapter converts to rail units.
+  amountMinor BigInt      @map("amount_minor")
+  currency    String      @default("KES") @db.Char(3)
+  message     String      @db.VarChar(2000)
+  status      QuoteStatus @default(SUBMITTED)
+  expiresAt   DateTime?   @map("expires_at") @db.Timestamptz(3)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  job         Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  provider    User        @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, providerId, revision])
+  @@unique([jobId], where: { status: "ACCEPTED" }, map: "quotes_one_accepted_per_job_key")
+  @@index([jobId, status, createdAt])
+  @@index([providerId, createdAt])
+  @@map("quotes")
+}
+
+model Message {
+  id        String    @id @default(uuid()) @db.Uuid
+  jobId     String    @map("job_id") @db.Uuid
+  senderId  String    @map("sender_id") @db.Uuid
+  body      String    @db.VarChar(5000)
+  readAt    DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  job       Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sender    User      @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([jobId, createdAt])
+  @@index([senderId, createdAt])
+  @@map("messages")
+}

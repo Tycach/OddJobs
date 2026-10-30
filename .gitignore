@@ -3,7 +3,9 @@ dist/
 build/
 .cache/
 .env*
+!**/.env.example
 .vite/
+apps/api/src/generated/prisma/
 vite.config.*.timestamp-*
 *.tsbuildinfo
 *-debug.log*

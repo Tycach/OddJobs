@@ -1,0 +1,210 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+import { buildApp } from "../src/app.js"
+import type {
+  AccessTokenVerifier,
+  AuthenticatedPrincipal,
+  UserProfile,
+  UserProfileStore,
+} from "../src/auth/types.js"
+import { loadConfig } from "../src/config.js"
+import type { ReadinessDatabase } from "../src/database.js"
+
+const config = loadConfig({ NODE_ENV: "test" })
+
+function createDatabase(check: () => Promise<void>): ReadinessDatabase {
+  return { check, close: async () => {} }
+}
+
+const principal: AuthenticatedPrincipal = {
+  id: "4231bc49-18f4-4d3e-80f7-287991c7a212",
+  email: "customer@example.com",
+  phone: null,
+  displayName: "Customer",
+}
+
+const profile: UserProfile = {
+  id: principal.id,
+  displayName: "Customer",
+  status: "active",
+  roles: ["consumer"],
+}
+
+const authVerifier: AccessTokenVerifier = {
+  verify: async (token) => (token === "valid-token" ? principal : null),
+}
+
+const profileStore: UserProfileStore = {
+  bootstrapProfile: async (authenticatedPrincipal) => {
+    assert.equal(authenticatedPrincipal.id, principal.id)
+    return profile
+  },
+  getProfile: async (userId) => (userId === principal.id ? profile : null),
+}
+
+test("liveness reports the process is running and returns a request ID", async () => {
+  const app = await buildApp({ config, database: null })
+  const response = await app.inject({ method: "GET", url: "/health/live" })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { status: "ok" })
+  assert.match(response.headers["x-request-id"] as string, /^[0-9a-f-]{36}$/)
+  await app.close()
+})
+
+test("a valid request ID is preserved", async () => {
+  const app = await buildApp({ config, database: null })
+  const response = await app.inject({
+    method: "GET",
+    url: "/health/live",
+    headers: { "x-request-id": "health-check_01" },
+  })
+
+  assert.equal(response.headers["x-request-id"], "health-check_01")
+  await app.close()
+})
+
+test("readiness fails closed when the database is not configured", async () => {
+  const app = await buildApp({ config, database: null })
+  const response = await app.inject({ method: "GET", url: "/health/ready" })
+
+  assert.equal(response.statusCode, 503)
+  assert.deepEqual(response.json(), {
+    status: "not_ready",
+    checks: { database: "unavailable" },
+  })
+  await app.close()
+})
+
+test("readiness reports a successful database probe", async () => {
+  const database = createDatabase(async () => {})
+  const app = await buildApp({ config, database })
+  const response = await app.inject({ method: "GET", url: "/health/ready" })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), {
+    status: "ready",
+    checks: { database: "ok" },
+  })
+  await app.close()
+})
+
+test("readiness hides dependency error details", async () => {
+  const database = createDatabase(async () => {
+    throw new Error("sensitive connection detail")
+  })
+  const app = await buildApp({ config, database })
+  const response = await app.inject({ method: "GET", url: "/health/ready" })
+
+  assert.equal(response.statusCode, 503)
+  assert.equal(response.body.includes("sensitive connection detail"), false)
+  await app.close()
+})
+
+test("OpenAPI describes the health endpoints", async () => {
+  const app = await buildApp({ config, database: null })
+  await app.ready()
+  const document = app.swagger()
+  const paths = document.paths ?? {}
+
+  assert.ok(paths["/health/live"])
+  assert.ok(paths["/health/ready"])
+  assert.ok(paths["/v1/me"])
+  assert.ok(paths["/v1/me/bootstrap"])
+  await app.close()
+})
+
+test("protected profile routes require a bearer token", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({ method: "GET", url: "/v1/me" })
+
+  assert.equal(response.statusCode, 401)
+  await app.close()
+})
+
+test("invalid Supabase bearer tokens are rejected", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/me",
+    headers: { authorization: "Bearer invalid-token" },
+  })
+
+  assert.equal(response.statusCode, 401)
+  await app.close()
+})
+
+test("profile bootstrap uses the verified identity and server-assigned role", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/me/bootstrap",
+    headers: { authorization: "Bearer valid-token" },
+    payload: { id: "00000000-0000-4000-8000-000000000001", role: "admin" },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), profile)
+  await app.close()
+})
+
+test("profile reads are scoped to the verified user ID", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/me",
+    headers: { authorization: "Bearer valid-token" },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), profile)
+  await app.close()
+})
+
+test("production config requires a database URL", () => {
+  assert.throws(
+    () => loadConfig({ NODE_ENV: "production" }),
+    /DATABASE_URL is required in production/,
+  )
+})
+
+test("Supabase Auth accepts a publishable key", () => {
+  const configured = loadConfig({
+    NODE_ENV: "development",
+    SUPABASE_URL: "https://example.supabase.co",
+    SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
+  })
+
+  assert.equal(configured.supabaseApiKey, "test-publishable-key")
+})
+
+test("Supabase Auth URL and a publishable/anon key must be configured together", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "development",
+        SUPABASE_URL: "https://example.supabase.co",
+      }),
+    /SUPABASE_URL and a Supabase publishable\/anon key must be configured together/,
+  )
+})

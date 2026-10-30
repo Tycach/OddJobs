@@ -1,113 +1,14 @@
 import { createContext, useContext, useEffect, useState } from "react"
-
-type Role = "consumer" | "provider" | "admin" | "support" | "partner"
-type Screen = "welcome" | "workspace" | "login" | "home" | "search" | "map" | "profile" | "post" | "jobs" | "bids" | "checkout" | "track" | "chat" | "review" | "dispute" | "history" | "saved" | "notifications" | "settings" | "providerHome" | "onboarding" | "providerVerification" | "feed" | "jobDetail" | "management" | "wallet" | "reputation" | "training" | "plans" | "analytics" | "ads" | "overview" | "users" | "verification" | "categories" | "moderation" | "adApprovals" | "audit" | "config" | "disputes" | "inbox" | "knowledgeBase" | "programmes" | "impact" | "builder"
-
-type DemoBid = {
-  provider: string
-  price: number
-  timing: string
-  pitch: string
-  trust: number
-}
-type DemoJob = {
-  id: string
-  title: string
-  category: string
-  description: string
-  budget: number
-  location: string
-  timing: string
-  status: "Open" | "Active" | "Completed"
-  bids: DemoBid[]
-}
-type DemoStore = {
-  jobs: DemoJob[]
-  selectedJobId: string
-  selectedBid: DemoBid
-  savedProviders: string[]
-  messages: string[]
-  transactions: string[]
-  notifications: string[]
-  language: "EN" | "SW"
-  reduceAds: boolean
-  notificationPreferences: {
-    jobs: boolean
-    messages: boolean
-    promotions: boolean
-  }
-  verificationStatus: "Not started" | "In review" | "Certified"
-  completedLessons: string[]
-  featureFlags: Record<string, boolean>
-  adminActions: string[]
-}
-
-const demoStorageKey = "oddjobs-demo-v1"
-const demoSessionKey = "oddjobs-demo-session-v1"
-const initialDemoStore: DemoStore = {
-  selectedJobId: "OJ-2841",
-  selectedBid: {
-    provider: "Amina Hassan",
-    price: 2300,
-    timing: "Tomorrow · 3 hours",
-    pitch: "I can bring eco-friendly supplies and arrive by 9am.",
-    trust: 96,
-  },
-  jobs: [
-    {
-      id: "OJ-2841",
-      title: "Deep clean my 2-bedroom flat",
-      category: "Cleaning",
-      description:
-        "Kitchen, two bathrooms, floors and windows. Please bring cleaning supplies.",
-      budget: 2500,
-      location: "Kilimani, Nairobi",
-      timing: "This week",
-      status: "Open",
-      bids: [
-        {
-          provider: "Amina Hassan",
-          price: 2300,
-          timing: "Tomorrow · 3 hours",
-          pitch: "I can bring eco-friendly supplies and arrive by 9am.",
-          trust: 96,
-        },
-        {
-          provider: "Grace Wairimu",
-          price: 2150,
-          timing: "Friday · 4 hours",
-          pitch: "I specialise in deep cleans and have all required equipment.",
-          trust: 94,
-        },
-        {
-          provider: "Mercy Atieno",
-          price: 2500,
-          timing: "Tomorrow · 3 hours",
-          pitch: "Available tomorrow morning. Windows included in my quote.",
-          trust: 92,
-        },
-      ],
-    },
-  ],
-  savedProviders: [],
-  messages: [
-    "Hi, will the provider see my phone number before I accept a bid?",
-    "No. Your contact details stay private until you hire a provider.",
-  ],
-  transactions: [],
-  notifications: ["Amina Hassan sent a quote for your cleaning job."],
-  language: "EN",
-  reduceAds: false,
-  notificationPreferences: { jobs: true, messages: true, promotions: false },
-  verificationStatus: "Not started",
-  completedLessons: [],
-  featureFlags: {
-    "Escrow v2": true,
-    "Provider live location": true,
-    "Saved search alerts": false,
-  },
-  adminActions: [],
-}
+import { AuthProvider, useAuth } from "./auth/AuthProvider"
+import {
+  demoStorageKey,
+  initialDemoStore,
+  type DemoBid,
+  type DemoJob,
+  type DemoStore,
+  type Role,
+  type Screen,
+} from "./demo/model"
 
 const DemoContext = createContext<{
   store: DemoStore
@@ -237,34 +138,41 @@ function getWorkspaceRoute(pathname: string): WorkspaceRoute {
   return { role, screen: screen ?? roleHomes[role] }
 }
 
-function readDemoSessionRole(): Role | null {
-  try {
-    const savedRole = window.sessionStorage.getItem(demoSessionKey)
-    return (
-      (["consumer", "provider", "admin", "support", "partner"] as const).find(
-        (role) => role === savedRole,
-      ) ?? null
-    )
-  } catch (error) {
-    console.error("Unable to read the OddJobs demo session.", error)
-    return null
-  }
+function normalizeKenyanPhoneInput(value: string) {
+  let digits = value.replace(/\D/g, "")
+  if (digits.startsWith("254")) digits = digits.slice(3)
+  if (digits.startsWith("0")) digits = digits.slice(1)
+  return digits.slice(0, 9)
 }
 
 function getAuthenticatedRoute(
   pathname: string,
-  authenticatedRole: Role | null,
+  authenticatedRoles: Role[],
 ): WorkspaceRoute {
   const route = getWorkspaceRoute(pathname)
-  if (
+  const isPublicScreen =
     route.screen === "welcome" ||
     route.screen === "workspace" ||
-    route.screen === "login" ||
-    route.role === authenticatedRole
-  ) {
+    route.screen === "login"
+
+  if (authenticatedRoles.length === 0) {
+    if (isPublicScreen) return route
+    return { role: route.role, screen: "login" }
+  }
+
+  if (!authenticatedRoles.includes(route.role)) {
+    const defaultRole = authenticatedRoles[0] ?? "consumer"
+    return { role: defaultRole, screen: roleHomes[defaultRole] }
+  }
+
+  if (isPublicScreen) {
+    return { role: route.role, screen: roleHomes[route.role] }
+  }
+
+  if (authenticatedRoles.includes(route.role)) {
     return route
   }
-  return { role: route.role, screen: "login" }
+  return { role: authenticatedRoles[0] ?? "consumer", screen: "home" }
 }
 
 function workspacePath({ role, screen }: WorkspaceRoute) {
@@ -606,16 +514,15 @@ function Welcome({
   initialRole = null,
   initialStage = "role",
   chooseWorkspace,
-  authenticate,
   changeWorkspace,
 }: {
   initialRole?: Role | null
   initialStage?: "phone" | "role"
   chooseWorkspace: (role: Role) => void
-  authenticate: (role: Role) => string | null
   changeWorkspace: () => void
 }) {
   const { store, updateStore } = useDemoStore()
+  const { configured, requestOtp, verifyOtp, resendOtp } = useAuth()
   const [stage, setStage] = useState<"phone" | "otp" | "role">(initialStage)
   const [selectedRole] = useState<Role | null>(initialRole)
   const [authMode, setAuthMode] = useState<"phone" | "email">("phone")
@@ -623,7 +530,10 @@ function Welcome({
   const [email, setEmail] = useState("")
   const [otp, setOtp] = useState("")
   const [authError, setAuthError] = useState("")
+  const [authBusy, setAuthBusy] = useState(false)
   const [adIndex, setAdIndex] = useState(0)
+  const authIdentifier =
+    authMode === "phone" ? `+254${phone}` : email.trim().toLowerCase()
   const ads = [
     ["Safaricom Home Fibre", "Stay connected from KES 2,999"],
     ["Jumia Home", "20% off cleaning supplies"],
@@ -717,9 +627,8 @@ function Welcome({
                   </div>
                   {(selectedRole === "admin" || selectedRole === "support") && (
                     <DemoNotice>
-                      Access is intended to be provisioned by an OddJobs
-                      administrator. This demo cannot verify account
-                      permissions.
+                      This workspace is provisioned by an OddJobs
+                      administrator. Access is checked after sign-in.
                     </DemoNotice>
                   )}
                 </>
@@ -741,9 +650,7 @@ function Welcome({
                     <input
                       value={phone}
                       onChange={(event) =>
-                        setPhone(
-                          event.target.value.replace(/\D/g, "").slice(0, 9),
-                        )
+                        setPhone(normalizeKenyanPhoneInput(event.target.value))
                       }
                       placeholder="712 345 678"
                       autoFocus
@@ -761,14 +668,14 @@ function Welcome({
                   />
                 </label>
               )}
-              <DemoNotice>
-                Prototype sign-in only. Demo OTP: 1234. No SMS, email, or
-                account is created.
-              </DemoNotice>
+              <small className="center-note">
+                Sign in with a one-time code sent to your {authMode}.
+              </small>
               <Button
-                onClick={() => {
-                  if (authMode === "phone" && phone.length < 9) {
-                    setAuthError("Enter a valid 9-digit Kenyan phone number.")
+                disabled={authBusy}
+                onClick={async () => {
+                  if (authMode === "phone" && !/^[17]\d{8}$/.test(phone)) {
+                    setAuthError("Enter a valid Kenyan mobile number, with or without the leading 0.")
                     return
                   }
                   if (
@@ -779,10 +686,18 @@ function Welcome({
                     return
                   }
                   setAuthError("")
+                  setAuthBusy(true)
+                  const error = await requestOtp(authMode, authIdentifier)
+                  setAuthBusy(false)
+                  if (error) {
+                    setAuthError(error)
+                    return
+                  }
+                  setOtp("")
                   setStage("otp")
                 }}
               >
-                Continue with {authMode}
+                {authBusy ? "Sending code…" : `Continue with ${authMode}`}
               </Button>
               <div className="or">
                 <span>or</span>
@@ -812,11 +727,10 @@ function Welcome({
                 ← Back
               </button>
               <div>
-                <div className="eyebrow">Demo sign in</div>
-                <h2>Enter the demo code</h2>
+                <div className="eyebrow">Verify your {authMode}</div>
+                <h2>Enter your verification code</h2>
                 <p>
-                  Code 1234 · destination{" "}
-                  {authMode === "phone" ? `+254 ${phone}` : email}.
+                  Code sent to {authIdentifier}.
                 </p>
               </div>
               <label>
@@ -824,33 +738,24 @@ function Welcome({
                 <input
                   inputMode="numeric"
                   value={otp}
-                  maxLength={4}
+                  maxLength={6}
                   onChange={(event) =>
-                    setOtp(event.target.value.replace(/\D/g, "").slice(0, 4))
+                    setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))
                   }
-                  placeholder="4-digit code"
+                  placeholder="Verification code"
                 />
               </label>
               <Button
-                onClick={() => {
-                  if (otp !== "1234") {
-                    setAuthError("That demo code is incorrect. Use 1234.")
-                    return
-                  }
-                  if (!selectedRole) {
-                    setAuthError("Choose a workspace before signing in.")
-                    setStage("role")
-                    return
-                  }
-                  const signInError = authenticate(selectedRole)
-                  if (signInError) {
-                    setAuthError(signInError)
-                    return
-                  }
+                disabled={authBusy || !otp}
+                onClick={async () => {
                   setAuthError("")
+                  setAuthBusy(true)
+                  const error = await verifyOtp(authMode, authIdentifier, otp)
+                  setAuthBusy(false)
+                  if (error) setAuthError(error)
                 }}
               >
-                Verify demo code
+                {authBusy ? "Verifying…" : "Verify and sign in"}
               </Button>
               {authError && (
                 <p className="form-error" role="alert">
@@ -859,12 +764,15 @@ function Welcome({
               )}
               <button
                 className="text-link"
-                onClick={() => {
-                  setOtp("")
-                  setAuthError("Demo code reset. Use 1234.")
+                onClick={async () => {
+                  setAuthError("")
+                  setAuthBusy(true)
+                  const error = await resendOtp(authMode, authIdentifier)
+                  setAuthBusy(false)
+                  setAuthError(error ?? "A new code was sent.")
                 }}
               >
-                Resend demo code
+                Resend code
               </button>
             </>
           )}
@@ -911,13 +819,14 @@ function Welcome({
                 </button>
               ))}
               <p className="workspace-access-note">
-                Admin and Support access is provisioned by OddJobs
-                administrators.
+                Provider access requires an approved provider profile. Admin,
+                Support, and Partner workspaces are provisioned by OddJobs.
               </p>
-              <DemoNotice>
-                Demo only: sign-in and workspace permissions are not verified by
-                a server.
-              </DemoNotice>
+              {!configured && (
+                <DemoNotice>
+                  Supabase Auth configuration is required before you can sign in.
+                </DemoNotice>
+              )}
             </>
           )}
           {!store.reduceAds && (
@@ -945,6 +854,7 @@ function Welcome({
 
 function Home({ go }: { go: (s: Screen) => void }) {
   const { store } = useDemoStore()
+  const { profile } = useAuth()
   const categories = [
     ["Cleaning", "⌁"],
     ["Plumbing", "◉"],
@@ -959,10 +869,10 @@ function Home({ go }: { go: (s: Screen) => void }) {
     <div className="content consumer-content">
       <section className="welcome-row">
         <div>
-          <span>Good morning, Wanjiku</span>
+          <span>Good morning, {profile?.displayName ?? "Wanjiku"}</span>
           <h1>What do you need help with?</h1>
         </div>
-        <Avatar src={photos.wanjiku} name="Wanjiku" />
+        <Avatar src={photos.wanjiku} name={profile?.displayName ?? "Wanjiku"} />
       </section>
       <button className="search-box" onClick={() => go("search")}>
         <Icon name="search" />
@@ -4432,11 +4342,20 @@ function readDemoStore(): DemoStore {
 }
 
 function AppShell() {
-  const [demoSessionRole, setDemoSessionRole] = useState<Role | null>(
-    readDemoSessionRole,
-  )
+  const auth = useAuth()
+  const workspaceRoles: Role[] = [
+    "consumer",
+    "provider",
+    "admin",
+    "support",
+    "partner",
+  ]
+  const authenticatedRoles =
+    auth.profile?.roles.filter((candidate): candidate is Role =>
+      workspaceRoles.includes(candidate as Role),
+    ) ?? []
   const [route, setRoute] = useState<WorkspaceRoute>(() =>
-    getAuthenticatedRoute(window.location.pathname, demoSessionRole),
+    getAuthenticatedRoute(window.location.pathname, []),
   )
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [store, setStore] = useState<DemoStore>(readDemoStore)
@@ -4454,11 +4373,17 @@ function AppShell() {
     )
   }
   const navigate = (nextRole: Role, nextScreen: Screen) => {
+    const permittedRole =
+      auth.profile && !authenticatedRoles.includes(nextRole)
+        ? (authenticatedRoles[0] ?? "consumer")
+        : nextRole
+    const requestedScreen =
+      permittedRole === nextRole ? nextScreen : roleHomes[permittedRole]
     const nextRoute = {
-      role: nextRole,
-      screen: roleScreens[nextRole].includes(nextScreen)
-        ? nextScreen
-        : roleHomes[nextRole],
+      role: permittedRole,
+      screen: roleScreens[permittedRole].includes(requestedScreen)
+        ? requestedScreen
+        : roleHomes[permittedRole],
     }
     window.history.pushState(null, "", workspacePath(nextRoute))
     setRoute(nextRoute)
@@ -4469,36 +4394,27 @@ function AppShell() {
   const chooseWorkspace = (next: Role) => {
     navigate(next, "login")
   }
-  const authenticate = (next: Role) => {
-    try {
-      window.sessionStorage.setItem(demoSessionKey, next)
-    } catch (error) {
-      console.error("Unable to save the OddJobs demo session.", error)
-      return "This browser could not save the demo session. Check storage permissions and try again."
-    }
-    setDemoSessionRole(next)
-    navigate(next, roleHomes[next])
-    return null
-  }
-  const clearDemoSession = () => {
-    try {
-      window.sessionStorage.removeItem(demoSessionKey)
-      setDemoSessionRole(null)
-    } catch (error) {
-      console.error("Unable to clear the OddJobs demo session.", error)
-      setStorageError("The demo session could not be cleared on this device.")
-    }
+  const clearAuthSession = () => {
+    void auth.signOut().catch((error: unknown) => {
+      console.error("Unable to sign out of OddJobs.", error)
+      setStorageError("Your session could not be cleared. Please try again.")
+    })
   }
   const goWelcome = () => {
-    clearDemoSession()
+    clearAuthSession()
     const nextRoute: WorkspaceRoute = { role: "consumer", screen: "welcome" }
     window.history.pushState(null, "", workspacePath(nextRoute))
     setRoute(nextRoute)
     setMobileMenuOpen(false)
   }
   const goWorkspacePicker = () => {
-    clearDemoSession()
-    navigate("consumer", "workspace")
+    void auth
+      .signOut()
+      .then(() => navigate("consumer", "workspace"))
+      .catch((error: unknown) => {
+        console.error("Unable to switch OddJobs workspaces.", error)
+        setStorageError("Your session could not be cleared. Please try again.")
+      })
   }
 
   useEffect(() => {
@@ -4516,10 +4432,11 @@ function AppShell() {
   }, [mobileMenuOpen])
 
   useEffect(() => {
+    if (auth.loading) return
     const syncRoute = () => {
       const nextRoute = getAuthenticatedRoute(
         window.location.pathname,
-        demoSessionRole,
+        authenticatedRoles,
       )
       setRoute(nextRoute)
       const canonicalPath = workspacePath(nextRoute)
@@ -4530,7 +4447,7 @@ function AppShell() {
     window.addEventListener("popstate", syncRoute)
     syncRoute()
     return () => window.removeEventListener("popstate", syncRoute)
-  }, [demoSessionRole])
+  }, [auth.loading, auth.profile])
 
   useEffect(() => {
     try {
@@ -4554,6 +4471,14 @@ function AppShell() {
       window.removeEventListener("offline", setConnected)
     }
   }, [])
+
+  if (auth.loading) {
+    return (
+      <div className="auth-shell">
+        <p className="center-note">Checking your account…</p>
+      </div>
+    )
+  }
 
   const renderScreen = () => {
     switch (screen) {
@@ -4654,7 +4579,6 @@ function AppShell() {
           initialRole={screen === "login" ? role : null}
           initialStage={screen === "login" ? "phone" : "role"}
           chooseWorkspace={chooseWorkspace}
-          authenticate={authenticate}
           changeWorkspace={goWorkspacePicker}
         />
       </DemoContext.Provider>
@@ -4703,7 +4627,7 @@ function AppShell() {
             </button>
             <Avatar
               src={role === "provider" ? photos.otieno : photos.wanjiku}
-              name="Current user"
+              name={auth.profile?.displayName ?? "Current user"}
             />
           </div>
         </header>
@@ -4840,12 +4764,26 @@ function AppShell() {
             </div>
           </div>
         </aside>
-        <main className="main">{renderScreen()}</main>
+        <main className="main">
+          {auth.profile && (
+            <div className="content">
+              <DemoNotice>
+                Your account is signed in. Listings, jobs, messages, tracking,
+                and payments are still demo content; no service or funds move.
+              </DemoNotice>
+            </div>
+          )}
+          {renderScreen()}
+        </main>
       </div>
     </DemoContext.Provider>
   )
 }
 
 export default function App() {
-  return <AppShell />
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  )
 }

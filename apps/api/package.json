@@ -1,0 +1,41 @@
+{
+  "name": "@oddjobs/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "generate": "prisma generate",
+    "prebuild": "npm run generate",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "pretest": "npm run generate",
+    "test": "tsx --test test/app.test.ts",
+    "pretypecheck": "npm run generate",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:status": "prisma migrate status"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.1",
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/swagger": "^9.5.1",
+    "@fastify/swagger-ui": "^6.1.2",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@supabase/supabase-js": "^2.118.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "prisma": "7.10.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
