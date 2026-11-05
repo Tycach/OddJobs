@@ -393,6 +393,18 @@ test("production config requires a database URL", () => {
   )
 })
 
+test("production config listens on all interfaces by default", () => {
+  const configured = loadConfig({
+    NODE_ENV: "production",
+    DATABASE_URL: "postgresql://test:test@localhost:5432/test",
+    SUPABASE_URL: "https://example.supabase.co",
+    SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
+  })
+
+  assert.equal(configured.host, "0.0.0.0")
+  assert.equal(loadConfig({ NODE_ENV: "development" }).host, "127.0.0.1")
+})
+
 test("Supabase Auth accepts a publishable key", () => {
   const configured = loadConfig({
     NODE_ENV: "development",

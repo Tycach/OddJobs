@@ -3,7 +3,7 @@ import { z } from "zod"
 
 const EnvironmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  HOST: z.string().min(1).default("127.0.0.1"),
+  HOST: z.string().min(1).optional(),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
@@ -63,7 +63,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
 
   return {
     environment: parsed.data.NODE_ENV,
-    host: parsed.data.HOST,
+    host:
+      parsed.data.HOST ??
+      (parsed.data.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1"),
     port: parsed.data.PORT,
     logLevel: parsed.data.LOG_LEVEL,
     webOrigin: parsed.data.WEB_ORIGIN,

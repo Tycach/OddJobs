@@ -45,6 +45,25 @@ Run checks with `npm test`, `npm run typecheck`, and `npm run build`. Use
 must be provided through the deployment secret manager; never commit `.env` or
 put API secrets in Vite variables.
 
+## Render API and Vercel Web Deployment
+
+For a Render Web Service rooted at `apps/api`, use `npm ci && npm run build`
+as the build command and `npm start` as the start command. The API defaults to
+`0.0.0.0` in production (and `127.0.0.1` in development); Render supplies
+`PORT`. Set the Render health check path to `/health/live`.
+
+Configure the API service environment with `NODE_ENV=production`,
+`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `WEB_ORIGIN`
+set to the exact Vercel site origin (scheme and hostname, without a path or
+trailing slash). `DIRECT_URL` is needed when running Prisma migrations.
+
+The Vercel frontend is built separately. Set `VITE_API_URL` in the Vercel
+project's environment variables to the public Render service origin, then
+redeploy the frontend so Vite includes it in the build. Set the frontend's
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` there as well. These
+`VITE_` values are public client configuration; never put database credentials
+or Supabase secret keys in Vercel frontend variables.
+
 Run `npm run db:migrate:deploy` before releasing the signup policy-consent
 flow. The API accepts only the current policy versions and stores each
 user/document/version acceptance once with a server-generated timestamp.
