@@ -105,6 +105,8 @@ export default function AuthExperience({
 
   const [notice, setNotice] = useState("")
 
+  const [logoFailed, setLogoFailed] = useState(false)
+
   const selectedRole = initialRole ?? "consumer"
 
   const canRegister = !["admin", "support", "partner"].includes(selectedRole)
@@ -557,17 +559,27 @@ export default function AuthExperience({
   return (
     <main className="auth-experience">
       <section className="auth-art" aria-label="OddJobs marketplace">
-        <img
-          src="/oddjobs-auth-art.jpg"
-          alt="OddJobs: Find. Hire. Get it done. Trusted local service professionals."
-        />
+        <div className="auth-art-frame">
+          <img
+            src={`${import.meta.env.BASE_URL}oddjobs-auth-art.jpg`}
+            alt="OddJobs: Find. Hire. Get it done. Trusted local service professionals."
+          />
+        </div>
       </section>
       <section className="auth-panel">
         <div className="auth-panel-brand">
-          <img
-            src="/oddjobs-logo.png"
-            alt="OddJobs.com — Building doors where none exist."
-          />
+          {logoFailed ? (
+            <div className="auth-panel-brand-fallback" aria-label="OddJobs.com">
+              <strong>OddJobs.com</strong>
+              <span>Building doors where none exist.</span>
+            </div>
+          ) : (
+            <img
+              src={`${import.meta.env.BASE_URL}oddjobs-logo.png`}
+              alt="OddJobs.com — Building doors where none exist."
+              onError={() => setLogoFailed(true)}
+            />
+          )}
         </div>
         <div className="auth-form-card">
           {initialRole && (stage === "login" || stage === "signup") && (
