@@ -1281,12 +1281,6 @@ export default function AuthExperience({
               {notice}
             </p>
           )}
-          {!auth.configured && (
-            <p className="auth-feedback auth-error" role="status">
-              Account services are temporarily unavailable. Please try again
-              later.
-            </p>
-          )}
           <p className="auth-terms auth-privacy">
             Secure &amp; Reliable · Your data is safe with us
           </p>

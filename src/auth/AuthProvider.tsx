@@ -29,7 +29,6 @@ export type AuthProfile = {
 }
 
 type AuthContextValue = {
-  configured: boolean
   loading: boolean
   profile: AuthProfile | null
   recovery: boolean
@@ -591,7 +590,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider
       value={{
-        configured: Boolean(supabase),
         loading,
         profile,
         recovery,
