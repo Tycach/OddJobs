@@ -28,11 +28,8 @@ export default function ProviderApplicationScreen({
       setApplicationStatus(application.status)
       setSubmitted(true)
     } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Unable to submit your application. Please try again.",
-      )
+      console.error("Unable to submit the supplier application.", caught)
+      setError("We couldn’t submit your application. Please try again shortly.")
     } finally {
       setBusy(false)
     }

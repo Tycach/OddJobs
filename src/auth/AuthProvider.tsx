@@ -108,6 +108,67 @@ const supabase: SupabaseClient | null =
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+function getAuthErrorMessage(
+  error: { message: string; code?: string } | null,
+  fallback: string,
+) {
+  if (!error) return fallback
+  const code = error.code?.toLowerCase() ?? ""
+  const message = error.message.toLowerCase()
+
+  if (
+    code.includes("rate_limit") ||
+    code.includes("too_many") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests")
+  ) {
+    return "There have been too many attempts. Please wait a few minutes and try again."
+  }
+  if (
+    code.includes("email_not_confirmed") ||
+    message.includes("email not confirmed")
+  ) {
+    return "Please verify your email using the link we sent before signing in."
+  }
+  if (
+    code.includes("invalid_credentials") ||
+    message.includes("invalid login credentials")
+  ) {
+    return "Those sign-in details don’t match. Check them and try again."
+  }
+  if (
+    code.includes("otp_expired") ||
+    code.includes("token_expired") ||
+    message.includes("expired")
+  ) {
+    return "That verification link or code has expired. Request a new one and try again."
+  }
+  if (
+    code.includes("invalid_otp") ||
+    code.includes("otp_invalid") ||
+    message.includes("invalid otp") ||
+    message.includes("invalid token")
+  ) {
+    return "That verification code doesn’t look right. Check it and try again."
+  }
+  if (code.includes("weak_password") || message.includes("weak password")) {
+    return "Choose a stronger password and try again."
+  }
+
+  return fallback
+}
+
+function getApiErrorMessage(status: number, fallback: string) {
+  if (status === 401) return "Please sign in again and retry."
+  if (status === 429) {
+    return "There have been too many attempts. Please wait a few minutes and try again."
+  }
+  if (status >= 500) {
+    return "This service is temporarily unavailable. Please try again shortly."
+  }
+  return fallback
+}
+
 async function postPolicyConsent(
   accessToken: string,
   termsVersion: string,
@@ -122,10 +183,12 @@ async function postPolicyConsent(
     body: JSON.stringify({ termsVersion, privacyVersion }),
   })
   if (!consentResponse.ok) {
-    const body = (await consentResponse.json().catch(() => null)) as
-      | { error?: string }
-      | null
-    throw new Error(body?.error || "Unable to save your policy acceptance.")
+    throw new Error(
+      getApiErrorMessage(
+        consentResponse.status,
+        "We couldn’t save your policy acceptance. Please try again.",
+      ),
+    )
   }
 }
 
@@ -141,10 +204,12 @@ async function fetchProfile(
     })
   }
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string
-    } | null
-    throw new Error(body?.error || "Unable to load your OddJobs profile.")
+    throw new Error(
+      getApiErrorMessage(
+        response.status,
+        "We couldn’t load your profile. Please try again.",
+      ),
+    )
   }
   const profile = (await response.json()) as AuthProfile
   const metadata = session.user.user_metadata
@@ -225,17 +290,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const acceptCurrentPolicies = async () => {
-    if (!supabase) throw new Error("Supabase Auth is not configured.")
+    if (!supabase) {
+      throw new Error(
+        "Account services are temporarily unavailable. Please try again later.",
+      )
+    }
     const updateResult = await supabase.auth.updateUser({
       data: {
         oddjobs_terms_version: POLICY_VERSIONS.terms,
         oddjobs_privacy_version: POLICY_VERSIONS.privacy,
       },
     })
-    if (updateResult.error) throw updateResult.error
+    if (updateResult.error) {
+      throw new Error(
+        getAuthErrorMessage(
+          updateResult.error,
+          "We couldn’t save your policy acceptance. Please try again.",
+        ),
+      )
+    }
 
     const sessionResult = await supabase.auth.getSession()
-    if (sessionResult.error) throw sessionResult.error
+    if (sessionResult.error) {
+      throw new Error(
+        getAuthErrorMessage(
+          sessionResult.error,
+          "We couldn’t confirm your sign-in. Please sign in again.",
+        ),
+      )
+    }
     if (!sessionResult.data.session) {
       throw new Error("Sign in again to save your policy acceptance.")
     }
@@ -254,7 +337,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signup?: { displayName: string; intent: "customer" | "supplier" },
   ) => {
     if (!supabase) {
-      return "Supabase Auth is not configured. Add the public Supabase URL and key to the web app environment."
+      return "Account services are temporarily unavailable. Please try again later."
     }
     const options = signup
       ? {
@@ -279,14 +362,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: identifier,
             options,
           })
-    return result.error?.message ?? null
+    return result.error
+      ? getAuthErrorMessage(
+          result.error,
+          "We couldn’t send a verification code. Please try again shortly.",
+        )
+      : null
   }
   const signInWithPassword = async (
     method: AuthMethod,
     identifier: string,
     password: string,
   ) => {
-    if (!supabase) return "Supabase Auth is not configured."
+    if (!supabase) {
+      return "Account services are temporarily unavailable. Please try again later."
+    }
     const result =
       method === "phone"
         ? await supabase.auth.signInWithPassword({
@@ -297,7 +387,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: identifier,
             password,
           })
-    return result.error?.message ?? null
+    return result.error
+      ? getAuthErrorMessage(
+          result.error,
+          "We couldn’t sign you in. Please check your details and try again.",
+        )
+      : null
   }
 
   const signUp = async (
@@ -309,7 +404,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ) => {
     if (!supabase) {
       return {
-        error: "Supabase Auth is not configured.",
+        error: "Account services are temporarily unavailable. Please try again later.",
         needsVerification: false,
       }
     }
@@ -335,36 +430,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             options,
           })
     return {
-      error: result.error?.message ?? null,
+      error: result.error
+        ? getAuthErrorMessage(
+            result.error,
+            "We couldn’t create your account right now. Please try again shortly.",
+          )
+        : null,
       needsVerification: !result.error && !result.data.session,
     }
   }
   const signInWithOAuth = async (provider: OAuthProvider) => {
-    if (!supabase) return "Supabase Auth is not configured."
+    if (!supabase) {
+      return "Account services are temporarily unavailable. Please try again later."
+    }
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: { redirectTo: window.location.href },
     })
-    return error?.message ?? null
+    return error
+      ? getAuthErrorMessage(
+          error,
+          "We couldn’t start sign-in with that option. Please try again.",
+        )
+      : null
   }
   const requestPasswordReset = async (email: string) => {
-    if (!supabase) return "Supabase Auth is not configured."
+    if (!supabase) {
+      return "Account services are temporarily unavailable. Please try again later."
+    }
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/consumer/login`,
     })
-    return error?.message ?? null
+    return error
+      ? getAuthErrorMessage(
+          error,
+          "We couldn’t send a reset link. Please try again shortly.",
+        )
+      : null
   }
   const updatePassword = async (password: string) => {
-    if (!supabase) return "Supabase Auth is not configured."
+    if (!supabase) {
+      return "Account services are temporarily unavailable. Please try again later."
+    }
     const { error } = await supabase.auth.updateUser({ password })
-    return error?.message ?? null
+    return error
+      ? getAuthErrorMessage(
+          error,
+          "We couldn’t update your password. Please try again.",
+        )
+      : null
   }
   const verifyOtp = async (
     method: AuthMethod,
     identifier: string,
     token: string,
   ) => {
-    if (!supabase) return "Supabase Auth is not configured."
+    if (!supabase) {
+      return "Account services are temporarily unavailable. Please try again later."
+    }
     const result =
       method === "phone"
         ? await supabase.auth.verifyOtp({
@@ -377,11 +500,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             token,
             type: "email",
           })
-    return result.error?.message ?? null
+    return result.error
+      ? getAuthErrorMessage(
+          result.error,
+          "We couldn’t verify that code. Please try again.",
+        )
+      : null
   }
 
   const resendOtp = async (method: AuthMethod, identifier: string) => {
-    if (!supabase) return "Supabase Auth is not configured."
+    if (!supabase) {
+      return "Account services are temporarily unavailable. Please try again later."
+    }
     const result =
       method === "phone"
         ? await supabase.auth.resend({ type: "sms", phone: identifier })
@@ -389,16 +519,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: identifier,
             options: { shouldCreateUser: false },
           })
-    return result.error?.message ?? null
+    return result.error
+      ? getAuthErrorMessage(
+          result.error,
+          "We couldn’t send a new verification code. Please try again.",
+        )
+      : null
   }
 
   const submitProviderApplication = async (
     application: Omit<ProviderApplication, "status">,
   ): Promise<ProviderApplication> => {
-    if (!supabase) throw new Error("Supabase Auth is not configured.")
+    if (!supabase) {
+      throw new Error(
+        "Account services are temporarily unavailable. Please try again later.",
+      )
+    }
     const { data, error } = await supabase.auth.getSession()
-    if (error) throw error
-    if (!data.session) throw new Error("Sign in before applying as a supplier.")
+    if (error) {
+      throw new Error(
+        getAuthErrorMessage(
+          error,
+          "We couldn’t confirm your sign-in. Please sign in again.",
+        ),
+      )
+    }
+    if (!data.session) {
+      throw new Error("Please sign in before submitting your supplier application.")
+    }
     const response = await fetch(`${apiUrl}/v1/provider-applications`, {
       method: "POST",
       headers: {
@@ -408,11 +556,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify(application),
     })
     if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as {
-        error?: string
-      } | null
       throw new Error(
-        body?.error || "Unable to submit your supplier application.",
+        getApiErrorMessage(
+          response.status,
+          "We couldn’t submit your supplier application. Please try again.",
+        ),
       )
     }
     const result = (await response.json()) as ProviderApplication
@@ -421,7 +569,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
     if (metadataResult.error) {
       throw new Error(
-        `Your application was received, but its signup state could not be cleared: ${metadataResult.error.message}`,
+        "Your application was received, but we couldn’t finish updating your account. Please contact support if you need help.",
       )
     }
     setSupplierSignupPending(false)
@@ -430,7 +578,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = async () => {
     if (!supabase) return
     const { error } = await supabase.auth.signOut()
-    if (error) throw error
+    if (error) {
+      throw new Error(
+        getAuthErrorMessage(
+          error,
+          "We couldn’t sign you out. Please try again.",
+        ),
+      )
+    }
   }
 
   return (

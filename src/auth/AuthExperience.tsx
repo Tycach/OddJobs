@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 
 import { useAuth, type AuthMethod, type OAuthProvider } from "./AuthProvider"
 
@@ -51,9 +51,8 @@ function identify(
 }
 
 function getErrorMessage(error: unknown) {
-  return error instanceof Error
-    ? error.message
-    : "Something went wrong. Please try again."
+  console.error("Authentication request failed.", error)
+  return "We couldn’t complete that request. Please try again shortly."
 }
 
 export default function AuthExperience({
@@ -101,11 +100,40 @@ export default function AuthExperience({
 
   const [busy, setBusy] = useState(false)
 
-  const [error, setError] = useState("")
+  const [error, setErrorState] = useState("")
+  const errorTimeout = useRef<number | null>(null)
 
   const [notice, setNotice] = useState("")
 
   const [logoFailed, setLogoFailed] = useState(false)
+
+  const [showMobileWelcome, setShowMobileWelcome] = useState(
+    initialStage === "login",
+  )
+
+  const setError = (message: string) => {
+    if (errorTimeout.current !== null) {
+      window.clearTimeout(errorTimeout.current)
+      errorTimeout.current = null
+    }
+
+    setErrorState(message)
+    if (message) {
+      errorTimeout.current = window.setTimeout(() => {
+        setErrorState("")
+        errorTimeout.current = null
+      }, 6000)
+    }
+  }
+
+  useEffect(
+    () => () => {
+      if (errorTimeout.current !== null) {
+        window.clearTimeout(errorTimeout.current)
+      }
+    },
+    [],
+  )
 
   const selectedRole = initialRole ?? "consumer"
 
@@ -133,6 +161,25 @@ export default function AuthExperience({
     setNotice("")
 
     setStage("login")
+  }
+
+  const openMobileLogin = () => {
+    setError("")
+    setNotice("")
+    setStage("login")
+    setShowMobileWelcome(false)
+  }
+
+  const openMobileSignup = (nextIntent: SignupIntent) => {
+    startSignup(nextIntent)
+    setShowMobileWelcome(false)
+  }
+
+  const returnToMobileWelcome = () => {
+    setError("")
+    setNotice("")
+    setStage("login")
+    setShowMobileWelcome(true)
   }
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
@@ -566,7 +613,72 @@ export default function AuthExperience({
           />
         </div>
       </section>
-      <section className="auth-panel">
+      <section
+        className={`mobile-auth-welcome${showMobileWelcome ? "" : " mobile-auth-welcome-hidden"}`}
+        aria-label="Welcome to OddJobs"
+      >
+        <div className="mobile-auth-brand">
+          {logoFailed ? (
+            <div className="auth-panel-brand-fallback" aria-label="OddJobs.com">
+              <strong>OddJobs.com</strong>
+              <span>Building doors where none exist.</span>
+            </div>
+          ) : (
+            <img
+              src={`${import.meta.env.BASE_URL}oddjobs-logo.png`}
+              alt="OddJobs.com — Building doors where none exist."
+              onError={() => setLogoFailed(true)}
+            />
+          )}
+        </div>
+        <div className="mobile-auth-art">
+          <img
+            src={`${import.meta.env.BASE_URL}oddjobs-auth-art.jpg`}
+            alt=""
+          />
+        </div>
+        <div className="mobile-auth-intro">
+          <h1>Find trusted local help. Get it done.</h1>
+          <p>Connect with reliable service professionals in your community.</p>
+        </div>
+        <div className="mobile-auth-actions">
+          <button type="button" className="auth-submit" onClick={openMobileLogin}>
+            Log in
+          </button>
+          {canRegister && (
+            <button
+              type="button"
+              className="mobile-auth-signup"
+              onClick={() => openMobileSignup("customer")}
+            >
+              Create account
+            </button>
+          )}
+        </div>
+        {canRegister && (
+          <button
+            type="button"
+            className="mobile-auth-supplier"
+            onClick={() => openMobileSignup("supplier")}
+          >
+            Become a supplier
+          </button>
+        )}
+      </section>
+      <section
+        className={`auth-panel${showMobileWelcome ? " auth-panel-mobile-hidden" : ""}`}
+      >
+        {initialStage === "login" &&
+          !showMobileWelcome &&
+          (stage === "login" || stage === "signup") && (
+            <button
+              type="button"
+              className="mobile-auth-back"
+              onClick={returnToMobileWelcome}
+            >
+              ← Back
+            </button>
+          )}
         <div className="auth-panel-brand">
           {logoFailed ? (
             <div className="auth-panel-brand-fallback" aria-label="OddJobs.com">
@@ -1153,9 +1265,16 @@ export default function AuthExperience({
           )}
 
           {error && (
-            <p className="auth-feedback auth-error" role="alert">
-              {error}
-            </p>
+            <div className="auth-error-toast" role="alert">
+              <p>{error}</p>
+              <button
+                type="button"
+                aria-label="Dismiss error message"
+                onClick={() => setError("")}
+              >
+                ×
+              </button>
+            </div>
           )}
           {notice && stage !== "otp" && stage !== "signupSent" && (
             <p className="auth-feedback" role="status">
@@ -1164,8 +1283,8 @@ export default function AuthExperience({
           )}
           {!auth.configured && (
             <p className="auth-feedback auth-error" role="status">
-              Supabase Auth is not configured. Add the public Supabase URL and
-              key to enable accounts.
+              Account services are temporarily unavailable. Please try again
+              later.
             </p>
           )}
           <p className="auth-terms auth-privacy">
