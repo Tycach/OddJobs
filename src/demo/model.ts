@@ -8,6 +8,7 @@ export type Screen =
   | "welcome"
   | "workspace"
   | "login"
+  | "providerApply"
   | "home"
   | "search"
   | "map"

@@ -2,9 +2,10 @@
 
 This is the independently installable OddJobs API service. It is built and
 tested separately from the Figma Make/Vite web application. It verifies
-Supabase Auth access tokens and provides protected profile bootstrap/read
-routes. Prisma models are in place, but job/quote/message APIs and payments are
-not implemented.
+Supabase Auth access tokens and provides protected profile bootstrap/read and
+supplier-application routes. Supplier applications are saved as provider
+profiles in review and never grant the provider role by themselves.
+Job/quote/message APIs and payments are not implemented.
 
 ## Boundary
 
@@ -44,11 +45,34 @@ Run checks with `npm test`, `npm run typecheck`, and `npm run build`. Use
 must be provided through the deployment secret manager; never commit `.env` or
 put API secrets in Vite variables.
 
+Run `npm run db:migrate:deploy` before releasing the signup policy-consent
+flow. The API accepts only the current policy versions and stores each
+user/document/version acceptance once with a server-generated timestamp.
+
+The API applies Helmet security headers, exact-origin CORS checks, and
+per-process request limits (120 requests/IP/minute globally; 5 supplier
+application requests/IP/hour). The built-in limiter store is in-memory:
+configure a shared rate-limit store or enforce equivalent limits at the
+trusted gateway before running multiple API replicas. If deployed behind a
+reverse proxy, configure Fastify to trust only the known proxy IP ranges;
+never trust arbitrary forwarded-IP headers. Protected identity responses are
+sent with `Cache-Control: no-store`.
+
+Before production, maintain an authorized staging test environment with
+dedicated accounts for each role. Regression checks should cover expired and
+invalid tokens, missing authorization, consumer/provider/staff role boundaries,
+forged role fields, wrong-user access, recovery and OAuth redirects, and rate
+limits. Do not run load, brute-force, or destructive tests against production.
+
 ## Current Limits
 
 - `/v1/me/bootstrap` and `/v1/me` require a verified Supabase bearer token.
   New accounts receive only the consumer role; provider/staff provisioning is
   not implemented.
+- `POST /v1/provider-applications` stores the authenticated user's requested
+  public name, service description, and region as a profile in review. It does
+  not grant provider access; provider approval and role provisioning remain a
+  trusted administrative operation.
 - Job, quote, message CRUD, realtime updates, payment collection, worker
   payouts, and production deployment are not implemented.
 - Do not connect a real payment provider until legal/provider approval, ledger
@@ -56,4 +80,3 @@ put API secrets in Vite variables.
   reconciliation are implemented and tested. See
   `../../docs/marketplace-payments-plan.md` and
   `../../docs/implementation-roadmap.md`.
-

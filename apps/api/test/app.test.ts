@@ -40,6 +40,15 @@ const profileStore: UserProfileStore = {
     return profile
   },
   getProfile: async (userId) => (userId === principal.id ? profile : null),
+  recordPolicyConsents: async (userId, termsVersion, privacyVersion) => {
+    assert.equal(userId, principal.id)
+    assert.equal(termsVersion, "2026-11-05-v1")
+    assert.equal(privacyVersion, "2026-11-05-v1")
+  },
+  submitProviderApplication: async (userId, application) => {
+    assert.equal(userId, principal.id)
+    return { ...application, status: "in_review" }
+  },
 }
 
 test("liveness reports the process is running and returns a request ID", async () => {
@@ -61,6 +70,29 @@ test("a valid request ID is preserved", async () => {
   })
 
   assert.equal(response.headers["x-request-id"], "health-check_01")
+  await app.close()
+})
+test("security headers are applied to API responses", async () => {
+  const app = await buildApp({ config, database: null })
+  const response = await app.inject({ method: "GET", url: "/health/live" })
+  assert.equal(response.headers["x-content-type-options"], "nosniff")
+  assert.equal(response.headers["x-frame-options"], "SAMEORIGIN")
+  await app.close()
+})
+test("CORS allows only the configured web origin", async () => {
+  const app = await buildApp({ config, database: null })
+  const allowed = await app.inject({
+    method: "GET",
+    url: "/health/live",
+    headers: { origin: config.webOrigin },
+  })
+  const rejected = await app.inject({
+    method: "GET",
+    url: "/health/live",
+    headers: { origin: "https://attacker.invalid" },
+  })
+  assert.equal(allowed.headers["access-control-allow-origin"], config.webOrigin)
+  assert.equal(rejected.headers["access-control-allow-origin"], undefined)
   await app.close()
 })
 
@@ -111,6 +143,8 @@ test("OpenAPI describes the health endpoints", async () => {
   assert.ok(paths["/health/ready"])
   assert.ok(paths["/v1/me"])
   assert.ok(paths["/v1/me/bootstrap"])
+  assert.ok(paths["/v1/me/policy-consents"])
+  assert.ok(paths["/v1/provider-applications"])
   await app.close()
 })
 
@@ -160,6 +194,7 @@ test("profile bootstrap uses the verified identity and server-assigned role", as
 
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), profile)
+  assert.equal(response.headers["cache-control"], "no-store")
   await app.close()
 })
 
@@ -178,6 +213,176 @@ test("profile reads are scoped to the verified user ID", async () => {
 
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), profile)
+  assert.equal(response.headers["cache-control"], "no-store")
+  await app.close()
+})
+test("policy consent records the current versions for the verified active user", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/me/policy-consents",
+    headers: { authorization: "Bearer valid-token" },
+    payload: {
+      termsVersion: "2026-11-05-v1",
+      privacyVersion: "2026-11-05-v1",
+    },
+  })
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { accepted: true })
+  assert.equal(response.headers["cache-control"], "no-store")
+  await app.close()
+})
+test("policy consent rejects stale document versions", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/me/policy-consents",
+    headers: { authorization: "Bearer valid-token" },
+    payload: {
+      termsVersion: "outdated",
+      privacyVersion: "2026-11-05-v1",
+    },
+  })
+  assert.equal(response.statusCode, 400)
+  await app.close()
+})
+test("policy consent requires authentication", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/me/policy-consents",
+    payload: {
+      termsVersion: "2026-11-05-v1",
+      privacyVersion: "2026-11-05-v1",
+    },
+  })
+  assert.equal(response.statusCode, 401)
+  await app.close()
+})
+test("supplier applications require an authenticated active profile and do not assign provider roles", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/provider-applications",
+    headers: { authorization: "Bearer valid-token" },
+    payload: {
+      publicName: "  Customer Services  ",
+      bio: "  Home repairs and maintenance.  ",
+      region: "  Nairobi ",
+    },
+  })
+  assert.equal(response.statusCode, 201)
+  assert.deepEqual(response.json(), {
+    publicName: "Customer Services",
+    bio: "Home repairs and maintenance.",
+    region: "Nairobi",
+    status: "in_review",
+  })
+  assert.equal(response.headers["cache-control"], "no-store")
+  assert.deepEqual(profile.roles, ["consumer"])
+  await app.close()
+})
+test("supplier applications reject unauthenticated callers", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/provider-applications",
+    payload: {
+      publicName: "Customer Services",
+      bio: "Home repairs and maintenance.",
+      region: "Nairobi",
+    },
+  })
+  assert.equal(response.statusCode, 401)
+  await app.close()
+})
+test("supplier applications reject unexpected fields", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/provider-applications",
+    headers: { authorization: "Bearer valid-token" },
+    payload: {
+      publicName: "Customer Services",
+      bio: "",
+      region: "Nairobi",
+      role: "provider",
+    },
+  })
+  assert.equal(response.statusCode, 400)
+  await app.close()
+})
+test("supplier applications reject blank profile details", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/provider-applications",
+    headers: { authorization: "Bearer valid-token" },
+    payload: { publicName: "  ", bio: "Repairs", region: "Nairobi" },
+  })
+  assert.equal(response.statusCode, 400)
+  await app.close()
+})
+test("supplier applications are rate limited", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+  })
+  const submit = () =>
+    app.inject({
+      method: "POST",
+      url: "/v1/provider-applications",
+      headers: { authorization: "Bearer valid-token" },
+      payload: {
+        publicName: "Customer Services",
+        bio: "Home repairs and maintenance.",
+        region: "Nairobi",
+      },
+    })
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await submit()
+    assert.equal(response.statusCode, 201)
+  }
+  const limited = await submit()
+  assert.equal(limited.statusCode, 429)
+  assert.ok(limited.headers["retry-after"])
   await app.close()
 })
 

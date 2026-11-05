@@ -44,6 +44,13 @@ enum VerificationStatus {
   @@map("verification_status")
 }
 
+enum PolicyDocument {
+  TERMS
+  PRIVACY
+
+  @@map("policy_document")
+}
+
 enum JobStatus {
   OPEN
   AWARDED
@@ -74,7 +81,8 @@ model User {
   roleAssignments UserRoleAssignment[]
   sessions        Session[]
   providerProfile ProviderProfile?
-  customerJobs    Job[]                 @relation("CustomerJobs")
+  policyConsents   PolicyConsent[]
+  customerJobs     Job[]                 @relation("CustomerJobs")
   quotes          Quote[]
   messages        Message[]
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -82,6 +90,19 @@ model User {
 
   @@index([status, createdAt])
   @@map("users")
+}
+
+model PolicyConsent {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  document   PolicyDocument
+  version    String         @db.VarChar(40)
+  acceptedAt DateTime       @default(now()) @map("accepted_at") @db.Timestamptz(3)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, document, version])
+  @@index([userId, acceptedAt])
+  @@map("policy_consents")
 }
 
 model AuthIdentity {

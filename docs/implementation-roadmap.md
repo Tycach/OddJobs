@@ -58,19 +58,36 @@ documented and tested.
 - Stored quote/job amounts as integer minor units and enforced one accepted
   quote per job in PostgreSQL.
 - Switched the API readiness probe to Prisma's database client.
-- Added Supabase phone/email OTP in the browser, API-side token verification,
-  and protected `/v1/me/bootstrap` and `/v1/me` routes.
+- Added Supabase phone/email OTP and password sign-in, customer registration,
+  password recovery, and optional Google/Apple OAuth in the browser.
+- Added API-side token verification, protected profile bootstrap/read routes,
+  and `POST /v1/provider-applications` for supplier profiles awaiting review.
 - New accounts receive only the consumer role; the API ignores client-selected
   role claims and routes are constrained to roles returned by the API.
+- Added a shared responsive orange login/signup experience based on the
+  supplied OddJobs reference artwork. Remember-me selects session-only or
+  persistent browser storage for new Auth sessions.
 
 Still required before Phase 3 is complete:
 
 - Apply the migration to a running PostgreSQL instance and verify migration
   status and backup/restore procedures.
-- Configure Supabase public Auth settings in the web app and API, and confirm
-  phone/email delivery settings in Supabase.
-- Implement provider onboarding/provisioning and server-side authorization for
-  provider/admin/support roles.
+- Configure Supabase public Auth settings in the web app and API, enable the
+  chosen password/OTP/OAuth providers, and confirm redirect and delivery
+  settings in Supabase.
+- Obtain legal/privacy approval for the Terms & Conditions and Privacy Policy,
+  complete the privacy contact, retention, and hosting details, and apply the
+  policy-consent migration before deploying. Versioned acceptance and
+  re-acceptance are implemented and covered by API/UI checks.
+- Configure a shared rate-limit store or equivalent edge limits for multi-
+  replica API deployment, and trust only explicitly known proxy IP ranges.
+- Run the role-boundary, recovery/OAuth redirect, and invalid/expired-token
+  checks in an authorized staging environment before production.
+- Publish and link approved Terms/Privacy documents and persist versioned
+  consent acceptance before enabling production signup.
+- Implement trusted review operations and server-side provisioning for
+  provider/admin/support roles; supplier applications intentionally do not
+  grant these roles.
 - Implement authenticated repositories/routes for jobs, quotes, and messages
   before replacing their demo fixtures in the web client.
 - Replace demo local-storage state with API-backed queries/mutations and define

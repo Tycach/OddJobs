@@ -1,9 +1,11 @@
 # OddJobs
 
-OddJobs is a mobile-first marketplace app in phased implementation. Supabase
-OTP sign-in and protected account-profile bootstrap are implemented when Auth
-is configured. Service discovery, jobs, chat, tracking, and payments still use
-prototype content and are not production marketplace flows.
+OddJobs is a mobile-first marketplace app in phased implementation. The shared
+orange-branded login experience supports Supabase password and OTP sign-in,
+customer registration, password recovery, and configured Google/Apple OAuth.
+Supplier applications are stored for review; they do not grant provider access.
+Service discovery, jobs, chat, tracking, and payments still use prototype
+content and are not production marketplace flows.
 
 ## Project Map
 
@@ -27,11 +29,33 @@ pnpm dev
 
 Create a production build with `pnpm build`.
 
-For Supabase sign-in, copy `.env.example` to `.env.local` and set the public
-Supabase URL and `VITE_SUPABASE_PUBLISHABLE_KEY`. In `apps/api/.env`, set the
-matching `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. The publishable key is
-designed for client use; never put database passwords or the Supabase secret
-key in Vite.
+For Supabase Auth, copy `.env.example` to `.env.local` and set the public
+Supabase URL and `VITE_SUPABASE_PUBLISHABLE_KEY`. Enable the email/password,
+phone/OTP, Google, and Apple providers you intend to offer in Supabase; OAuth
+providers also require their callback URLs and credentials to be configured
+there. In `apps/api/.env`, set the matching `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY`. The publishable key is designed for client use;
+never put database passwords or the Supabase secret key in Vite.
+
+Password recovery redirects to `/consumer/login` and requires the web app URL
+to be allowed by the Supabase Auth redirect URL settings. Supplier applications
+use `POST /v1/provider-applications`; the API creates a provider profile in
+review and keeps the account's assigned roles unchanged. Provider role
+provisioning still requires a trusted administrative process.
+
+The signup form requires users to read both the Terms & Conditions and Privacy
+Policy through to the end and explicitly accept them. Each signup stores the accepted policy versions in Supabase account metadata;
+after verification, the authenticated API records each version with a server
+timestamp in the OddJobs database. Users with missing or outdated versions
+must review and accept the current policies before accessing their workspace.
+Apply API migrations before deploying this flow:
+`npm --prefix apps/api run db:migrate:deploy`.
+
+Both policy documents are product drafts and require legal/privacy review
+before production. Complete the Privacy Policy with OddJobs' legal entity,
+privacy contact, hosting regions, retention periods, and complaint process.
+When either policy changes, update its version; the app will require
+re-acceptance and the API will reject obsolete versions.
 
 Run the API independently from `apps/api` with `npm install`, `docker compose
 up -d db`, and `npm run dev`. The web app and API have separate package

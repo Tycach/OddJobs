@@ -3,9 +3,12 @@
 ## Current State
 
 OddJobs is a React 19/Vite client with an independent Fastify API. Supabase Auth
-OTP, server-verified access tokens, and a protected profile bootstrap are
-implemented. Marketplace screens still use prototype fixtures and browser
-state; jobs, chat, tracking, and payments are not production features yet.
+password and OTP sign-in, customer registration, password recovery, optional
+Google/Apple OAuth, server-verified access tokens, and protected profile
+bootstrap are implemented. Supplier applications are API-backed and remain
+unapproved until a trusted operator provisions provider access. Marketplace
+screens still use prototype fixtures and browser state; jobs, chat, tracking,
+and payments are not production features yet.
 
 ## Source Layout
 
@@ -75,3 +78,7 @@ model. Do not add a backend framework to this front-end prototype by assumption.
    in place.
 - Add monitoring, audit trails, backups, incident response, and tested
   reconciliation procedures.
+- Keep API rate limits backed by a shared store or trusted gateway when scaling
+  beyond one process; only trust explicitly configured reverse-proxy IP ranges.
+- Run authorization and authentication regression tests in an authorized
+  staging environment with dedicated role-specific test accounts.

@@ -1,6 +1,12 @@
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "./generated/prisma/client.ts"
-import type { AuthenticatedPrincipal, UserProfile, UserProfileStore } from "./auth/types.js"
+import type {
+  AuthenticatedPrincipal,
+  ProviderApplication,
+  ProviderApplicationInput,
+  UserProfile,
+  UserProfileStore,
+} from "./auth/types.js"
 
 export interface ReadinessDatabase {
   check(): Promise<void>
@@ -24,7 +30,9 @@ export class PrismaDatabase implements ReadinessDatabase, UserProfileStore {
     await this.client.$queryRaw`SELECT 1`
   }
 
-  async bootstrapProfile(principal: AuthenticatedPrincipal): Promise<UserProfile> {
+  async bootstrapProfile(
+    principal: AuthenticatedPrincipal,
+  ): Promise<UserProfile> {
     const displayName =
       principal.displayName?.trim() ||
       principal.phone ||
@@ -46,7 +54,9 @@ export class PrismaDatabase implements ReadinessDatabase, UserProfileStore {
       id: user.id,
       displayName: user.displayName,
       status: user.status.toLowerCase(),
-      roles: user.roleAssignments.map((assignment) => assignment.role.toLowerCase()),
+      roles: user.roleAssignments.map((assignment) =>
+        assignment.role.toLowerCase(),
+      ),
     }
   }
 
@@ -61,7 +71,44 @@ export class PrismaDatabase implements ReadinessDatabase, UserProfileStore {
       id: user.id,
       displayName: user.displayName,
       status: user.status.toLowerCase(),
-      roles: user.roleAssignments.map((assignment) => assignment.role.toLowerCase()),
+      roles: user.roleAssignments.map((assignment) =>
+        assignment.role.toLowerCase(),
+      ),
+    }
+  }
+  async recordPolicyConsents(
+    userId: string,
+    termsVersion: string,
+    privacyVersion: string,
+  ): Promise<void> {
+    await this.client.policyConsent.createMany({
+      data: [
+        { userId, document: "TERMS", version: termsVersion },
+        { userId, document: "PRIVACY", version: privacyVersion },
+      ],
+      skipDuplicates: true,
+    })
+  }
+  async submitProviderApplication(
+    userId: string,
+    application: ProviderApplicationInput,
+  ): Promise<ProviderApplication> {
+    const profile = await this.client.providerProfile.upsert({
+      where: { userId },
+      create: {
+        userId,
+        publicName: application.publicName,
+        bio: application.bio,
+        region: application.region,
+        verificationStatus: "IN_REVIEW",
+      },
+      update: {},
+    })
+    return {
+      publicName: profile.publicName,
+      bio: profile.bio ?? "",
+      region: profile.region ?? "",
+      status: profile.verificationStatus.toLowerCase(),
     }
   }
 

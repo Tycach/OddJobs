@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { AuthProvider, useAuth } from "./auth/AuthProvider"
+import AuthExperience from "./auth/AuthExperience"
+import ProviderApplicationScreen from "./auth/ProviderApplicationScreen"
 import {
   demoStorageKey,
   initialDemoStore,
@@ -41,18 +43,11 @@ const roleHomes: Record<Role, Screen> = {
   partner: "programmes",
 }
 
-const workspaceLabels: Record<Role, string> = {
-  consumer: "Hire someone",
-  provider: "Offer services",
-  admin: "Admin workspace",
-  support: "Support workspace",
-  partner: "Partner workspace",
-}
-
 const roleScreens: Record<Role, readonly Screen[]> = {
   consumer: [
     "workspace",
     "login",
+    "providerApply",
     "home",
     "search",
     "map",
@@ -136,13 +131,6 @@ function getWorkspaceRoute(pathname: string): WorkspaceRoute {
     (candidate) => candidate === screenSegment,
   )
   return { role, screen: screen ?? roleHomes[role] }
-}
-
-function normalizeKenyanPhoneInput(value: string) {
-  let digits = value.replace(/\D/g, "")
-  if (digits.startsWith("254")) digits = digits.slice(3)
-  if (digits.startsWith("0")) digits = digits.slice(1)
-  return digits.slice(0, 9)
 }
 
 function getAuthenticatedRoute(
@@ -506,348 +494,6 @@ function Sponsored() {
         <span>Jumia Home · Nairobi</span>
       </div>
       <Icon name="arrow" size={18} />
-    </div>
-  )
-}
-
-function Welcome({
-  initialRole = null,
-  initialStage = "role",
-  chooseWorkspace,
-  changeWorkspace,
-}: {
-  initialRole?: Role | null
-  initialStage?: "phone" | "role"
-  chooseWorkspace: (role: Role) => void
-  changeWorkspace: () => void
-}) {
-  const { store, updateStore } = useDemoStore()
-  const { configured, requestOtp, verifyOtp, resendOtp } = useAuth()
-  const [stage, setStage] = useState<"phone" | "otp" | "role">(initialStage)
-  const [selectedRole] = useState<Role | null>(initialRole)
-  const [authMode, setAuthMode] = useState<"phone" | "email">("phone")
-  const [phone, setPhone] = useState("")
-  const [email, setEmail] = useState("")
-  const [otp, setOtp] = useState("")
-  const [authError, setAuthError] = useState("")
-  const [authBusy, setAuthBusy] = useState(false)
-  const [adIndex, setAdIndex] = useState(0)
-  const authIdentifier =
-    authMode === "phone" ? `+254${phone}` : email.trim().toLowerCase()
-  const ads = [
-    ["Safaricom Home Fibre", "Stay connected from KES 2,999"],
-    ["Jumia Home", "20% off cleaning supplies"],
-    ["M-KOPA Solar", "Flexible pay-as-you-go energy"],
-  ]
-  useEffect(() => {
-    const timer = window.setInterval(
-      () => setAdIndex((index) => (index + 1) % ads.length),
-      5000,
-    )
-    return () => window.clearInterval(timer)
-  }, [])
-  return (
-    <div className="auth-shell">
-      <header className="auth-nav">
-        <div className="brand">
-          <span>O</span>
-          <strong>
-            OddJobs<em>.com</em>
-          </strong>
-        </div>
-        <button
-          className="lang"
-          onClick={() =>
-            updateStore({ language: store.language === "EN" ? "SW" : "EN" })
-          }
-        >
-          {store.language}{" "}
-          <span>/ {store.language === "EN" ? "SW" : "EN"}</span>
-        </button>
-      </header>
-      <main className="auth-main">
-        <section className="auth-story">
-          <Badge>Trusted across Nairobi</Badge>
-          <h1>
-            Good work.
-            <br />
-            Good people.
-            <br />
-            <em>Done safely.</em>
-          </h1>
-          <p>
-            Hire vetted local professionals, pay securely with M-Pesa, and
-            release payment only when the job is done.
-          </p>
-          <div className="auth-trust">
-            <span>
-              <Icon name="shield" />
-              <b>Verified providers</b>
-            </span>
-            <span>
-              <Icon name="wallet" />
-              <b>M-Pesa escrow</b>
-            </span>
-            <span>
-              <Icon name="star" />
-              <b>Real reviews</b>
-            </span>
-          </div>
-          <div className="auth-image">
-            <img
-              src={photos.amina}
-              alt="A trusted OddJobs service professional"
-            />
-            <div>
-              <span className="rating">★★★★★</span>
-              <strong>“Reliable help, right when I needed it.”</strong>
-              <small>Wanjiku · Kilimani</small>
-            </div>
-          </div>
-        </section>
-        <section className="auth-card">
-          {stage === "phone" && (
-            <>
-              {selectedRole && (
-                <>
-                  <button className="back-link" onClick={changeWorkspace}>
-                    ← Change workspace
-                  </button>
-                  <div>
-                    <div className="eyebrow">
-                      {selectedRole === "admin" || selectedRole === "support"
-                        ? "Restricted workspace"
-                        : "Workspace sign in"}
-                    </div>
-                    <h2>Sign in to {workspaceLabels[selectedRole]}</h2>
-                    <p>
-                      Use your phone number or email to continue to your
-                      workspace.
-                    </p>
-                  </div>
-                  {(selectedRole === "admin" || selectedRole === "support") && (
-                    <DemoNotice>
-                      This workspace is provisioned by an OddJobs
-                      administrator. Access is checked after sign-in.
-                    </DemoNotice>
-                  )}
-                </>
-              )}
-              {!selectedRole && (
-                <div>
-                  <div className="eyebrow">Welcome to OddJobs</div>
-                  <h2>Let’s get you started</h2>
-                  <p>
-                    Enter your phone number to sign in or create an account.
-                  </p>
-                </div>
-              )}
-              {authMode === "phone" ? (
-                <label>
-                  Phone number
-                  <div className="phone-input">
-                    <span>+254</span>
-                    <input
-                      value={phone}
-                      onChange={(event) =>
-                        setPhone(normalizeKenyanPhoneInput(event.target.value))
-                      }
-                      placeholder="712 345 678"
-                      autoFocus
-                    />
-                  </div>
-                </label>
-              ) : (
-                <label>
-                  Email address
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="you@example.com"
-                  />
-                </label>
-              )}
-              <small className="center-note">
-                Sign in with a one-time code sent to your {authMode}.
-              </small>
-              <Button
-                disabled={authBusy}
-                onClick={async () => {
-                  if (authMode === "phone" && !/^[17]\d{8}$/.test(phone)) {
-                    setAuthError("Enter a valid Kenyan mobile number, with or without the leading 0.")
-                    return
-                  }
-                  if (
-                    authMode === "email" &&
-                    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-                  ) {
-                    setAuthError("Enter a valid email address.")
-                    return
-                  }
-                  setAuthError("")
-                  setAuthBusy(true)
-                  const error = await requestOtp(authMode, authIdentifier)
-                  setAuthBusy(false)
-                  if (error) {
-                    setAuthError(error)
-                    return
-                  }
-                  setOtp("")
-                  setStage("otp")
-                }}
-              >
-                {authBusy ? "Sending code…" : `Continue with ${authMode}`}
-              </Button>
-              <div className="or">
-                <span>or</span>
-              </div>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setAuthMode(authMode === "phone" ? "email" : "phone")
-                  setAuthError("")
-                }}
-              >
-                Use {authMode === "phone" ? "email" : "phone"} instead
-              </Button>
-              {authError && (
-                <p className="form-error" role="alert">
-                  {authError}
-                </p>
-              )}
-              <small className="terms">
-                By continuing, you agree to our Terms and Privacy Policy.
-              </small>
-            </>
-          )}
-          {stage === "otp" && (
-            <>
-              <button className="back-link" onClick={() => setStage("phone")}>
-                ← Back
-              </button>
-              <div>
-                <div className="eyebrow">Verify your {authMode}</div>
-                <h2>Enter your verification code</h2>
-                <p>
-                  Code sent to {authIdentifier}.
-                </p>
-              </div>
-              <label>
-                Verification code
-                <input
-                  inputMode="numeric"
-                  value={otp}
-                  maxLength={6}
-                  onChange={(event) =>
-                    setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))
-                  }
-                  placeholder="Verification code"
-                />
-              </label>
-              <Button
-                disabled={authBusy || !otp}
-                onClick={async () => {
-                  setAuthError("")
-                  setAuthBusy(true)
-                  const error = await verifyOtp(authMode, authIdentifier, otp)
-                  setAuthBusy(false)
-                  if (error) setAuthError(error)
-                }}
-              >
-                {authBusy ? "Verifying…" : "Verify and sign in"}
-              </Button>
-              {authError && (
-                <p className="form-error" role="alert">
-                  {authError}
-                </p>
-              )}
-              <button
-                className="text-link"
-                onClick={async () => {
-                  setAuthError("")
-                  setAuthBusy(true)
-                  const error = await resendOtp(authMode, authIdentifier)
-                  setAuthBusy(false)
-                  setAuthError(error ?? "A new code was sent.")
-                }}
-              >
-                Resend code
-              </button>
-            </>
-          )}
-          {stage === "role" && (
-            <>
-              <div>
-                <div className="eyebrow">Choose a workspace</div>
-                <h2>How do you want to use OddJobs?</h2>
-                <p>Choose a workspace, then sign in to continue.</p>
-              </div>
-              {([
-                [
-                  "consumer",
-                  "Hire someone",
-                  "Find trusted help for home and work",
-                  "search",
-                ],
-                [
-                  "provider",
-                  "Offer services",
-                  "Find jobs and grow your income",
-                  "briefcase",
-                ],
-                [
-                  "partner",
-                  "Partner workspace",
-                  "Manage programmes and impact",
-                  "chart",
-                ],
-              ] as const).map(([role, title, description, icon]) => (
-                <button
-                  key={role}
-                  className="role-choice"
-                  onClick={() => chooseWorkspace(role)}
-                >
-                  <span>
-                    <Icon name={icon} />
-                  </span>
-                  <div>
-                    <strong>{title}</strong>
-                    <small>{description}</small>
-                  </div>
-                  <Icon name="chevron" />
-                </button>
-              ))}
-              <p className="workspace-access-note">
-                Provider access requires an approved provider profile. Admin,
-                Support, and Partner workspaces are provisioned by OddJobs.
-              </p>
-              {!configured && (
-                <DemoNotice>
-                  Supabase Auth configuration is required before you can sign in.
-                </DemoNotice>
-              )}
-            </>
-          )}
-          {!store.reduceAds && (
-            <div className="auth-ad" aria-live="polite">
-              <Badge tone="amber">Sponsored</Badge>
-              <span>
-                <b>{ads[adIndex][0]}</b>
-                <small>{ads[adIndex][1]}</small>
-              </span>
-              <span className="ad-dots">
-                {ads.map((_, index) => (
-                  <i
-                    key={index}
-                    className={index === adIndex ? "active" : ""}
-                  />
-                ))}
-              </span>
-            </div>
-          )}
-        </section>
-      </main>
     </div>
   )
 }
@@ -4434,10 +4080,17 @@ function AppShell() {
   useEffect(() => {
     if (auth.loading) return
     const syncRoute = () => {
-      const nextRoute = getAuthenticatedRoute(
+      let nextRoute = getAuthenticatedRoute(
         window.location.pathname,
         authenticatedRoles,
       )
+      if (
+        auth.profile &&
+        auth.supplierSignupPending &&
+        authenticatedRoles.includes("consumer")
+      ) {
+        nextRoute = { role: "consumer", screen: "providerApply" }
+      }
       setRoute(nextRoute)
       const canonicalPath = workspacePath(nextRoute)
       if (window.location.pathname !== canonicalPath) {
@@ -4447,7 +4100,7 @@ function AppShell() {
     window.addEventListener("popstate", syncRoute)
     syncRoute()
     return () => window.removeEventListener("popstate", syncRoute)
-  }, [auth.loading, auth.profile])
+  }, [auth.loading, auth.profile, auth.supplierSignupPending])
 
   useEffect(() => {
     try {
@@ -4480,11 +4133,39 @@ function AppShell() {
     )
   }
 
+  if (auth.recovery) {
+    return (
+      <DemoContext.Provider value={{ store, updateStore }}>
+        <AuthExperience
+          initialRole="consumer"
+          initialStage="recovery"
+          chooseWorkspace={chooseWorkspace}
+          changeWorkspace={goWorkspacePicker}
+        />
+      </DemoContext.Provider>
+    )
+  }
+
+  if (auth.policyConsentRequired) {
+    return (
+      <DemoContext.Provider value={{ store, updateStore }}>
+        <AuthExperience
+          initialRole="consumer"
+          initialStage="policyConsent"
+          chooseWorkspace={chooseWorkspace}
+          changeWorkspace={goWorkspacePicker}
+        />
+      </DemoContext.Provider>
+    )
+  }
+
   const renderScreen = () => {
     switch (screen) {
       case "welcome":
       case "workspace":
         return null
+      case "providerApply":
+        return <ProviderApplicationScreen onComplete={() => navigate("consumer", "home")} />
       case "home":
         return <Home go={go} />
       case "search":
@@ -4574,10 +4255,16 @@ function AppShell() {
   if (screen === "welcome" || screen === "workspace" || screen === "login")
     return (
       <DemoContext.Provider value={{ store, updateStore }}>
-        <Welcome
+        <AuthExperience
           key={`${role}-${screen}`}
           initialRole={screen === "login" ? role : null}
-          initialStage={screen === "login" ? "phone" : "role"}
+          initialStage={
+            screen === "workspace"
+              ? "role"
+              : auth.recovery
+                ? "recovery"
+                : "login"
+          }
           chooseWorkspace={chooseWorkspace}
           changeWorkspace={goWorkspacePicker}
         />
