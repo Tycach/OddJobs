@@ -428,7 +428,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .auth-experience { min-height: 100vh; min-height: 100svh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(440px, .78fr); background: linear-gradient(135deg, #ffae00 0%, #ff6a00 48%, #ed4e00 100%); }
 .auth-art { min-width: 0; min-height: 100vh; min-height: 100svh; display: grid; place-items: center; padding: 24px; background: #fff3e0; }
 .auth-art-frame { position: relative; display: grid; place-items: center; width: min(100%, 760px); max-height: calc(100svh - 48px); overflow: hidden; }
-.auth-art-frame::after { position: absolute; inset: 0; pointer-events: none; content: ""; background: linear-gradient(180deg, transparent 56%, rgba(255,255,255,.24)); }
+.auth-art-frame::after { position: absolute; inset: 0; pointer-events: none; content: ""; background: linear-gradient(180deg, transparent 46%, rgba(255,255,255,.48) 72%, rgba(255,255,255,.68)); }
 .auth-art-frame img { display: block; width: auto; height: auto; max-width: 100%; max-height: calc(100svh - 48px); object-fit: contain; }
 .auth-panel { min-width: 0; min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 0; padding: 38px 34px; }
 .auth-panel-brand { width: min(100%, 500px); padding: 20px 20px 0; border: 1px solid rgba(255,255,255,.82); border-bottom: 0; border-radius: 24px 24px 0 0; background: #fff; text-align: center; }
