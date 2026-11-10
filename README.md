@@ -33,9 +33,17 @@ For Supabase Auth, copy `.env.example` to `.env.local` and set the public
 Supabase URL and `VITE_SUPABASE_PUBLISHABLE_KEY`. Enable the email/password,
 phone/OTP, Google, and Apple providers you intend to offer in Supabase; OAuth
 providers also require their callback URLs and credentials to be configured
-there. In `apps/api/.env`, set the matching `SUPABASE_URL` and
-`SUPABASE_PUBLISHABLE_KEY`. The publishable key is designed for client use;
-never put database passwords or the Supabase secret key in Vite.
+there. The web app returns from Google/Apple OAuth to the site root so that
+workspace-specific login paths do not need separate allowlist entries. Add
+`http://localhost:8443/` to Supabase Auth's Redirect URLs for local development
+and add the deployed web app root URL for production. The OAuth provider must
+also be enabled and configured with valid provider credentials in Supabase.
+Set `VITE_REQUIRE_EMAIL_VERIFICATION=false` for local testing while email
+confirmation remains dormant; flip it back to `true` when the project is ready
+for production email verification. In `apps/api/.env`, set the matching
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. The publishable key is designed
+for client use; never put database passwords or the Supabase secret key in
+Vite.
 
 Password recovery redirects to `/consumer/login` and requires the web app URL
 to be allowed by the Supabase Auth redirect URL settings. Supplier applications

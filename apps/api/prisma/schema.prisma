@@ -44,6 +44,23 @@ enum VerificationStatus {
   @@map("verification_status")
 }
 
+enum ModerationReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+
+  @@map("moderation_report_status")
+}
+
+enum AdCampaignStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("ad_campaign_status")
+}
+
 enum PolicyDocument {
   TERMS
   PRIVACY
@@ -74,22 +91,39 @@ enum QuoteStatus {
 }
 
 model User {
-  id              String                @id @default(uuid()) @db.Uuid
-  displayName     String                @map("display_name") @db.VarChar(120)
-  status          UserStatus            @default(PENDING)
-  identities      AuthIdentity[]
-  roleAssignments UserRoleAssignment[]
-  sessions        Session[]
-  providerProfile ProviderProfile?
-  policyConsents   PolicyConsent[]
-  customerJobs     Job[]                 @relation("CustomerJobs")
-  quotes          Quote[]
-  messages        Message[]
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                String               @id @default(uuid()) @db.Uuid
+  displayName       String               @map("display_name") @db.VarChar(120)
+  status            UserStatus           @default(PENDING)
+  identities        AuthIdentity[]
+  roleAssignments   UserRoleAssignment[]
+  sessions          Session[]
+  providerProfile   ProviderProfile?
+  policyConsents    PolicyConsent[]
+  customerJobs      Job[]                @relation("CustomerJobs")
+  quotes            Quote[]
+  messages          Message[]
+  moderationReports ModerationReport[]
+  enforcementActions AdminUserEnforcement[]
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([status, createdAt])
   @@map("users")
+}
+
+model AdminAuditEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String   @map("actor_user_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  targetType  String?  @map("target_type") @db.VarChar(80)
+  targetId    String?  @map("target_id") @db.VarChar(160)
+  metadata    Json     @default("{}") @db.JsonB
+  requestId   String   @map("request_id") @db.VarChar(80)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt, id])
+  @@index([actorUserId, createdAt])
+  @@map("admin_audit_events")
 }
 
 model PolicyConsent {
@@ -146,35 +180,143 @@ model Session {
 }
 
 model ProviderProfile {
-  id                 String             @id @default(uuid()) @db.Uuid
-  userId             String             @unique @map("user_id") @db.Uuid
-  publicName         String             @map("public_name") @db.VarChar(120)
-  bio                String?            @db.VarChar(2000)
-  region             String?            @db.VarChar(120)
-  verificationStatus VerificationStatus @default(NOT_STARTED) @map("verification_status")
-  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                 String                       @id @default(uuid()) @db.Uuid
+  userId             String                       @unique @map("user_id") @db.Uuid
+  publicName         String                       @map("public_name") @db.VarChar(120)
+  bio                String?                      @db.VarChar(2000)
+  region             String?                      @db.VarChar(120)
+  verificationStatus VerificationStatus           @default(NOT_STARTED) @map("verification_status")
+  createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user               User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviews            ProviderVerificationReview[]
 
   @@index([verificationStatus, region])
   @@map("provider_profiles")
 }
 
+model ProviderVerificationReview {
+  id                String             @id @default(uuid()) @db.Uuid
+  providerProfileId String             @map("provider_profile_id") @db.Uuid
+  actorUserId       String             @map("actor_user_id") @db.Uuid
+  decision          VerificationStatus
+  reason            String?            @db.VarChar(1000)
+  requestId         String             @map("request_id") @db.VarChar(80)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  providerProfile   ProviderProfile    @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+
+  @@index([providerProfileId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("provider_verification_reviews")
+}
+
+model ModerationReport {
+  id               String                 @id @default(uuid()) @db.Uuid
+  reporterUserId   String                 @map("reporter_user_id") @db.Uuid
+  subjectType      String                 @map("subject_type") @db.VarChar(40)
+  subjectId        String                 @map("subject_id") @db.VarChar(160)
+  reason           String                 @db.VarChar(80)
+  details          String                 @db.VarChar(2000)
+  status           ModerationReportStatus @default(OPEN)
+  decisionReason   String?                @map("decision_reason") @db.VarChar(1000)
+  reviewedByUserId String?                @map("reviewed_by_user_id") @db.Uuid
+  reviewedAt       DateTime?              @map("reviewed_at") @db.Timestamptz(3)
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  reporter         User                   @relation(fields: [reporterUserId], references: [id], onDelete: Restrict)
+  enforcement      AdminUserEnforcement?
+
+  @@index([status, createdAt])
+  @@index([subjectType, subjectId, createdAt])
+  @@map("moderation_reports")
+}
+
+model ServiceCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(80)
+  slug      String   @unique @db.VarChar(90)
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([active, sortOrder, name])
+  @@map("service_categories")
+}
+
+model AdminSetting {
+  key       String   @id @db.VarChar(80)
+  value     Json     @db.JsonB
+  updatedBy String   @map("updated_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("admin_settings")
+}
+
+model AdCampaign {
+  id             String           @id @default(uuid()) @db.Uuid
+  advertiserId   String?          @map("advertiser_id") @db.Uuid
+  advertiserName String           @map("advertiser_name") @db.VarChar(120)
+  title          String           @db.VarChar(120)
+  description    String           @db.VarChar(500)
+  placement      String           @db.VarChar(40)
+  destinationUrl String?          @map("destination_url") @db.VarChar(2048)
+  status         AdCampaignStatus @default(PENDING)
+  decisionReason String?          @map("decision_reason") @db.VarChar(1000)
+  reviewedBy     String?          @map("reviewed_by") @db.Uuid
+  reviewedAt     DateTime?        @map("reviewed_at") @db.Timestamptz(3)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@map("ad_campaigns")
+}
+
+model AdminUserEnforcement {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  reportId    String    @unique @map("report_id") @db.Uuid
+  actorUserId String    @map("actor_user_id") @db.Uuid
+  reason      String    @db.VarChar(1000)
+  releasedBy  String?   @map("released_by") @db.Uuid
+  releasedAt  DateTime? @map("released_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  report      ModerationReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([userId, releasedAt])
+  @@map("admin_user_enforcements")
+}
+
+model AdminMonitoringSnapshot {
+  id                     String   @id @default(uuid()) @db.Uuid
+  database               String   @db.VarChar(20)
+  pendingVerifications   Int      @map("pending_verifications")
+  openReports            Int      @map("open_reports")
+  heapUsedBytes          BigInt   @map("heap_used_bytes")
+  heapLimitBytes         BigInt   @map("heap_limit_bytes")
+  alerts                 Json     @default("[]") @db.JsonB
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("admin_monitoring_snapshots")
+}
+
 model Job {
-  id            String      @id @default(uuid()) @db.Uuid
-  customerId    String      @map("customer_id") @db.Uuid
-  title         String      @db.VarChar(160)
-  description   String      @db.VarChar(5000)
-  category      String      @db.VarChar(80)
-  locationLabel String      @map("location_label") @db.VarChar(160)
+  id            String    @id @default(uuid()) @db.Uuid
+  customerId    String    @map("customer_id") @db.Uuid
+  title         String    @db.VarChar(160)
+  description   String    @db.VarChar(5000)
+  category      String    @db.VarChar(80)
+  locationLabel String    @map("location_label") @db.VarChar(160)
   /// Integer minor currency units; the provider adapter converts to rail units.
-  budgetMinor   BigInt?     @map("budget_minor")
-  currency      String      @default("KES") @db.Char(3)
-  status        JobStatus   @default(OPEN)
-  requestedFor  DateTime?   @map("requested_for") @db.Timestamptz(3)
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  customer      User        @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Restrict)
+  budgetMinor   BigInt?   @map("budget_minor")
+  currency      String    @default("KES") @db.Char(3)
+  status        JobStatus @default(OPEN)
+  requestedFor  DateTime? @map("requested_for") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  customer      User      @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Restrict)
   quotes        Quote[]
   messages      Message[]
 

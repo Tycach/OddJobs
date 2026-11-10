@@ -38,6 +38,7 @@ export type Screen =
   | "analytics"
   | "ads"
   | "overview"
+  | "monitoring"
   | "users"
   | "verification"
   | "categories"

@@ -19,6 +19,7 @@ export async function startServer(): Promise<void> {
     database,
     authVerifier,
     profileStore: database,
+    adminStore: database,
   })
 
   try {

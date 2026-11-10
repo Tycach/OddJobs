@@ -1,5 +1,19 @@
 import { createContext, useContext, useEffect, useState } from "react"
-import { AuthProvider, useAuth } from "./auth/AuthProvider"
+import {
+  AuthProvider,
+  useAuth,
+  type AdminAdCampaign,
+  type AdminAuditEvent,
+  type AdminCategory,
+  type AdminModerationReport,
+  type AdminModerationStatus,
+  type AdminMonitoringSnapshot,
+  type AdminOverview as AdminOverviewData,
+  type AdminSystemSettings,
+  type AdminUserSummary,
+  type AdminVerificationStatus,
+  type AdminVerificationSummary,
+} from "./auth/AuthProvider"
 import AuthExperience from "./auth/AuthExperience"
 import ProviderApplicationScreen from "./auth/ProviderApplicationScreen"
 import {
@@ -41,6 +55,14 @@ const roleHomes: Record<Role, Screen> = {
   admin: "overview",
   support: "disputes",
   partner: "programmes",
+}
+
+const workspaceLabels: Record<Role, string> = {
+  consumer: "Hire someone",
+  provider: "Offer services",
+  admin: "Admin workspace",
+  support: "Support workspace",
+  partner: "Partner workspace",
 }
 
 const roleScreens: Record<Role, readonly Screen[]> = {
@@ -133,6 +155,13 @@ function getWorkspaceRoute(pathname: string): WorkspaceRoute {
   return { role, screen: screen ?? roleHomes[role] }
 }
 
+function normalizeKenyanPhoneInput(value: string) {
+  let digits = value.replace(/\D/g, "")
+  if (digits.startsWith("254")) digits = digits.slice(3)
+  if (digits.startsWith("0")) digits = digits.slice(1)
+  return digits.slice(0, 9)
+}
+
 function getAuthenticatedRoute(
   pathname: string,
   authenticatedRoles: Role[],
@@ -199,6 +228,7 @@ const navigation: Record<Role, {
   ],
   admin: [
     { label: "Overview", icon: "grid", screen: "overview" },
+    { label: "Monitoring", icon: "chart", screen: "monitoring" },
     { label: "Users & roles", icon: "users", screen: "users" },
     { label: "Verification", icon: "shield", screen: "verification" },
     { label: "Categories & fees", icon: "settings", screen: "categories" },
@@ -494,6 +524,348 @@ function Sponsored() {
         <span>Jumia Home · Nairobi</span>
       </div>
       <Icon name="arrow" size={18} />
+    </div>
+  )
+}
+
+function Welcome({
+  initialRole = null,
+  initialStage = "role",
+  chooseWorkspace,
+  changeWorkspace,
+}: {
+  initialRole?: Role | null
+  initialStage?: "phone" | "role"
+  chooseWorkspace: (role: Role) => void
+  changeWorkspace: () => void
+}) {
+  const { store, updateStore } = useDemoStore()
+  const { configured, requestOtp, verifyOtp, resendOtp } = useAuth()
+  const [stage, setStage] = useState<"phone" | "otp" | "role">(initialStage)
+  const [selectedRole] = useState<Role | null>(initialRole)
+  const [authMode, setAuthMode] = useState<"phone" | "email">("phone")
+  const [phone, setPhone] = useState("")
+  const [email, setEmail] = useState("")
+  const [otp, setOtp] = useState("")
+  const [authError, setAuthError] = useState("")
+  const [authBusy, setAuthBusy] = useState(false)
+  const [adIndex, setAdIndex] = useState(0)
+  const authIdentifier =
+    authMode === "phone" ? `+254${phone}` : email.trim().toLowerCase()
+  const ads = [
+    ["Safaricom Home Fibre", "Stay connected from KES 2,999"],
+    ["Jumia Home", "20% off cleaning supplies"],
+    ["M-KOPA Solar", "Flexible pay-as-you-go energy"],
+  ]
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setAdIndex((index) => (index + 1) % ads.length),
+      5000,
+    )
+    return () => window.clearInterval(timer)
+  }, [])
+  return (
+    <div className="auth-shell">
+      <header className="auth-nav">
+        <div className="brand">
+          <span>O</span>
+          <strong>
+            OddJobs<em>.com</em>
+          </strong>
+        </div>
+        <button
+          className="lang"
+          onClick={() =>
+            updateStore({ language: store.language === "EN" ? "SW" : "EN" })
+          }
+        >
+          {store.language}{" "}
+          <span>/ {store.language === "EN" ? "SW" : "EN"}</span>
+        </button>
+      </header>
+      <main className="auth-main">
+        <section className="auth-story">
+          <Badge>Trusted across Nairobi</Badge>
+          <h1>
+            Good work.
+            <br />
+            Good people.
+            <br />
+            <em>Done safely.</em>
+          </h1>
+          <p>
+            Hire vetted local professionals, pay securely with M-Pesa, and
+            release payment only when the job is done.
+          </p>
+          <div className="auth-trust">
+            <span>
+              <Icon name="shield" />
+              <b>Verified providers</b>
+            </span>
+            <span>
+              <Icon name="wallet" />
+              <b>M-Pesa escrow</b>
+            </span>
+            <span>
+              <Icon name="star" />
+              <b>Real reviews</b>
+            </span>
+          </div>
+          <div className="auth-image">
+            <img
+              src={photos.amina}
+              alt="A trusted OddJobs service professional"
+            />
+            <div>
+              <span className="rating">★★★★★</span>
+              <strong>“Reliable help, right when I needed it.”</strong>
+              <small>Wanjiku · Kilimani</small>
+            </div>
+          </div>
+        </section>
+        <section className="auth-card">
+          {stage === "phone" && (
+            <>
+              {selectedRole && (
+                <>
+                  <button className="back-link" onClick={changeWorkspace}>
+                    ← Change workspace
+                  </button>
+                  <div>
+                    <div className="eyebrow">
+                      {selectedRole === "admin" || selectedRole === "support"
+                        ? "Restricted workspace"
+                        : "Workspace sign in"}
+                    </div>
+                    <h2>Sign in to {workspaceLabels[selectedRole]}</h2>
+                    <p>
+                      Use your phone number or email to continue to your
+                      workspace.
+                    </p>
+                  </div>
+                  {(selectedRole === "admin" || selectedRole === "support") && (
+                    <DemoNotice>
+                      This workspace is provisioned by an OddJobs
+                      administrator. Access is checked after sign-in.
+                    </DemoNotice>
+                  )}
+                </>
+              )}
+              {!selectedRole && (
+                <div>
+                  <div className="eyebrow">Welcome to OddJobs</div>
+                  <h2>Let’s get you started</h2>
+                  <p>
+                    Enter your phone number to sign in or create an account.
+                  </p>
+                </div>
+              )}
+              {authMode === "phone" ? (
+                <label>
+                  Phone number
+                  <div className="phone-input">
+                    <span>+254</span>
+                    <input
+                      value={phone}
+                      onChange={(event) =>
+                        setPhone(normalizeKenyanPhoneInput(event.target.value))
+                      }
+                      placeholder="712 345 678"
+                      autoFocus
+                    />
+                  </div>
+                </label>
+              ) : (
+                <label>
+                  Email address
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                  />
+                </label>
+              )}
+              <small className="center-note">
+                Sign in with a one-time code sent to your {authMode}.
+              </small>
+              <Button
+                disabled={authBusy}
+                onClick={async () => {
+                  if (authMode === "phone" && !/^[17]\d{8}$/.test(phone)) {
+                    setAuthError("Enter a valid Kenyan mobile number, with or without the leading 0.")
+                    return
+                  }
+                  if (
+                    authMode === "email" &&
+                    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+                  ) {
+                    setAuthError("Enter a valid email address.")
+                    return
+                  }
+                  setAuthError("")
+                  setAuthBusy(true)
+                  const error = await requestOtp(authMode, authIdentifier)
+                  setAuthBusy(false)
+                  if (error) {
+                    setAuthError(error)
+                    return
+                  }
+                  setOtp("")
+                  setStage("otp")
+                }}
+              >
+                {authBusy ? "Sending code…" : `Continue with ${authMode}`}
+              </Button>
+              <div className="or">
+                <span>or</span>
+              </div>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setAuthMode(authMode === "phone" ? "email" : "phone")
+                  setAuthError("")
+                }}
+              >
+                Use {authMode === "phone" ? "email" : "phone"} instead
+              </Button>
+              {authError && (
+                <p className="form-error" role="alert">
+                  {authError}
+                </p>
+              )}
+              <small className="terms">
+                By continuing, you agree to our Terms and Privacy Policy.
+              </small>
+            </>
+          )}
+          {stage === "otp" && (
+            <>
+              <button className="back-link" onClick={() => setStage("phone")}>
+                ← Back
+              </button>
+              <div>
+                <div className="eyebrow">Verify your {authMode}</div>
+                <h2>Enter your verification code</h2>
+                <p>
+                  Code sent to {authIdentifier}.
+                </p>
+              </div>
+              <label>
+                Verification code
+                <input
+                  inputMode="numeric"
+                  value={otp}
+                  maxLength={6}
+                  onChange={(event) =>
+                    setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  placeholder="Verification code"
+                />
+              </label>
+              <Button
+                disabled={authBusy || !otp}
+                onClick={async () => {
+                  setAuthError("")
+                  setAuthBusy(true)
+                  const error = await verifyOtp(authMode, authIdentifier, otp)
+                  setAuthBusy(false)
+                  if (error) setAuthError(error)
+                }}
+              >
+                {authBusy ? "Verifying…" : "Verify and sign in"}
+              </Button>
+              {authError && (
+                <p className="form-error" role="alert">
+                  {authError}
+                </p>
+              )}
+              <button
+                className="text-link"
+                onClick={async () => {
+                  setAuthError("")
+                  setAuthBusy(true)
+                  const error = await resendOtp(authMode, authIdentifier)
+                  setAuthBusy(false)
+                  setAuthError(error ?? "A new code was sent.")
+                }}
+              >
+                Resend code
+              </button>
+            </>
+          )}
+          {stage === "role" && (
+            <>
+              <div>
+                <div className="eyebrow">Choose a workspace</div>
+                <h2>How do you want to use OddJobs?</h2>
+                <p>Choose a workspace, then sign in to continue.</p>
+              </div>
+              {([
+                [
+                  "consumer",
+                  "Hire someone",
+                  "Find trusted help for home and work",
+                  "search",
+                ],
+                [
+                  "provider",
+                  "Offer services",
+                  "Find jobs and grow your income",
+                  "briefcase",
+                ],
+                [
+                  "partner",
+                  "Partner workspace",
+                  "Manage programmes and impact",
+                  "chart",
+                ],
+              ] as const).map(([role, title, description, icon]) => (
+                <button
+                  key={role}
+                  className="role-choice"
+                  onClick={() => chooseWorkspace(role)}
+                >
+                  <span>
+                    <Icon name={icon} />
+                  </span>
+                  <div>
+                    <strong>{title}</strong>
+                    <small>{description}</small>
+                  </div>
+                  <Icon name="chevron" />
+                </button>
+              ))}
+              <p className="workspace-access-note">
+                Provider access requires an approved provider profile. Admin,
+                Support, and Partner workspaces are provisioned by OddJobs.
+              </p>
+              {!configured && (
+                <DemoNotice>
+                  Supabase Auth configuration is required before you can sign in.
+                </DemoNotice>
+              )}
+            </>
+          )}
+          {!store.reduceAds && (
+            <div className="auth-ad" aria-live="polite">
+              <Badge tone="amber">Sponsored</Badge>
+              <span>
+                <b>{ads[adIndex][0]}</b>
+                <small>{ads[adIndex][1]}</small>
+              </span>
+              <span className="ad-dots">
+                {ads.map((_, index) => (
+                  <i
+                    key={index}
+                    className={index === adIndex ? "active" : ""}
+                  />
+                ))}
+              </span>
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   )
 }
@@ -2687,6 +3059,87 @@ function Training() {
   )
 }
 
+function AdminMonitoring() {
+  const { getAdminMonitoring, getAdminMonitoringHistory } = useAuth()
+  const [snapshot, setSnapshot] = useState<AdminMonitoringSnapshot | null>(null)
+  const [history, setHistory] = useState<AdminMonitoringSnapshot[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void Promise.all([
+      getAdminMonitoring(),
+      getAdminMonitoringHistory(50),
+    ])
+      .then(([current, previous]) => {
+        setSnapshot(current)
+        setHistory(previous)
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load monitoring data."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminMonitoring, getAdminMonitoringHistory])
+  return (
+    <div className="content console-content">
+      <PageHeader
+        title="System monitoring"
+        description="API, database, and moderation/verification queue signals."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
+      />
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {loading ? <p role="status">Checking service health…</p> : snapshot && (
+        <>
+          <div className="metrics">
+            <Metric label="Database" value={snapshot.database === "ok" ? "Connected" : "Unavailable"} />
+            <Metric label="API uptime" value={`${Math.floor(snapshot.uptimeSeconds / 60)} min`} />
+            <Metric label="Pending verifications" value={snapshot.pendingVerifications.toLocaleString()} />
+            <Metric label="Open reports" value={snapshot.openReports.toLocaleString()} />
+            <Metric label="Heap usage" value={`${Math.round(snapshot.heapUsedBytes / snapshot.heapLimitBytes * 100)}%`} />
+          </div>
+          <section className="card">
+            <div className="section-title">
+              <h2>Current alerts</h2>
+              <span>Checked {new Date(snapshot.checkedAt).toLocaleString()}</span>
+            </div>
+            {snapshot.alerts.length ? snapshot.alerts.map((alert) => (
+              <p className="form-error" role="status" key={alert.code}>
+                {alert.severity.toUpperCase()}: {alert.message}
+              </p>
+            )) : <p>No alerts from the current checks.</p>}
+          </section>
+          <section className="card">
+            <h2>Recent recorded checks</h2>
+            {history.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Checked</th><th>Database</th><th>Pending verifications</th><th>Open reports</th><th>Alerts</th></tr></thead>
+                  <tbody>{history.map((item) => (
+                    <tr key={item.checkedAt}>
+                      <td>{new Date(item.checkedAt).toLocaleString()}</td>
+                      <td>{item.database}</td>
+                      <td>{item.pendingVerifications}</td>
+                      <td>{item.openReports}</td>
+                      <td>{item.alerts.length}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            ) : <p>No monitoring snapshots recorded yet.</p>}
+          </section>
+          <DemoNotice>
+            Snapshots are recorded when an admin requests a health check and
+            retain up to 1,000 records. No continuous collector or external
+            notification delivery is configured.
+          </DemoNotice>
+        </>
+      )}
+    </div>
+  )
+}
+
 function Plans() {
   const [plan, setPlan] = useState("Basic")
   return (
@@ -2878,126 +3331,117 @@ function DataTable({ headers, rows }: DataTableProps) {
 }
 
 function Overview() {
+  const { getAdminOverview } = useAuth()
+  const [overview, setOverview] = useState<AdminOverviewData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const loadOverview = () => {
+    setLoading(true)
+    setError("")
+    void getAdminOverview()
+      .then(setOverview)
+      .catch((caught: unknown) =>
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Could not load admin overview.",
+        ),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => loadOverview(), [getAdminOverview])
+
   return (
     <div className="content console-content">
       <PageHeader
         eyebrow="Live marketplace"
         title="Marketplace overview"
-        description="Tuesday, 24 June 2025"
-        action={<Button variant="secondary">Export report</Button>}
+        description="Current marketplace counts from the OddJobs API."
+        action={
+          <Button variant="secondary" onClick={loadOverview}>
+            Refresh
+          </Button>
+        }
       />
-      <div className="metrics six">
-        <Metric
-          label="Gross marketplace value"
-          value="KES 24.8M"
-          delta="+14.2%"
-        />
-        <Metric label="Net take rate" value="10.4%" delta="+0.6 pts" />
-        <Metric label="Active providers" value="8,421" delta="+8.1%" />
-        <Metric label="Job fill rate" value="82.6%" delta="+3.4 pts" />
-        <Metric label="Avg. rating" value="4.72" />
-        <Metric label="Open disputes" value="28" delta="0.8% of jobs" />
-      </div>
-      <div className="analytics-grid">
-        <section className="card chart-card">
-          <div className="section-title">
-            <div>
-              <h2>Jobs and GMV</h2>
-              <span>Last 30 days</span>
-            </div>
-            <Badge>+14.2%</Badge>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {loading ? (
+        <p role="status">Loading marketplace counts…</p>
+      ) : overview ? (
+        <>
+          <div className="metrics six">
+            <Metric label="Total users" value={overview.totalUsers.toLocaleString()} />
+            <Metric label="Active providers" value={overview.activeProviders.toLocaleString()} />
+            <Metric label="Pending verifications" value={overview.pendingVerifications.toLocaleString()} />
+            <Metric label="Open jobs" value={overview.openJobs.toLocaleString()} />
+            <Metric label="Completed jobs" value={overview.completedJobs.toLocaleString()} />
+            <Metric label="Disputed jobs" value={overview.disputedJobs.toLocaleString()} />
           </div>
-          <div className="bar-chart">
-            {[42, 56, 48, 70, 64, 78, 73, 86, 92, 81, 96, 88].map((v, i) => (
-              <i key={i} style={{ height: `${v}%` }} />
-            ))}
-          </div>
-          <div className="chart-labels">
-            <span>1 Jun</span>
-            <span>8 Jun</span>
-            <span>15 Jun</span>
-            <span>24 Jun</span>
-          </div>
-        </section>
-        <section className="card">
-          <h2>Supply vs demand</h2>
-          <div className="heatmap">
-            {["Cleaning", "Plumbing", "Electrical", "Care", "Tutoring"].map(
-              (x, i) => (
-                <div key={x}>
-                  <span>{x}</span>
-                  <i className={`heat heat-${i}`} />
-                  <b>{[1.4, 2.8, 3.2, 0.8, 1.9][i]}×</b>
-                </div>
-              ),
-            )}
-          </div>
-          <p className="caption">Demand ratio by active provider · Nairobi</p>
-        </section>
-      </div>
-      <section className="card">
-        <div className="section-title">
-          <h2>Marketplace attention</h2>
-          <button>View all</button>
-        </div>
-        <DataTable
-          headers={["Item", "Area", "Priority", "Owner", "Status"]}
-          rows={[
-            ["Provider demand gap", "Embakasi", "High", "Supply ops", "Open"],
-            [
-              "Verification backlog",
-              "Nairobi",
-              "Medium",
-              "Trust team",
-              "Pending",
-            ],
-            ["Payment success rate", "M-Pesa", "Normal", "Finance", "Resolved"],
-          ]}
-        />
-      </section>
+          <DemoNotice>
+            Counts reflect tables supported by the current API. Revenue,
+            transaction rates, ratings, and historical trends are not available.
+          </DemoNotice>
+        </>
+      ) : null}
     </div>
   )
 }
 
 function Users() {
-  const { store, updateStore } = useDemoStore()
+  const { getAdminUsers, reinstateAdminUser } = useAuth()
   const [query, setQuery] = useState("")
-  const [role, setRole] = useState("All")
-  const [status, setStatus] = useState("All")
-  const users = [
-    ["Wanjiku Mwangi", "Customer", "Kilimani", "14", "Active"],
-    ["Brian Otieno", "Provider", "Westlands", "228", "Active"],
-    ["Amina Hassan", "Provider", "Eastleigh", "214", "Active"],
-    ["John Kariuki", "Provider", "Thika", "31", "Pending review"],
-    ["Mary Njeri", "Moderator", "Nairobi", "—", "Active"],
-  ]
-  const filtered = users.filter(
-    (row) =>
-      row.join(" ").toLowerCase().includes(query.toLowerCase()) &&
-      (role === "All" || row[1] === role) &&
-      (status === "All" || row[4] === status),
+  const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState<{ items: AdminUserSummary[]; total: number }>({
+    items: [],
+    total: 0,
+  })
+  const [loading, setLoading] = useState(true)
+  const [savingUserId, setSavingUserId] = useState("")
+  const [error, setError] = useState("")
+  const pageSize = 25
+  const loadUsers = () => {
+    setLoading(true)
+    setError("")
+    void getAdminUsers(pageSize, offset)
+      .then(setPage)
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load users."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => loadUsers(), [getAdminUsers, offset])
+  const filtered = page.items.filter((user) =>
+    `${user.displayName} ${user.id} ${user.roles.join(" ")} ${user.status}`
+      .toLowerCase()
+      .includes(query.toLowerCase()),
   )
+
+  const reinstate = async (userId: string) => {
+    setSavingUserId(userId)
+    setError("")
+    try {
+      await reinstateAdminUser(userId)
+      setPage((current) => ({
+        ...current,
+        items: current.items.map((user) =>
+          user.id === userId ? { ...user, status: "active" } : user,
+        ),
+      }))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not reinstate account.")
+    } finally {
+      setSavingUserId("")
+    }
+  }
+
   return (
     <div className="content console-content">
       <PageHeader
         title="Users & roles"
-        description="Sample user directory · permission matrix and audit are demo-only"
-        action={
-          <Button
-            icon="plus"
-            onClick={() =>
-              updateStore({
-                adminActions: [
-                  "Invite user opened in demo",
-                  ...store.adminActions,
-                ],
-              })
-            }
-          >
-            Invite user
-          </Button>
-        }
+        description="Paginated user directory; contact details are not exposed."
+        action={<Button variant="secondary" onClick={loadUsers}>Refresh</Button>}
       />
+      {error && <p className="form-error" role="alert">{error}</p>}
       <div className="admin-toolbar">
         <div className="search-box active">
           <Icon name="search" />
@@ -3005,397 +3449,549 @@ function Users() {
             aria-label="Search users"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search name, phone or ID"
+            placeholder="Search this page by name, ID, role, or status"
           />
-        </div>
-        <div className="filters">
-          <select
-            aria-label="Filter by role"
-            value={role}
-            onChange={(event) => setRole(event.target.value)}
-          >
-            {["All", "Customer", "Provider", "Moderator"].map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-          <select
-            aria-label="Filter by status"
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-          >
-            {["All", "Active", "Pending review"].map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
         </div>
       </div>
       <section className="card table-card">
-        <DataTable
-          headers={["User", "Role", "Location", "Jobs", "Status"]}
-          rows={filtered}
-        />
-        {!filtered.length && (
+        {loading ? <p role="status">Loading users…</p> : filtered.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>User</th><th>ID</th><th>Roles</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+              <tbody>{filtered.map((user) => (
+                <tr key={user.id}>
+                  <td>{user.displayName}</td>
+                  <td>{user.id}</td>
+                  <td>{user.roles.join(", ") || "—"}</td>
+                  <td>{user.status}</td>
+                  <td>{new Date(user.createdAt).toLocaleDateString()}</td>
+                  <td>{user.status === "suspended" && !user.roles.includes("admin") ? (
+                    <Button variant="secondary" disabled={savingUserId === user.id} onClick={() => void reinstate(user.id)}>
+                      {savingUserId === user.id ? "Restoring…" : "Reinstate"}
+                    </Button>
+                  ) : "—"}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : !error ? (
           <EmptyState
-            title="No matching users"
-            detail="Change the search or role/status filters."
-            action={() => {
-              setQuery("")
-              setRole("All")
-              setStatus("All")
-            }}
-            actionLabel="Clear filters"
+            title={page.total ? "No users match this search" : "No users yet"}
+            detail="Search applies to the current page; use pagination to browse more users."
           />
-        )}
+        ) : null}
         <div className="card-actions">
-          <Button
-            variant="secondary"
-            onClick={() =>
-              updateStore({
-                adminActions: [
-                  `Bulk action applied to ${filtered.length} sample users`,
-                  ...store.adminActions,
-                ],
-              })
-            }
-          >
-            Bulk action on filtered demo users
+          <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>
+            Previous
           </Button>
-          <Button
-            variant="secondary"
-            onClick={() =>
-              updateStore({
-                adminActions: [
-                  "Permission matrix viewed",
-                  ...store.adminActions,
-                ],
-              })
-            }
-          >
-            View permission matrix
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() =>
-              updateStore({
-                adminActions: [
-                  "User list export simulated",
-                  ...store.adminActions,
-                ],
-              })
-            }
-          >
-            Export demo list
+          <span>{page.total ? `${offset + 1}–${Math.min(offset + page.items.length, page.total)} of ${page.total}` : "0 users"}</span>
+          <Button variant="secondary" disabled={loading || offset + pageSize >= page.total} onClick={() => setOffset((value) => value + pageSize)}>
+            Next
           </Button>
         </div>
       </section>
+      <DemoNotice>
+        Suspended accounts can only be reinstated when there is an active,
+        admin-issued suspension record. Search is limited to the currently
+        loaded page.
+      </DemoNotice>
     </div>
   )
 }
 
 function Verification() {
-  const { store, updateStore } = useDemoStore()
-  const [status, setStatus] = useState("Review needed")
+  const { getAdminVerifications, decideAdminVerification } = useAuth()
+  const [status, setStatus] = useState<AdminVerificationStatus>("in_review")
+  const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState<{
+    items: AdminVerificationSummary[]
+    total: number
+  }>({ items: [], total: 0 })
+  const [selected, setSelected] = useState<AdminVerificationSummary | null>(null)
   const [reason, setReason] = useState("")
-  const [selected, setSelected] = useState("John Kariuki · Electrician")
-  const decide = (next: string) => {
-    if (next === "Rejected" && !reason.trim()) {
-      setStatus("Add a rejection reason first.")
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const pageSize = 25
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void getAdminVerifications(status, pageSize, offset)
+      .then((result) => {
+        setPage(result)
+        setSelected((current) =>
+          result.items.find((item) => item.id === current?.id) ??
+          result.items[0] ??
+          null,
+        )
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load verification queue."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminVerifications, status, offset])
+
+  const decide = async (decision: "verified" | "rejected") => {
+    if (!selected) return
+    if (decision === "rejected" && !reason.trim()) {
+      setError("Enter a reason before rejecting verification.")
       return
     }
-    setStatus(next)
-    updateStore({
-      verificationStatus:
-        next === "Approved & certified" ? "Certified" : "In review",
-      adminActions: [
-        `${selected}: ${next}${reason ? ` — ${reason}` : ""}`,
-        ...store.adminActions,
-      ],
-    })
+    setSaving(true)
+    setError("")
+    try {
+      const updated = await decideAdminVerification(selected.id, decision, reason.trim())
+      setPage((current) => ({
+        ...current,
+        items: current.items.map((item) => item.id === updated.id ? updated : item),
+      }))
+      setSelected(updated)
+      setReason("")
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save verification decision.")
+    } finally {
+      setSaving(false)
+    }
   }
   return (
     <div className="content console-content">
       <PageHeader
         title="Verification queue"
-        description="Sample identity evidence only—no real documents are shown."
-        action={
-          <Button
-            variant="secondary"
-            onClick={() => decide("Bulk certification simulated")}
-          >
-            Bulk certify sample
-          </Button>
-        }
+        description="Provider profiles awaiting or completing review."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
-      <DemoNotice>
-        Do not upload or treat personal identity information in this demo as
-        real.
-      </DemoNotice>
-      <div className="split-console">
-        <section className="queue-list">
-          {[
-            "John Kariuki · Electrician",
-            "Halima Noor · Cleaner",
-            "Kevin Ouma · Plumber",
-            "Faith Njeri · Caregiver",
-          ].map((x, i) => (
-            <button
-              className={selected === x ? "active" : ""}
-              key={x}
-              onClick={() => {
-                setSelected(x)
-                setStatus("Review needed")
-              }}
-            >
-              <Avatar src={i % 2 ? photos.amina : photos.otieno} name={x} />
-              <span>
-                <strong>{x}</strong>
-                <small>Submitted {i + 1}h ago</small>
-              </span>
-              <Icon name="chevron" size={16} />
-            </button>
-          ))}
-        </section>
-        <section className="card document-view">
-          <div className="section-title">
-            <div>
-              <Badge tone="amber">{status}</Badge>
-              <h2>{selected.split(" · ")[0]}</h2>
-            </div>
-            <span>Demo application</span>
-          </div>
-          <div className="id-document">
-            <Icon name="layout" size={36} />
-            <span>Placeholder identity document</span>
-            <strong>Sample data only · not an ID scan</strong>
-          </div>
-          <div className="detail-grid">
-            <span>
-              <small>ID number</small>
-              <b>•••••• 204 · sample</b>
-            </span>
-            <span>
-              <small>Category</small>
-              <b>{selected.split(" · ")[1]}</b>
-            </span>
-            <span>
-              <small>Skills evidence</small>
-              <b>Sample pending</b>
-            </span>
-            <span>
-              <small>Duplicate check</small>
-              <b>Not connected</b>
-            </span>
-          </div>
-          <label>
-            Decision notes / rejection reason
-            <textarea
-              rows={3}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="Enter a reason for rejection…"
-            />
-          </label>
-          <div className="card-actions">
-            <Button onClick={() => decide("Approved & certified")}>
-              Approve & certify demo
-            </Button>
-            <Button variant="danger" onClick={() => decide("Rejected")}>
-              Reject with reason
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => decide("Certification revoked")}
-            >
-              Revoke demo
-            </Button>
-          </div>
-        </section>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="filters">
+        <label>
+          Status
+          <select value={status} onChange={(event) => {
+            setStatus(event.target.value as AdminVerificationStatus)
+            setOffset(0)
+          }}>
+            <option value="in_review">In review</option>
+            <option value="not_started">Not started</option>
+            <option value="verified">Verified</option>
+            <option value="rejected">Rejected</option>
+            <option value="all">All</option>
+          </select>
+        </label>
       </div>
+      <section className="card table-card">
+        {loading ? <p role="status">Loading verification records…</p> : page.items.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Applicant</th><th>Provider name</th><th>Region</th><th>Status</th><th>Submitted</th><th>Review</th></tr></thead>
+              <tbody>{page.items.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.displayName}</td>
+                  <td>{item.publicName}</td>
+                  <td>{item.region || "—"}</td>
+                  <td>{item.status.replace(/_/g, " ")}</td>
+                  <td>{new Date(item.submittedAt).toLocaleString()}</td>
+                  <td><Button variant="secondary" onClick={() => {
+                    setSelected(item)
+                    setReason("")
+                  }}>Review</Button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : !error ? <EmptyState title="No verification records" detail="No profiles match this status." /> : null}
+        {selected?.status === "in_review" && (
+          <div className="card-actions">
+            <label>
+              Decision note (required to reject)
+              <input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
+            </label>
+            <Button disabled={saving} onClick={() => void decide("verified")}>{saving ? "Saving…" : "Approve status"}</Button>
+            <Button variant="danger" disabled={saving || !reason.trim()} onClick={() => void decide("rejected")}>Reject</Button>
+          </div>
+        )}
+        <div className="card-actions">
+          <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button>
+          <span>{page.total ? `${offset + 1}–${Math.min(offset + page.items.length, page.total)} of ${page.total}` : "0 records"}</span>
+          <Button variant="secondary" disabled={loading || offset + pageSize >= page.total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button>
+        </div>
+      </section>
+      <DemoNotice>
+        Decisions update provider profile status only; they do not grant the
+        provider role. Identity-document evidence is not stored or reviewed.
+      </DemoNotice>
     </div>
   )
 }
 
 function Moderation() {
-  const { store, updateStore } = useDemoStore()
-  const [message, setMessage] = useState("")
-  const reports = [
-    ["Harassment in chat", "Job #OJ-2801", "Critical", "8 min ago", "SLA 22m"],
-    [
-      "Misleading portfolio",
-      "Provider #P-1882",
-      "High",
-      "31 min ago",
-      "Pending",
-    ],
-    ["Off-platform payment", "Job #OJ-2744", "High", "2h ago", "Pending"],
-    ["Spam message", "User #U-9931", "Low", "4h ago", "Resolved"],
-  ]
-  const action = (label: string) => {
-    updateStore({ adminActions: [label, ...store.adminActions] })
-    setMessage(`${label} recorded in the demo audit trail.`)
+  const { getAdminModerationReports, decideAdminModerationReport } = useAuth()
+  const [status, setStatus] = useState<AdminModerationStatus>("open")
+  const [offset, setOffset] = useState(0)
+  const [reports, setReports] = useState<AdminModerationReport[]>([])
+  const [total, setTotal] = useState(0)
+  const [selected, setSelected] = useState<AdminModerationReport | null>(null)
+  const [reason, setReason] = useState("")
+  const [enforcement, setEnforcement] = useState<"none" | "suspend_account">("none")
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const pageSize = 25
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void getAdminModerationReports(status, pageSize, offset)
+      .then((page) => {
+        setReports(page.items)
+        setTotal(page.total)
+        setSelected((current) =>
+          page.items.find((item) => item.id === current?.id) ??
+          page.items[0] ??
+          null,
+        )
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load reports."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminModerationReports, status, offset])
+
+  const decide = async (decision: "reviewing" | "resolved" | "dismissed") => {
+    if (!selected) return
+    if (decision === "dismissed" && !reason.trim()) {
+      setError("Enter a reason before dismissing this report.")
+      return
+    }
+    if (decision === "resolved" && enforcement !== "none" && !reason.trim()) {
+      setError("Enter a reason before suspending an account.")
+      return
+    }
+    setSaving(true)
+    setError("")
+    try {
+      const result = await decideAdminModerationReport(
+        selected.id,
+        decision,
+        decision === "resolved" ? enforcement : "none",
+        reason.trim(),
+      )
+      setReports((items) => items.map((item) =>
+        item.id === result.id ? { ...item, status: result.status } : item,
+      ))
+      setSelected((item) => item ? { ...item, status: result.status } : item)
+      setReason("")
+      setEnforcement("none")
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save report decision.")
+    } finally {
+      setSaving(false)
+    }
   }
   return (
     <div className="content console-content">
       <PageHeader
         title="Reports & moderation"
-        description="Demo priority queue and simulated actions"
+        description="Review user-submitted reports and record moderation outcomes."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
-      <DemoNotice>
-        Actions below update only local demo state; no account or content is
-        changed on a service.
-      </DemoNotice>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <label>
+        Report status
+        <select value={status} onChange={(event) => {
+          setStatus(event.target.value as AdminModerationStatus)
+          setOffset(0)
+        }}>
+          <option value="open">Open</option>
+          <option value="reviewing">Reviewing</option>
+          <option value="resolved">Resolved</option>
+          <option value="dismissed">Dismissed</option>
+          <option value="all">All</option>
+        </select>
+      </label>
       <section className="card">
+        {loading ? <p role="status">Loading reports…</p> : reports.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Reason</th><th>Subject</th><th>Details</th><th>Status</th><th>Reported</th><th>Review</th></tr></thead>
+              <tbody>{reports.map((report) => (
+                <tr key={report.id}>
+                  <td>{report.reason.replace(/_/g, " ")}</td>
+                  <td>{report.subjectType} · {report.subjectId}</td>
+                  <td>{report.details}</td>
+                  <td>{report.status}</td>
+                  <td>{new Date(report.createdAt).toLocaleString()}</td>
+                  <td><Button variant="secondary" onClick={() => {
+                    setSelected(report)
+                    setReason("")
+                    setEnforcement("none")
+                  }}>Review</Button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : !error ? <EmptyState title="No reports" detail="No reports match this status." /> : null}
+        {selected && ["open", "reviewing"].includes(selected.status) && (
+          <div className="card-actions">
+            <label>
+              Review note (required for dismissal or suspension)
+              <input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
+            </label>
+            {selected.subjectType === "account" && (
+              <label>
+                Account action
+                <select value={enforcement} onChange={(event) =>
+                  setEnforcement(event.target.value as "none" | "suspend_account")
+                }>
+                  <option value="none">No account action</option>
+                  <option value="suspend_account">Suspend account</option>
+                </select>
+              </label>
+            )}
+            <Button disabled={saving} onClick={() => void decide("reviewing")}>Mark reviewing</Button>
+            <Button disabled={saving || (enforcement === "suspend_account" && !reason.trim())} onClick={() => void decide("resolved")}>Resolve report</Button>
+            <Button variant="danger" disabled={saving || !reason.trim()} onClick={() => void decide("dismissed")}>Dismiss</Button>
+          </div>
+        )}
         <div className="card-actions">
-          {["Hide selected", "Warn user", "Suspend account", "Escalate"].map(
-            (label) => (
-              <Button
-                key={label}
-                variant="secondary"
-                onClick={() => action(label)}
-              >
-                {label}
-              </Button>
-            ),
-          )}
+          <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button>
+          <span>{total ? `${offset + 1}–${Math.min(offset + reports.length, total)} of ${total}` : "0 reports"}</span>
+          <Button variant="secondary" disabled={loading || offset + pageSize >= total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button>
         </div>
-        {message && <DemoNotice>{message}</DemoNotice>}
-        <DataTable
-          headers={["Report", "Subject", "Priority", "Reported", "Status"]}
-          rows={reports}
-        />
       </section>
+      <DemoNotice>
+        Account suspension applies only to a resolved account report, requires a
+        reason, is reversible by an admin, and does not ban Supabase identity or
+        remove content. Warnings and job resolution are not implemented.
+      </DemoNotice>
     </div>
   )
 }
 
 function Categories() {
-  const [fee, setFee] = useState("10")
+  const { getAdminCategories, saveAdminCategory } = useAuth()
+  const [categories, setCategories] = useState<AdminCategory[]>([])
+  const [draft, setDraft] = useState({
+    name: "",
+    slug: "",
+    active: true,
+    sortOrder: 0,
+  })
+  const [editingSlug, setEditingSlug] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
   const [message, setMessage] = useState("")
+
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void getAdminCategories()
+      .then(setCategories)
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load categories."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminCategories])
+
+  const saveCategory = async () => {
+    setSaving(true)
+    setError("")
+    setMessage("")
+    try {
+      const saved = await saveAdminCategory(draft)
+      setCategories((items) =>
+        [...items.filter((item) => item.id !== saved.id), saved].sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
+        ),
+      )
+      setEditingSlug("")
+      setDraft({ name: "", slug: "", active: true, sortOrder: 0 })
+      setMessage(`Saved category “${saved.name}”.`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save category.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="content console-content">
       <PageHeader
         title="Categories & fees"
-        description="Edit local demo marketplace configuration."
+        description="Manage persisted service categories and marketplace settings."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
-      <DemoNotice>
-        Changes here are local samples; no production pricing is altered.
-      </DemoNotice>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {message && <p role="status">{message}</p>}
       <div className="settings-grid">
         <section className="card">
           <h2>Service categories</h2>
-          {[
-            "Cleaning",
-            "Plumbing",
-            "Electrical",
-            "Care",
-            "Grooming",
-            "Tutoring",
-            "Moving",
-            "Repairs",
-          ].map((name, index) => (
-            <div className="setting-line" key={name}>
-              <span>
-                {index < 3 ? "↳ " : ""}
-                {name}
-              </span>
-              <Button
-                variant="ghost"
-                onClick={() =>
-                  setMessage(`${name} category selected for demo editing.`)
-                }
-              >
-                Edit
-              </Button>
+          {loading ? <p role="status">Loading categories…</p> : categories.length ? categories.map((category) => (
+            <div className="setting-line" key={category.id}>
+              <span>{category.name} · {category.active ? "active" : "inactive"}</span>
+              <Button variant="ghost" onClick={() => {
+                setEditingSlug(category.slug)
+                setDraft({
+                  name: category.name,
+                  slug: category.slug,
+                  active: !category.active,
+                  sortOrder: category.sortOrder,
+                })
+              }}>Edit / toggle</Button>
             </div>
-          ))}
-          <Button
-            onClick={() =>
-              setMessage("New demo category added to the action preview.")
-            }
-          >
-            Add category
-          </Button>
-        </section>
-        <section className="card setting-card">
-          <h2>Fees and plans</h2>
+          )) : !loading && <p>No categories configured.</p>}
+          <h3>{editingSlug ? "Edit category" : "Add category"}</h3>
           <label>
-            Marketplace commission (%)
-            <input
-              inputMode="decimal"
-              value={fee}
-              onChange={(event) => setFee(event.target.value)}
-            />
+            Name
+            <input maxLength={80} value={draft.name} onChange={(event) => {
+              const name = event.target.value
+              setDraft((current) => ({
+                ...current,
+                name,
+                slug: editingSlug ? current.slug : name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+              }))
+            }} />
           </label>
-          <Button
-            onClick={() => setMessage(`Demo commission saved at ${fee}%.`)}
-          >
-            Save demo commission
-          </Button>
           <label>
-            Promo codes
-            <input placeholder="Create a promo code" />
+            Slug
+            <input maxLength={90} disabled={Boolean(editingSlug)} value={draft.slug} onChange={(event) =>
+              setDraft((current) => ({ ...current, slug: event.target.value }))
+            } />
           </label>
-          <Button
-            variant="secondary"
-            onClick={() => setMessage("Demo promo code created.")}
-          >
-            Create promo code
-          </Button>
-          <h3>Subscription plan editor</h3>
-          <textarea
-            rows={4}
-            defaultValue={
-              "Basic · KES 0\nPro · KES 499/month\nElite · KES 1,499/month"
-            }
-          />
-          <Button
-            variant="secondary"
-            onClick={() =>
-              setMessage("Plan changes saved in local demo state.")
-            }
-          >
-            Save demo plans
-          </Button>
+          <label>
+            Sort order
+            <input type="number" min="0" max="10000" value={draft.sortOrder} onChange={(event) =>
+              setDraft((current) => ({ ...current, sortOrder: Number(event.target.value) }))
+            } />
+          </label>
+          {editingSlug && (
+            <label>
+              Active
+              <select value={draft.active ? "yes" : "no"} onChange={(event) =>
+                setDraft((current) => ({ ...current, active: event.target.value === "yes" }))
+              }>
+                <option value="yes">Active</option>
+                <option value="no">Inactive</option>
+              </select>
+            </label>
+          )}
+          <div className="card-actions">
+            <Button disabled={saving || !draft.name.trim() || !draft.slug.trim()} onClick={() => void saveCategory()}>
+              {saving ? "Saving…" : "Save category"}
+            </Button>
+            {editingSlug && <Button variant="secondary" onClick={() => {
+              setEditingSlug("")
+              setDraft({ name: "", slug: "", active: true, sortOrder: 0 })
+            }}>Cancel</Button>}
+          </div>
         </section>
       </div>
-      {message && <DemoNotice>{message}</DemoNotice>}
+      <DemoNotice>
+        Category and settings records are persisted and audited. Commission
+        calculation, promo codes, subscriptions, and job validation against this
+        catalog are not implemented.
+      </DemoNotice>
     </div>
   )
 }
 
 function AdApprovals() {
-  const [status, setStatus] = useState("Pending review")
+  const { getAdminAdCampaigns, decideAdminAdCampaign } = useAuth()
+  const [status, setStatus] = useState<"all" | "pending" | "approved" | "rejected">("pending")
+  const [campaigns, setCampaigns] = useState<AdminAdCampaign[]>([])
+  const [selected, setSelected] = useState<AdminAdCampaign | null>(null)
+  const [reason, setReason] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void getAdminAdCampaigns(status)
+      .then((items) => {
+        setCampaigns(items)
+        setSelected((current) => items.find((item) => item.id === current?.id) ?? items[0] ?? null)
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load campaigns."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminAdCampaigns, status])
+  const decide = async (decision: "approved" | "rejected") => {
+    if (!selected) return
+    if (decision === "rejected" && !reason.trim()) {
+      setError("Enter a reason before rejecting a campaign.")
+      return
+    }
+    setSaving(true)
+    setError("")
+    try {
+      const updated = await decideAdminAdCampaign(selected.id, decision, reason.trim())
+      setCampaigns((items) => items.map((item) => item.id === updated.id ? updated : item))
+      setSelected(updated)
+      setReason("")
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save campaign decision.")
+    } finally {
+      setSaving(false)
+    }
+  }
   return (
     <div className="content console-content">
       <PageHeader
         title="Ad approvals & inventory"
-        description="Manage the allowed sponsored placements."
+        description="Review submitted campaigns and record audited decisions."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
-      <DemoNotice>
-        Strict demo placements: login/landing carousel and one consumer
-        dashboard row only.
-      </DemoNotice>
+      <label>
+        Campaign status
+        <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="all">All</option>
+        </select>
+      </label>
+      {error && <p className="form-error" role="alert">{error}</p>}
       <section className="card">
-        <div className="section-title">
-          <div>
-            <Badge tone="amber">{status}</Badge>
-            <h2>Jumia Home · cleaning supplies</h2>
+        {loading ? <p role="status">Loading campaigns…</p> : campaigns.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Advertiser</th><th>Campaign</th><th>Placement</th><th>Status</th><th>Submitted</th><th>Review</th></tr></thead>
+              <tbody>{campaigns.map((campaign) => (
+                <tr key={campaign.id}>
+                  <td>{campaign.advertiserName}</td>
+                  <td>{campaign.title}</td>
+                  <td>{campaign.placement.replace(/_/g, " ")}</td>
+                  <td>{campaign.status}</td>
+                  <td>{new Date(campaign.createdAt).toLocaleString()}</td>
+                  <td><Button variant="secondary" onClick={() => {
+                    setSelected(campaign)
+                    setReason("")
+                  }}>Review</Button></td>
+                </tr>
+              ))}</tbody>
+            </table>
           </div>
-          <span>Sample campaign · Nairobi</span>
-        </div>
-        <Sponsored />
-        <p>
-          Requested placement: consumer dashboard · frequency cap: 1 per
-          dashboard view.
-        </p>
-        <div className="card-actions">
-          <Button onClick={() => setStatus("Approved · demo")}>
-            Approve demo ad
-          </Button>
-          <Button variant="danger" onClick={() => setStatus("Rejected · demo")}>
-            Reject demo ad
-          </Button>
-        </div>
+        ) : !error ? <EmptyState title="No campaigns" detail="No campaigns match this status." /> : null}
+        {selected?.status === "pending" && (
+          <div className="card-actions">
+            <div>
+              <h3>{selected.title}</h3>
+              <p>{selected.description}</p>
+              <p>{selected.advertiserName} · {selected.placement.replace(/_/g, " ")}</p>
+              {selected.destinationUrl && <p>Destination: {selected.destinationUrl}</p>}
+            </div>
+            <label>
+              Decision note (required to reject)
+              <input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
+            </label>
+            <Button disabled={saving} onClick={() => void decide("approved")}>Approve</Button>
+            <Button variant="danger" disabled={saving || !reason.trim()} onClick={() => void decide("rejected")}>Reject</Button>
+          </div>
+        )}
       </section>
       <section className="card">
         <h2>Inventory rules</h2>
@@ -3405,108 +4001,156 @@ function AdApprovals() {
           dashboard.
         </p>
       </section>
+      <DemoNotice>
+        Campaign submissions and decisions are stored, but approval does not
+        publish or serve ads; no advertiser portal or ad-serving integration is
+        connected.
+      </DemoNotice>
     </div>
   )
 }
 
 function AuditLog() {
-  const { store } = useDemoStore()
+  const { getAdminAuditEvents } = useAuth()
+  const [events, setEvents] = useState<AdminAuditEvent[]>([])
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const pageSize = 25
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void getAdminAuditEvents(pageSize, offset)
+      .then((page) => {
+        setEvents(page.items)
+        setTotal(page.total)
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load audit events."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminAuditEvents, offset])
   return (
     <div className="content console-content">
       <PageHeader
         title="Audit log"
-        description="Local prototype activity log; not a security audit trail."
+        description="Persisted admin actions and read events from the API."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
-      <DemoNotice>
-        Browser storage can be edited by the user. Do not rely on this log for
-        production accountability.
-      </DemoNotice>
-      {store.adminActions.length ? (
-        <DataTable
-          headers={["Action", "Scope", "Status"]}
-          rows={store.adminActions.map((action) => [
-            action,
-            "Local demo",
-            "Simulated",
-          ])}
-        />
-      ) : (
-        <EmptyState
-          title="No demo actions yet"
-          detail="Actions taken in the admin and support previews will appear here."
-        />
-      )}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <section className="card table-card">
+        {loading ? <p role="status">Loading audit events…</p> : events.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Actor ID</th><th>Action</th><th>Target</th><th>Request ID</th></tr></thead>
+              <tbody>{events.map((event) => (
+                <tr key={event.id}>
+                  <td>{new Date(event.createdAt).toLocaleString()}</td>
+                  <td>{event.actorUserId}</td>
+                  <td>{event.action}</td>
+                  <td>{event.targetType ? `${event.targetType}${event.targetId ? ` · ${event.targetId}` : ""}` : "—"}</td>
+                  <td>{event.requestId}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : !error ? <EmptyState title="No audit events" detail="Administrative events will appear here." /> : null}
+        <div className="card-actions">
+          <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button>
+          <span>{total ? `${offset + 1}–${Math.min(offset + events.length, total)} of ${total}` : "0 events"}</span>
+          <Button variant="secondary" disabled={loading || offset + pageSize >= total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button>
+        </div>
+      </section>
     </div>
   )
 }
 
 function Config() {
-  const { store, updateStore } = useDemoStore()
-  const groups = [
-    [
-      "Feature flags",
-      "Escrow v2",
-      "Provider live location",
-      "Saved search alerts",
-    ],
-    [
-      "Payments",
-      "M-Pesa integration (demo)",
-      "Payout retries",
-      "Platform fee: 10%",
-    ],
-    [
-      "Notifications",
-      "SMS · Africa's Talking (demo)",
-      "Email · SendGrid (demo)",
-      "WhatsApp disabled",
-    ],
-    [
-      "Data retention",
-      "Chat: 24 months",
-      "ID documents: 7 years",
-      "Audit logs: indefinite",
-    ],
-  ]
+  const { getAdminSettings, saveAdminSettings } = useAuth()
+  const [settings, setSettings] = useState<AdminSystemSettings | null>(null)
+  const [commission, setCommission] = useState("10")
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const [message, setMessage] = useState("")
+  const load = () => {
+    setLoading(true)
+    setError("")
+    void getAdminSettings()
+      .then((value) => {
+        setSettings(value)
+        setCommission(String(value.marketplaceCommissionPercent))
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : "Could not load settings."),
+      )
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [getAdminSettings])
+  const save = async () => {
+    if (!settings) return
+    const percent = Number(commission)
+    if (!commission.trim() || !Number.isFinite(percent) || percent < 0 || percent > 30) {
+      setError("Commission must be between 0 and 30 percent.")
+      return
+    }
+    setSaving(true)
+    setError("")
+    setMessage("")
+    try {
+      const saved = await saveAdminSettings({
+        ...settings,
+        marketplaceCommissionPercent: percent,
+      })
+      setSettings(saved)
+      setMessage("Settings saved and recorded in the admin audit log.")
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save settings.")
+    } finally {
+      setSaving(false)
+    }
+  }
   return (
     <div className="content console-content">
       <PageHeader
         title="System configuration"
-        description="Manage local demo flags; integrations are not connected."
+        description="Update allowlisted marketplace settings with audit history."
+        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
-      <DemoNotice>
-        Never enter production payment keys in this browser-only prototype.
-      </DemoNotice>
-      <div className="settings-grid">
-        {groups.map(([title, ...items]) => (
-          <section className="card setting-card" key={title}>
-            <Icon name="settings" />
-            <h2>{title}</h2>
-            {items.map((item, i) => (
-              <div className="setting-line" key={item}>
-                <span>{item}</span>
-                <button
-                  className={`switch ${
-                    (store.featureFlags[item] ?? i !== 2) ? "on" : ""
-                  }`}
-                  aria-label={`Toggle ${item}`}
-                  aria-pressed={store.featureFlags[item] ?? i !== 2}
-                  onClick={() =>
-                    updateStore({
-                      featureFlags: {
-                        ...store.featureFlags,
-                        [item]: !(store.featureFlags[item] ?? i !== 2),
-                      },
-                    })
-                  }
-                >
-                  <i />
-                </button>
-              </div>
-            ))}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {message && <p role="status">{message}</p>}
+      {loading ? <p role="status">Loading system settings…</p> : settings && (
+        <div className="settings-grid">
+          <section className="card setting-card">
+            <h2>Marketplace</h2>
+            <label>
+              Marketplace commission (%)
+              <input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} />
+            </label>
+            <label className="setting-line">
+              New provider applications enabled
+              <input type="checkbox" checked={settings.newProviderApplicationsEnabled} onChange={(event) =>
+                setSettings({ ...settings, newProviderApplicationsEnabled: event.target.checked })
+              } />
+            </label>
+            <label className="setting-line">
+              Accept ad campaign submissions
+              <input type="checkbox" checked={settings.adsEnabled} onChange={(event) =>
+                setSettings({ ...settings, adsEnabled: event.target.checked })
+              } />
+            </label>
+            <Button disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save settings"}</Button>
           </section>
-        ))}
-      </div>
+        </div>
+      )}
+      <DemoNotice>
+        Provider-application and ad-submission switches are API-enforced. The
+        commission rate is stored and audited but is not applied to charges:
+        fee calculation is not implemented. Integration secrets and notification
+        provider settings are intentionally not editable in the browser.
+      </DemoNotice>
     </div>
   )
 }
@@ -4080,17 +4724,10 @@ function AppShell() {
   useEffect(() => {
     if (auth.loading) return
     const syncRoute = () => {
-      let nextRoute = getAuthenticatedRoute(
+      const nextRoute = getAuthenticatedRoute(
         window.location.pathname,
         authenticatedRoles,
       )
-      if (
-        auth.profile &&
-        auth.supplierSignupPending &&
-        authenticatedRoles.includes("consumer")
-      ) {
-        nextRoute = { role: "consumer", screen: "providerApply" }
-      }
       setRoute(nextRoute)
       const canonicalPath = workspacePath(nextRoute)
       if (window.location.pathname !== canonicalPath) {
@@ -4100,7 +4737,7 @@ function AppShell() {
     window.addEventListener("popstate", syncRoute)
     syncRoute()
     return () => window.removeEventListener("popstate", syncRoute)
-  }, [auth.loading, auth.profile, auth.supplierSignupPending])
+  }, [auth.loading, auth.profile])
 
   useEffect(() => {
     try {
@@ -4165,7 +4802,11 @@ function AppShell() {
       case "workspace":
         return null
       case "providerApply":
-        return <ProviderApplicationScreen onComplete={() => navigate("consumer", "home")} />
+        return (
+          <ProviderApplicationScreen
+            onComplete={() => navigate("consumer", "home")}
+          />
+        )
       case "home":
         return <Home go={go} />
       case "search":
@@ -4224,6 +4865,8 @@ function AppShell() {
         return <AdCreator />
       case "overview":
         return <Overview />
+      case "monitoring":
+        return <AdminMonitoring />
       case "users":
         return <Users />
       case "verification":
@@ -4258,13 +4901,7 @@ function AppShell() {
         <AuthExperience
           key={`${role}-${screen}`}
           initialRole={screen === "login" ? role : null}
-          initialStage={
-            screen === "workspace"
-              ? "role"
-              : auth.recovery
-                ? "recovery"
-                : "login"
-          }
+          initialStage={screen === "workspace" ? "role" : "login"}
           chooseWorkspace={chooseWorkspace}
           changeWorkspace={goWorkspacePicker}
         />
