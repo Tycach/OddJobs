@@ -39,6 +39,73 @@ export type AuthProfile = {
   roles: string[]
 }
 
+export type MarketplaceJobStatus =
+  | "open"
+  | "awarded"
+  | "in_progress"
+  | "completion_pending"
+  | "completed"
+  | "cancelled"
+  | "disputed"
+
+export type MarketplaceQuoteStatus =
+  | "submitted"
+  | "accepted"
+  | "declined"
+  | "withdrawn"
+  | "expired"
+
+export type MarketplaceJob = {
+  id: string
+  customerId: string
+  title: string
+  description: string
+  category: string
+  locationLabel: string
+  budgetMinor: number | null
+  currency: string
+  status: MarketplaceJobStatus
+  requestedFor: string | null
+  createdAt: string
+  updatedAt: string
+  quoteCount: number
+}
+
+export type MarketplaceQuote = {
+  id: string
+  jobId: string
+  providerId: string
+  providerName: string
+  amountMinor: number
+  currency: string
+  message: string
+  availability: string
+  status: MarketplaceQuoteStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export type MarketplaceJobInput = {
+  title: string
+  description: string
+  category: string
+  locationLabel: string
+  budgetMinor: number | null
+  requestedFor?: string | null
+}
+
+export type MarketplaceQuoteInput = {
+  amountMinor: number
+  message: string
+  availability: string
+}
+
+export type MarketplaceJobTransition =
+  | "start"
+  | "submit-completion"
+  | "confirm-completion"
+  | "cancel"
+
 export type AdminUserSummary = {
   id: string
 
@@ -66,6 +133,19 @@ export type AdminAuditEvent = {
 
   requestId: string
 
+  createdAt: string
+}
+
+export type AdminMarketplaceActivity = {
+  id: string
+  actorUserId: string
+  actorDisplayName: string
+  actorRole: "consumer" | "provider" | "admin"
+  action: string
+  jobId: string
+  quoteId: string | null
+  metadata: Record<string, string | number | boolean | null>
+  requestId: string
   createdAt: string
 }
 
@@ -204,6 +284,8 @@ type AuthContextValue = {
 
   acceptCurrentPolicies: () => Promise<void>
 
+  refreshProfile: () => Promise<AuthProfile | null>
+
   requestOtp: (
     method: AuthMethod,
 
@@ -266,6 +348,11 @@ type AuthContextValue = {
 
     offset: number,
   ) => Promise<AdminPage<AdminAuditEvent>>
+
+  getAdminMarketplaceActivity: (
+    limit: number,
+    offset: number,
+  ) => Promise<AdminPage<AdminMarketplaceActivity>>
 
   getAdminOverview: () => Promise<AdminOverview>
 
@@ -333,6 +420,39 @@ type AuthContextValue = {
     reason?: string,
   ) => Promise<AdminAdCampaign>
 
+  getMarketplaceJobs: (
+    view: "consumer" | "provider" | "feed",
+  ) => Promise<MarketplaceJob[]>
+
+  getMarketplaceJob: (
+    jobId: string,
+    role: "consumer" | "provider",
+  ) => Promise<MarketplaceJob>
+
+  getMarketplaceQuotes: (
+    jobId: string,
+    role: "consumer" | "provider",
+  ) => Promise<MarketplaceQuote[]>
+
+  createMarketplaceJob: (input: MarketplaceJobInput) => Promise<MarketplaceJob>
+
+  submitMarketplaceQuote: (
+    jobId: string,
+    input: MarketplaceQuoteInput,
+  ) => Promise<MarketplaceQuote>
+
+  acceptMarketplaceQuote: (
+    jobId: string,
+    quoteId: string,
+  ) => Promise<MarketplaceJob>
+
+  transitionMarketplaceJob: (
+    jobId: string,
+    transition: MarketplaceJobTransition,
+  ) => Promise<MarketplaceJob>
+
+  subscribeMarketplaceChanges: (onChange: () => void) => () => void
+
   signOut: () => Promise<void>
 }
 
@@ -345,9 +465,6 @@ const supabaseApiKey =
 const apiUrl = (import.meta.env.VITE_API_URL || "http://127.0.0.1:3000")
 
   .replace(/\/$/, "")
-
-const requireEmailVerification =
-  import.meta.env.VITE_REQUIRE_EMAIL_VERIFICATION === "true"
 
 let rememberSession =
   window.localStorage.getItem("oddjobs-auth-remember-session") === "1"
@@ -644,6 +761,33 @@ async function postAdminAction<T>(
   return (await response.json()) as T
 }
 
+async function marketplaceRequest<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await adminRequest(path, init)
+  if (!response.ok) {
+    const fallback =
+      response.status === 403
+        ? "Your account cannot access this marketplace data."
+        : response.status === 404
+          ? "This job or quote is no longer available."
+          : response.status === 409
+            ? "This job has changed. Refresh and try again."
+            : "We couldn’t complete that marketplace action. Please try again."
+    throw new Error(getApiErrorMessage(response.status, fallback))
+  }
+  return (await response.json()) as T
+}
+
+function marketplacePost<T>(path: string, body?: unknown): Promise<T> {
+  return marketplaceRequest<T>(path, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<AuthProfile | null>(null)
 
@@ -778,6 +922,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setPolicyConsentRequired(false)
   }
+
+  const refreshProfile = useCallback(async () => {
+    if (!supabase) {
+      throw new Error(
+        "Account services are temporarily unavailable. Please try again later.",
+      )
+    }
+
+    const { data, error } = await supabase.auth.getSession()
+    if (error) {
+      throw new Error(
+        getAuthErrorMessage(error, "Please sign in again and retry."),
+      )
+    }
+
+    if (!data.session) {
+      setProfile(null)
+      setSupplierSignupPending(false)
+      setPolicyConsentRequired(false)
+      return null
+    }
+
+    setLoading(true)
+    try {
+      const result = await fetchProfile(data.session)
+      setProfile(result.profile)
+      setSupplierSignupPending(
+        data.session.user.user_metadata?.account_intent === "supplier",
+      )
+      setPolicyConsentRequired(result.policyConsentRequired)
+      return result.profile
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   const requestOtp = async (
     method: AuthMethod,
@@ -914,8 +1093,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             options,
           })
 
-    const needsVerification =
-      !result.error && !result.data.session && requireEmailVerification
+    const needsVerification = !result.error && !result.data.session
 
     return {
       error: result.error
@@ -1150,6 +1328,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getAdminMarketplaceActivity = useCallback(
+    (limit: number, offset: number) =>
+      fetchAdminPage<AdminMarketplaceActivity>(
+        "marketplace/activity",
+        limit,
+        offset,
+      ),
+    [],
+  )
+
   const getAdminOverview = useCallback(() => fetchAdminOverview(), [])
 
   const getAdminVerifications = useCallback(
@@ -1283,6 +1471,89 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getMarketplaceJobs = useCallback(
+    (view: "consumer" | "provider" | "feed") =>
+      marketplaceRequest<MarketplaceJob[]>(
+        `/v1/jobs?view=${encodeURIComponent(view)}`,
+      ),
+    [],
+  )
+
+  const getMarketplaceJob = useCallback(
+    (jobId: string, role: "consumer" | "provider") =>
+      marketplaceRequest<MarketplaceJob>(
+        `/v1/jobs/${encodeURIComponent(jobId)}?role=${role}`,
+      ),
+    [],
+  )
+
+  const getMarketplaceQuotes = useCallback(
+    (jobId: string, role: "consumer" | "provider") =>
+      marketplaceRequest<MarketplaceQuote[]>(
+        `/v1/jobs/${encodeURIComponent(jobId)}/quotes?role=${role}`,
+      ),
+    [],
+  )
+
+  const createMarketplaceJob = useCallback(
+    (input: MarketplaceJobInput) =>
+      marketplacePost<MarketplaceJob>("/v1/jobs", input),
+    [],
+  )
+
+  const submitMarketplaceQuote = useCallback(
+    (jobId: string, input: MarketplaceQuoteInput) =>
+      marketplacePost<MarketplaceQuote>(
+        `/v1/jobs/${encodeURIComponent(jobId)}/quotes`,
+        input,
+      ),
+    [],
+  )
+
+  const acceptMarketplaceQuote = useCallback(
+    (jobId: string, quoteId: string) =>
+      marketplacePost<MarketplaceJob>(
+        `/v1/jobs/${encodeURIComponent(jobId)}/quotes/${encodeURIComponent(quoteId)}/accept`,
+      ),
+    [],
+  )
+
+  const transitionMarketplaceJob = useCallback(
+    (jobId: string, transition: MarketplaceJobTransition) =>
+      marketplacePost<MarketplaceJob>(
+        `/v1/jobs/${encodeURIComponent(jobId)}/${transition}`,
+      ),
+    [],
+  )
+
+  const subscribeMarketplaceChanges = useCallback((onChange: () => void) => {
+    if (!supabase) {
+      throw new Error("Realtime services are not configured.")
+    }
+
+    const channel = supabase
+      .channel(`marketplace:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "jobs" },
+        () => onChange(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "quotes" },
+        () => onChange(),
+      )
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.error("Unable to subscribe to marketplace updates.", status)
+        }
+      })
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [])
+
   return (
     <AuthContext.Provider
       value={{
@@ -1312,6 +1583,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         acceptCurrentPolicies,
 
+        refreshProfile,
+
         requestOtp,
 
         signInWithPassword,
@@ -1337,6 +1610,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         reinstateAdminUser,
 
         getAdminAuditEvents,
+
+        getAdminMarketplaceActivity,
 
         getAdminOverview,
 
@@ -1365,6 +1640,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAdminAdCampaigns,
 
         decideAdminAdCampaign,
+
+        getMarketplaceJobs,
+
+        getMarketplaceJob,
+
+        getMarketplaceQuotes,
+
+        createMarketplaceJob,
+
+        submitMarketplaceQuote,
+
+        acceptMarketplaceQuote,
+
+        transitionMarketplaceJob,
+
+        subscribeMarketplaceChanges,
 
         signOut,
       }}

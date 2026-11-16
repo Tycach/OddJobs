@@ -30,6 +30,134 @@ export type ProviderApplication = ProviderApplicationInput & {
   status: string
 }
 
+export type MarketplaceJobStatus =
+  | "open"
+  | "awarded"
+  | "in_progress"
+  | "completion_pending"
+  | "completed"
+  | "cancelled"
+  | "disputed"
+
+export type MarketplaceQuoteStatus =
+  | "submitted"
+  | "accepted"
+  | "declined"
+  | "withdrawn"
+  | "expired"
+
+export type MarketplaceJob = {
+  id: string
+  customerId: string
+  title: string
+  description: string
+  category: string
+  locationLabel: string
+  budgetMinor: number | null
+  currency: string
+  status: MarketplaceJobStatus
+  requestedFor: string | null
+  createdAt: string
+  updatedAt: string
+  quoteCount: number
+}
+
+export type MarketplaceQuote = {
+  id: string
+  jobId: string
+  providerId: string
+  providerName: string
+  amountMinor: number
+  currency: string
+  message: string
+  availability: string
+  status: MarketplaceQuoteStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export type AdminMarketplaceActivity = {
+  id: string
+  actorUserId: string
+  actorDisplayName: string
+  actorRole: "consumer" | "provider" | "admin"
+  action: string
+  jobId: string
+  quoteId: string | null
+  metadata: Record<string, string | number | boolean | null>
+  requestId: string
+  createdAt: string
+}
+
+export type CreateMarketplaceJobInput = {
+  title: string
+  description: string
+  category: string
+  locationLabel: string
+  budgetMinor: number | null
+  requestedFor?: string | null
+}
+
+export type SubmitMarketplaceQuoteInput = {
+  amountMinor: number
+  message: string
+  availability: string
+}
+
+export class MarketplaceConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "MarketplaceConflictError"
+  }
+}
+
+export interface MarketplaceStore {
+  listJobs(
+    userId: string,
+    role: "consumer" | "provider",
+    view: "mine" | "feed",
+  ): Promise<MarketplaceJob[]>
+
+  getJob(
+    userId: string,
+    role: "consumer" | "provider",
+    jobId: string,
+  ): Promise<MarketplaceJob | null>
+
+  listQuotes(
+    userId: string,
+    role: "consumer" | "provider",
+    jobId: string,
+  ): Promise<MarketplaceQuote[] | null>
+
+  createJob(
+    userId: string,
+    input: CreateMarketplaceJobInput,
+    requestId: string,
+  ): Promise<MarketplaceJob>
+
+  submitQuote(
+    userId: string,
+    jobId: string,
+    input: SubmitMarketplaceQuoteInput,
+    requestId: string,
+  ): Promise<MarketplaceQuote | null>
+
+  acceptQuote(
+    userId: string,
+    jobId: string,
+    quoteId: string,
+    requestId: string,
+  ): Promise<MarketplaceJob | null>
+
+  transitionJob(
+    userId: string,
+    jobId: string,
+    transition: "start" | "submit_completion" | "confirm_completion" | "cancel",
+    requestId: string,
+  ): Promise<MarketplaceJob | null>
+}
+
 export type AdminUserSummary = {
   id: string
 
@@ -310,6 +438,11 @@ export interface AdminStore {
 
     offset: number,
   ): Promise<AdminPage<AdminAuditEvent>>
+
+  listAdminMarketplaceActivity(
+    limit: number,
+    offset: number,
+  ): Promise<AdminPage<AdminMarketplaceActivity>>
 
   recordAdminAuditEvent(
     event: Omit<AdminAuditEvent, "id" | "createdAt">,

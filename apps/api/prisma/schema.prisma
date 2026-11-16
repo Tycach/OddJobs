@@ -104,6 +104,7 @@ model User {
   messages          Message[]
   moderationReports ModerationReport[]
   enforcementActions AdminUserEnforcement[]
+  marketplaceActivityEvents MarketplaceActivityEvent[]
   createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -334,6 +335,7 @@ model Quote {
   amountMinor BigInt      @map("amount_minor")
   currency    String      @default("KES") @db.Char(3)
   message     String      @db.VarChar(2000)
+  availability String     @default("") @db.VarChar(120)
   status      QuoteStatus @default(SUBMITTED)
   expiresAt   DateTime?   @map("expires_at") @db.Timestamptz(3)
   createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -361,4 +363,22 @@ model Message {
   @@index([jobId, createdAt])
   @@index([senderId, createdAt])
   @@map("messages")
+}
+
+model MarketplaceActivityEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  actorUserId     String   @map("actor_user_id") @db.Uuid
+  actorRole       String   @map("actor_role") @db.VarChar(20)
+  action          String   @db.VarChar(80)
+  jobId           String   @map("job_id") @db.Uuid
+  quoteId         String?  @map("quote_id") @db.Uuid
+  metadata        Json     @default("{}") @db.JsonB
+  requestId       String   @map("request_id") @db.VarChar(80)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  actor           User     @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt, id])
+  @@index([jobId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("marketplace_activity_events")
 }

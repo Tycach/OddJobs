@@ -1,9 +1,16 @@
-import { createContext, useContext, useEffect, useState } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react"
 import {
   AuthProvider,
   useAuth,
   type AdminAdCampaign,
   type AdminAuditEvent,
+  type AdminMarketplaceActivity,
   type AdminCategory,
   type AdminModerationReport,
   type AdminModerationStatus,
@@ -13,6 +20,8 @@ import {
   type AdminUserSummary,
   type AdminVerificationStatus,
   type AdminVerificationSummary,
+  type MarketplaceJob,
+  type MarketplaceQuote,
 } from "./auth/AuthProvider"
 import AuthExperience from "./auth/AuthExperience"
 import ProviderApplicationScreen from "./auth/ProviderApplicationScreen"
@@ -37,6 +46,94 @@ function useDemoStore() {
   const context = useContext(DemoContext)
   if (!context) throw new Error("DemoStoreProvider is required.")
   return context
+}
+
+function useMarketplaceJobs(view: "consumer" | "provider" | "feed") {
+  const auth = useAuth()
+  const [jobs, setJobs] = useState<MarketplaceJob[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const refresh = useCallback(async () => {
+    setError("")
+    try {
+      setJobs(await auth.getMarketplaceJobs(view))
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t load marketplace jobs. Please try again.",
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [auth.getMarketplaceJobs, view])
+
+  useEffect(() => {
+    void refresh()
+    let unsubscribe: (() => void) | undefined
+    try {
+      unsubscribe = auth.subscribeMarketplaceChanges(() => void refresh())
+    } catch (subscriptionError) {
+      console.error("Unable to subscribe to marketplace updates.", subscriptionError)
+    }
+    return () => unsubscribe?.()
+  }, [auth.subscribeMarketplaceChanges, refresh])
+
+  return { jobs, loading, error, refresh }
+}
+
+function useMarketplaceJobData(
+  jobId: string | null | undefined,
+  role: "consumer" | "provider",
+) {
+  const auth = useAuth()
+  const [job, setJob] = useState<MarketplaceJob | null>(null)
+  const [quotes, setQuotes] = useState<MarketplaceQuote[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const refresh = useCallback(async () => {
+    if (!jobId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
+      setJob(null)
+      setQuotes([])
+      setError("")
+      setLoading(false)
+      return
+    }
+
+    setError("")
+    try {
+      const [nextJob, nextQuotes] = await Promise.all([
+        auth.getMarketplaceJob(jobId, role),
+        auth.getMarketplaceQuotes(jobId, role),
+      ])
+      setJob(nextJob)
+      setQuotes(nextQuotes)
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t load this job. Please try again.",
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [auth.getMarketplaceJob, auth.getMarketplaceQuotes, jobId, role])
+
+  useEffect(() => {
+    setLoading(true)
+    void refresh()
+    let unsubscribe: (() => void) | undefined
+    try {
+      unsubscribe = auth.subscribeMarketplaceChanges(() => void refresh())
+    } catch (subscriptionError) {
+      console.error("Unable to subscribe to marketplace updates.", subscriptionError)
+    }
+    return () => unsubscribe?.()
+  }, [auth.subscribeMarketplaceChanges, refresh])
+
+  return { job, quotes, loading, error, refresh }
 }
 
 const photos = {
@@ -111,6 +208,7 @@ const roleScreens: Record<Role, readonly Screen[]> = {
     "moderation",
     "adApprovals",
     "audit",
+    "operations",
     "config",
   ],
   support: ["login", "disputes", "inbox", "moderation", "knowledgeBase"],
@@ -149,6 +247,8 @@ function getWorkspaceRoute(pathname: string): WorkspaceRoute {
 
   if (!role) return { role: "consumer", screen: "welcome" }
 
+  if (screenSegment === "workspace") return { role, screen: "workspace" }
+
   const screen = roleScreens[role].find(
     (candidate) => candidate === screenSegment,
   )
@@ -165,6 +265,7 @@ function normalizeKenyanPhoneInput(value: string) {
 function getAuthenticatedRoute(
   pathname: string,
   authenticatedRoles: Role[],
+  hasProviderRole = false,
 ): WorkspaceRoute {
   const route = getWorkspaceRoute(pathname)
   const isPublicScreen =
@@ -181,6 +282,16 @@ function getAuthenticatedRoute(
     const defaultRole = authenticatedRoles[0] ?? "consumer"
     return { role: defaultRole, screen: roleHomes[defaultRole] }
   }
+
+  if (
+    hasProviderRole &&
+    route.role === "consumer" &&
+    route.screen === "post"
+  ) {
+    return { role: "consumer", screen: "jobs" }
+  }
+
+  if (route.screen === "workspace") return route
 
   if (isPublicScreen) {
     return { role: route.role, screen: roleHomes[route.role] }
@@ -235,6 +346,7 @@ const navigation: Record<Role, {
     { label: "Moderation", icon: "flag", screen: "moderation" },
     { label: "Ad approvals", icon: "megaphone", screen: "adApprovals" },
     { label: "Audit log", icon: "chart", screen: "audit" },
+    { label: "Marketplace operations", icon: "briefcase", screen: "operations" },
     { label: "System config", icon: "settings", screen: "config" },
   ],
   support: [
@@ -340,6 +452,12 @@ function Icon({ name, size = 20 }: IconProps) {
       </>
     ),
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+    logout: (
+      <>
+        <path d="M10 17l5-5-5-5M15 12H3" />
+        <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" />
+      </>
+    ),
     chart: (
       <>
         <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
@@ -594,21 +712,21 @@ function Welcome({
             <em>Done safely.</em>
           </h1>
           <p>
-            Hire vetted local professionals, pay securely with M-Pesa, and
-            release payment only when the job is done.
+            Post a job, compare provider quotes, and manage the work together.
+            Payments and identity verification are not enabled yet.
           </p>
           <div className="auth-trust">
             <span>
               <Icon name="shield" />
-              <b>Verified providers</b>
+              <b>Role-approved providers</b>
             </span>
             <span>
               <Icon name="wallet" />
-              <b>M-Pesa escrow</b>
+              <b>Payments disabled</b>
             </span>
             <span>
               <Icon name="star" />
-              <b>Real reviews</b>
+              <b>Reviews coming later</b>
             </span>
           </div>
           <div className="auth-image">
@@ -1240,54 +1358,61 @@ function Profile({ go }: { go: (s: Screen) => void }) {
 }
 
 function PostJob({ go }: { go: (s: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
+  const { updateStore } = useDemoStore()
+  const auth = useAuth()
   const [step, setStep] = useState(1)
-  const [title, setTitle] = useState("Deep clean my 2-bedroom flat")
+  const [title, setTitle] = useState("")
   const [category, setCategory] = useState("Cleaning")
-  const [description, setDescription] = useState(
-    "Kitchen, two bathrooms, floors and windows. Please bring cleaning supplies.",
-  )
-  const [budget, setBudget] = useState("2500")
-  const [location, setLocation] = useState("Kilimani, Nairobi")
-  const [timing, setTiming] = useState("This week")
+  const [description, setDescription] = useState("")
+  const [budget, setBudget] = useState("")
+  const [location, setLocation] = useState("")
+  const [requestedDate, setRequestedDate] = useState("")
   const [error, setError] = useState("")
-  const postJob = () => {
+  const [submitting, setSubmitting] = useState(false)
+  const postJob = async () => {
+    const parsedBudget = budget.trim() ? Number(budget) : null
     if (
       !title.trim() ||
       !description.trim() ||
-      !Number.isFinite(Number(budget)) ||
-      Number(budget) <= 0 ||
-      !location.trim()
+      !category.trim() ||
+      !location.trim() ||
+      (parsedBudget !== null &&
+        (!Number.isFinite(parsedBudget) ||
+          parsedBudget <= 0 ||
+          Math.round(parsedBudget * 100) < 1 ||
+          !Number.isSafeInteger(Math.round(parsedBudget * 100))))
     ) {
       setError(
-        "Add a title, description, valid budget, and location before posting.",
+        "Add a title, description, location, and a valid optional budget before posting.",
       )
       return
     }
-    const id = `OJ-${Date.now().toString().slice(-6)}`
-    const job: DemoJob = {
-      id,
-      title: title.trim(),
-      category,
-      description: description.trim(),
-      budget: Number(budget),
-      location: location.trim(),
-      timing,
-      status: "Open",
-      bids: initialDemoStore.jobs[0].bids,
+
+    setSubmitting(true)
+    try {
+      const job = await auth.createMarketplaceJob({
+        title: title.trim(),
+        category: category.trim(),
+        description: description.trim(),
+        locationLabel: location.trim(),
+        budgetMinor:
+          parsedBudget === null ? null : Math.round(parsedBudget * 100),
+        requestedFor: requestedDate
+          ? new Date(`${requestedDate}T12:00:00`).toISOString()
+          : null,
+      })
+      updateStore({ selectedJobId: job.id })
+      setError("")
+      go("bids")
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t post this job. Please try again.",
+      )
+    } finally {
+      setSubmitting(false)
     }
-    updateStore((current) => ({
-      ...current,
-      jobs: [job, ...current.jobs],
-      selectedJobId: id,
-      selectedBid: job.bids[0],
-      notifications: [
-        `Your job "${job.title}" is posted.`,
-        ...current.notifications,
-      ],
-    }))
-    setError("")
-    go("bids")
   }
   return (
     <div className="content form-page">
@@ -1348,10 +1473,9 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
               <span>
                 <strong>Add photos or video</strong>
                 <small>
-                  Media attachments are not stored in this local demo.
+                  Attachments are not available yet; no files are uploaded.
                 </small>
               </span>
-              <input type="file" accept="image/*,video/*" multiple />
             </label>
           </>
         )}
@@ -1360,9 +1484,10 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             <label>
               Budget (KES)
               <input
-                inputMode="numeric"
+                inputMode="decimal"
                 value={budget}
                 onChange={(event) => setBudget(event.target.value)}
+                placeholder="Optional"
               />
             </label>
             <label>
@@ -1375,39 +1500,13 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             <div className="field-pair">
               <label>
                 Preferred date
-                <input type="date" />
-              </label>
-              <label>
-                Time window
-                <select onChange={(event) => setTiming(event.target.value)}>
-                  <option>9:00 – 12:00</option>
-                  <option>12:00 – 15:00</option>
-                  <option>Flexible</option>
-                </select>
+                <input
+                  type="date"
+                  value={requestedDate}
+                  onChange={(event) => setRequestedDate(event.target.value)}
+                />
               </label>
             </div>
-            <label>
-              Urgency
-              <div className="choice-row">
-                {["This week", "Today", "Flexible"].map((item) => (
-                  <button
-                    type="button"
-                    className={timing === item ? "selected" : ""}
-                    key={item}
-                    onClick={() => setTiming(item)}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            </label>
-            <label>
-              Who can bid?
-              <select>
-                <option>Open to all vetted providers</option>
-                <option>Invite a provider</option>
-              </select>
-            </label>
           </>
         )}
         {step === 3 && (
@@ -1418,7 +1517,11 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             <div className="review-facts">
               <span>
                 <small>Budget</small>
-                <b>KES {Number(budget || 0).toLocaleString()}</b>
+                <b>
+                  {budget
+                    ? `KES ${Number(budget).toLocaleString()}`
+                    : "Open to quotes"}
+                </b>
               </span>
               <span>
                 <small>Location</small>
@@ -1426,7 +1529,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
               </span>
               <span>
                 <small>Timing</small>
-                <b>{timing}</b>
+                <b>{requestedDate || "Flexible"}</b>
               </span>
             </div>
             <div className="safe-note">
@@ -1455,11 +1558,14 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             </Button>
           )}
           <Button
+            disabled={submitting}
             onClick={() =>
-              step < 3 ? (setError(""), setStep(step + 1)) : postJob()
+              step < 3
+                ? (setError(""), setStep(step + 1))
+                : void postJob()
             }
           >
-            {step < 3 ? "Continue" : "Post job"}
+            {step < 3 ? "Continue" : submitting ? "Posting…" : "Post job"}
           </Button>
         </div>
       </div>
@@ -1468,53 +1574,132 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
 }
 
 function Bids({ go }: { go: (s: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
-  const job =
-    store.jobs.find((item) => item.id === store.selectedJobId) ?? store.jobs[0]
-  const selected = store.selectedBid
+  const { store } = useDemoStore()
+  const auth = useAuth()
+  const {
+    jobs,
+    loading: jobsLoading,
+    error: jobsError,
+    refresh: refreshJobs,
+  } =
+    useMarketplaceJobs("consumer")
+  const selectedJob =
+    jobs.find((item) => item.id === store.selectedJobId) ?? jobs[0]
+  const {
+    job,
+    quotes,
+    loading,
+    error: jobError,
+    refresh,
+  } = useMarketplaceJobData(selectedJob?.id, "consumer")
+  const [selectedQuoteId, setSelectedQuoteId] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [accepting, setAccepting] = useState(false)
+  const selectedQuote =
+    quotes.find((quote) => quote.id === selectedQuoteId) ?? quotes[0]
+
+  useEffect(() => {
+    if (quotes.length && !quotes.some((quote) => quote.id === selectedQuoteId)) {
+      setSelectedQuoteId(quotes[0].id)
+    }
+  }, [quotes, selectedQuoteId])
+
+  const acceptQuote = async () => {
+    if (!job || !selectedQuote) return
+    setAccepting(true)
+    setActionError("")
+    try {
+      setSelectedQuoteId(selectedQuote.id)
+      await auth.acceptMarketplaceQuote(job.id, selectedQuote.id)
+      await refresh()
+    } catch (requestError) {
+      setActionError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t accept this quote. Please try again.",
+      )
+    } finally {
+      setAccepting(false)
+    }
+  }
+
+  if (jobsLoading || (selectedJob && loading)) {
+    return <p className="center-note">Loading your saved job and quotes…</p>
+  }
+
+  if (jobsError || jobError) {
+    return (
+      <div className="content">
+        <PageHeader title="Your quotes" description="Live marketplace data." />
+        <p className="form-error" role="alert">
+          {jobsError || jobError}
+        </p>
+        <Button
+          onClick={() =>
+            jobsError ? void refreshJobs() : void refresh()
+          }
+        >
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  if (!job) {
+    return (
+      <div className="content">
+        <PageHeader title="Your quotes" description="Quotes for your posted jobs." />
+        <EmptyState
+          title="Post a job to receive quotes"
+          detail="New job requests and provider quotes are saved to your account."
+          action={() => go("post")}
+          actionLabel="Post a job"
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="content">
       <PageHeader
-        eyebrow={`${job.bids.length} bids · Job #${job.id}`}
+        eyebrow={`${quotes.length} quotes · Job ${job.id.slice(0, 8)}`}
         title="Choose the right provider"
         description={job.title}
       />
       <div className="bid-layout">
         <div className="bid-list">
-          {job.bids.map((bid) => (
+          {quotes.map((quote) => (
             <button
               className={`bid-card ${
-                selected.provider === bid.provider ? "selected" : ""
+                selectedQuote?.id === quote.id ? "selected" : ""
               }`}
-              onClick={() => updateStore({ selectedBid: bid })}
-              key={bid.provider}
+              onClick={() => setSelectedQuoteId(quote.id)}
+              key={quote.id}
             >
               <div className="bid-person">
-                <Avatar
-                  src={
-                    bid.provider === "Amina Hassan"
-                      ? photos.amina
-                      : bid.provider === "Grace Wairimu"
-                        ? photos.wanjiku
-                        : photos.work
-                  }
-                  name={bid.provider}
-                />
+                <Avatar name={quote.providerName} />
                 <div>
-                  <strong>{bid.provider}</strong>
-                  <span className="rating">★ 4.9 · {bid.trust}% trust</span>
+                  <strong>{quote.providerName}</strong>
+                  <span className="rating">
+                    {quote.status === "accepted" ? "Selected provider" : "Provider quote"}
+                  </span>
                 </div>
-                <Badge>Verified</Badge>
+                <Badge>{quote.status}</Badge>
               </div>
-              <p>{bid.pitch}</p>
+              <p>{quote.message}</p>
               <div className="bid-bottom">
                 <span>
                   <small>Quote</small>
-                  <b>KES {bid.price.toLocaleString()}</b>
+                  <b>
+                    KES {(quote.amountMinor / 100).toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </b>
                 </span>
                 <span>
-                  <small>Timing</small>
-                  <b>{bid.timing}</b>
+                  <small>Availability</small>
+                  <b>{quote.availability}</b>
                 </span>
                 <span className="select-circle">
                   <Icon name="check" size={16} />
@@ -1524,29 +1709,43 @@ function Bids({ go }: { go: (s: Screen) => void }) {
           ))}
         </div>
         <aside className="summary-card">
-          <h2>Your selection</h2>
-          <div className="selected-person">
-            <Avatar
-              src={
-                selected.provider === "Amina Hassan"
-                  ? photos.amina
-                  : selected.provider === "Grace Wairimu"
-                    ? photos.wanjiku
-                    : photos.work
-              }
-              name={selected.provider}
-            />
-            <span>
-              <strong>{selected.provider}</strong>
-              <small>OddJobs Certified · {selected.trust}% trust</small>
-            </span>
-          </div>
-          <div className="summary-line">
-            <span>Provider quote</span>
-            <strong>KES {selected.price.toLocaleString()}</strong>
-          </div>
-          <p>Review the fee breakdown before paying safely with M-Pesa.</p>
-          <Button onClick={() => go("checkout")}>Hire & pay safely</Button>
+          <h2>{job.status === "open" ? "Your selection" : "Job status"}</h2>
+          {selectedQuote ? (
+            <>
+              <div className="selected-person">
+                <Avatar name={selectedQuote.providerName} />
+                <span>
+                  <strong>{selectedQuote.providerName}</strong>
+                  <small>{selectedQuote.availability}</small>
+                </span>
+              </div>
+              <div className="summary-line">
+                <span>Provider quote</span>
+                <strong>
+                  KES {(selectedQuote.amountMinor / 100).toLocaleString()}
+                </strong>
+              </div>
+              {job.status === "open" && selectedQuote.status === "submitted" && (
+                <Button disabled={accepting} onClick={() => void acceptQuote()}>
+                  {accepting ? "Accepting…" : "Accept quote"}
+                </Button>
+              )}
+              {job.status === "awarded" && (
+                <p role="status">A provider has been selected for this job.</p>
+              )}
+            </>
+          ) : (
+            <p>No provider quotes yet. New quotes will appear here automatically.</p>
+          )}
+          <p>
+            Payments are disabled. Accepting a quote does not charge or transfer
+            money.
+          </p>
+          {(jobError || actionError) && (
+            <p className="form-error" role="alert">
+              {actionError || jobError}
+            </p>
+          )}
         </aside>
       </div>
     </div>
@@ -1554,109 +1753,20 @@ function Bids({ go }: { go: (s: Screen) => void }) {
 }
 
 function Checkout({ go }: { go: (s: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
-  const [paid, setPaid] = useState(false)
-  const job =
-    store.jobs.find((item) => item.id === store.selectedJobId) ?? store.jobs[0]
-  const bid = store.selectedBid
-  const fee = Math.round(bid.price * 0.1)
-  const confirmDemoPayment = () => {
-    setPaid(true)
-    updateStore((current) => ({
-      ...current,
-      jobs: current.jobs.map((item) =>
-        item.id === current.selectedJobId
-          ? { ...item, status: "Active" }
-          : item,
-      ),
-      transactions: [
-        `Demo escrow · ${job.id} · KES ${(bid.price + fee).toLocaleString()}`,
-        ...current.transactions,
-      ],
-      notifications: [
-        `Demo payment secured for ${job.title}.`,
-        ...current.notifications,
-      ],
-    }))
-  }
   return (
     <div className="content narrow">
       <PageHeader
-        eyebrow="Demo checkout"
-        title={paid ? "Demo payment confirmed" : "Pay with M-Pesa"}
-        description={
-          paid
-            ? `${bid.provider} has been booked for ${bid.timing.toLowerCase()}.`
-            : "No real M-Pesa prompt is sent in this prototype."
-        }
+        eyebrow="Payments disabled"
+        title="Payment is not available yet"
+        description="No payment method will be charged and no demo payment will change a job’s status."
       />
       <div className="checkout-card">
-        {paid ? (
-          <div className="payment-success">
-            <span>
-              <Icon name="check" size={32} />
-            </span>
-            <h2>KES {(bid.price + fee).toLocaleString()} demo escrow</h2>
-            <p>Demo receipt for job #{job.id} · no money moved.</p>
-          </div>
-        ) : (
-          <>
-            <div className="booking-provider">
-              <Avatar
-                src={
-                  bid.provider === "Amina Hassan"
-                    ? photos.amina
-                    : bid.provider === "Grace Wairimu"
-                      ? photos.wanjiku
-                      : photos.work
-                }
-                name={bid.provider}
-              />
-              <div>
-                <strong>{job.title}</strong>
-                <span>
-                  {bid.provider} · {bid.timing}
-                </span>
-              </div>
-            </div>
-            <div className="fee-lines">
-              <span>
-                <label>Provider quote</label>
-                <b>KES {bid.price.toLocaleString()}</b>
-              </span>
-              <span>
-                <label>OddJobs protection fee (10%)</label>
-                <b>KES {fee.toLocaleString()}</b>
-              </span>
-              <span className="total">
-                <label>Total</label>
-                <b>KES {(bid.price + fee).toLocaleString()}</b>
-              </span>
-            </div>
-            <label>
-              M-Pesa phone number
-              <div className="phone-input">
-                <span>+254</span>
-                <input defaultValue="712 345 831" />
-              </div>
-            </label>
-            <div className="safe-note">
-              <Icon name="shield" />
-              <span>
-                <strong>Your money is held safely</strong> until you confirm the
-                job is done. Demo only—no real payment is processed.
-              </span>
-            </div>
-          </>
-        )}
-        <Button onClick={() => (paid ? go("track") : confirmDemoPayment())}>
-          {paid ? "Track your job" : "Simulate M-Pesa payment"}
-        </Button>
-        {!paid && (
-          <small className="center-note">
-            Demo only: no STK push will be sent.
-          </small>
-        )}
+        <p>
+          Customers can accept provider quotes without a payment. Payment
+          integration will be enabled only after a provider and settlement
+          safeguards are configured.
+        </p>
+        <Button onClick={() => go("jobs")}>Back to my jobs</Button>
       </div>
     </div>
   )
@@ -1941,9 +2051,37 @@ function DemoNotice({
 }
 
 function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
-  const [tab, setTab] = useState<DemoJob["status"]>("Open")
-  const jobsForTab = store.jobs.filter((job) => job.status === tab)
+  const { updateStore } = useDemoStore()
+  const auth = useAuth()
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("consumer")
+  const [tab, setTab] = useState<"open" | "active" | "completed">("open")
+  const [actionError, setActionError] = useState("")
+  const activeStatuses = ["awarded", "in_progress", "completion_pending"]
+  const jobsForTab = jobs.filter((job) =>
+    tab === "open"
+      ? job.status === "open"
+      : tab === "active"
+        ? activeStatuses.includes(job.status)
+        : ["completed", "cancelled", "disputed"].includes(job.status),
+  )
+
+  const transition = async (
+    jobId: string,
+    action: "confirm-completion" | "cancel",
+  ) => {
+    try {
+      setActionError("")
+      await auth.transitionMarketplaceJob(jobId, action)
+      await refresh()
+    } catch (requestError) {
+      setActionError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t update this job. Please try again.",
+      )
+    }
+  }
+
   return (
     <div className="content">
       <PageHeader
@@ -1952,62 +2090,92 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
         action={<Button onClick={() => go("post")}>Post a job</Button>}
       />
       <div className="filters">
-        {(["Open", "Active", "Completed"] as const).map((status) => (
+        {(["open", "active", "completed"] as const).map((status) => (
           <button
             className={tab === status ? "active" : ""}
             key={status}
             onClick={() => setTab(status)}
           >
-            {status} ·{" "}
-            {store.jobs.filter((job) => job.status === status).length}
+            {status[0].toUpperCase() + status.slice(1)} ·{" "}
+            {jobs.filter((job) =>
+              status === "open"
+                ? job.status === "open"
+                : status === "active"
+                  ? activeStatuses.includes(job.status)
+                  : ["completed", "cancelled", "disputed"].includes(job.status),
+            ).length}
           </button>
         ))}
       </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+          <Button variant="ghost" onClick={() => void refresh()}>
+            Retry
+          </Button>
+        </p>
+      )}
+      {actionError && (
+        <p className="form-error" role="alert">
+          {actionError}
+        </p>
+      )}
       <div className="job-list">
-        {jobsForTab.map((job) => (
+        {!loading && jobsForTab.map((job) => (
           <section className="card job-summary" key={job.id}>
-            <Badge>{job.status}</Badge>
+            <Badge>{job.status.replaceAll("_", " ")}</Badge>
             <h2>{job.title}</h2>
             <p>
-              {job.category} · {job.location} · KES{" "}
-              {job.budget.toLocaleString()}
+              {job.category} · {job.locationLabel}
+              {job.budgetMinor !== null &&
+                ` · KES ${(job.budgetMinor / 100).toLocaleString()}`}
             </p>
+            <p>{job.quoteCount} quotes · Job {job.id.slice(0, 8)}</p>
             <div className="card-actions">
-              <Button
-                onClick={() => {
-                  updateStore({
-                    selectedJobId: job.id,
-                    selectedBid: job.bids[0] ?? store.selectedBid,
-                  })
-                  if (job.status === "Open") go("bids")
-                  else if (job.status === "Active") go("track")
-                  else go("history")
-                }}
-              >
-                {job.status === "Open"
-                  ? `${job.bids.length} bids · Compare`
-                  : job.status === "Active"
-                    ? "Track job"
-                    : "View history"}
-              </Button>
-              {job.status === "Open" && (
+              {job.status === "open" && (
+                <Button
+                  onClick={() => {
+                    updateStore({ selectedJobId: job.id })
+                    go("bids")
+                  }}
+                >
+                  {job.quoteCount} quotes · Compare
+                </Button>
+              )}
+              {job.status === "awarded" && (
                 <Button
                   variant="secondary"
                   onClick={() => {
                     updateStore({ selectedJobId: job.id })
-                    go("post")
+                    go("bids")
                   }}
                 >
-                  Edit as new job
+                  View selected provider
+                </Button>
+              )}
+              {job.status === "completion_pending" && (
+                <Button
+                  onClick={() => void transition(job.id, "confirm-completion")}
+                >
+                  Confirm completion
+                </Button>
+              )}
+              {job.status === "open" && (
+                <Button
+                  variant="ghost"
+                  onClick={() => void transition(job.id, "cancel")}
+                >
+                  Cancel job
                 </Button>
               )}
             </div>
           </section>
         ))}
-        {!jobsForTab.length && (
+        {loading && <p className="center-note">Loading your jobs…</p>}
+        {!loading && !error && !jobsForTab.length && (
           <EmptyState
-            title={`No ${tab.toLowerCase()} jobs yet`}
-            detail="Jobs you post and complete will appear here."
+            title={`No ${tab} jobs yet`}
+            detail="Jobs posted from your account will appear here and update live."
             action={() => go("post")}
             actionLabel="Post your first job"
           />
@@ -2485,7 +2653,7 @@ function JobCard({ job, onClick }: JobCardProps) {
     <button className="job-card" onClick={onClick}>
       <div>
         <Badge>{job[3]}</Badge>
-        <span>Posted 8 min ago</span>
+        <span>Open job</span>
       </div>
       <h3>{job[0]}</h3>
       <p>
@@ -2499,32 +2667,33 @@ function JobCard({ job, onClick }: JobCardProps) {
 }
 
 function JobFeed({ go }: { go: (screen: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
-  const available = store.jobs.filter((job) => job.status === "Open")
+  const { updateStore } = useDemoStore()
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("feed")
   return (
     <div className="content">
       <PageHeader
         title="Jobs matched to you"
-        description="Fresh opportunities around Nairobi"
+        description="Open customer jobs from the marketplace."
       />
-      <div className="filters">
-        <button className="active">Best match</button>
-        <button>Within 5 km</button>
-        <button>Today</button>
-        <button>KES 2k+</button>
-      </div>
-      <DemoNotice>
-        Sample Nairobi opportunities are stored locally for this prototype.
-      </DemoNotice>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+          <Button variant="ghost" onClick={() => void refresh()}>
+            Retry
+          </Button>
+        </p>
+      )}
       <div className="job-feed">
-        {available.map((job) => (
+        {jobs.map((job) => (
           <JobCard
             key={job.id}
             job={[
               job.title,
-              job.location,
-              `KES ${job.budget.toLocaleString()}`,
-              `${job.bids.length} bids`,
+              job.locationLabel,
+              job.budgetMinor === null
+                ? "Open budget"
+                : `KES ${(job.budgetMinor / 100).toLocaleString()}`,
+              `${job.quoteCount} quotes`,
             ]}
             onClick={() => {
               updateStore({ selectedJobId: job.id })
@@ -2533,10 +2702,11 @@ function JobFeed({ go }: { go: (screen: Screen) => void }) {
           />
         ))}
       </div>
-      {!available.length && (
+      {loading && <p className="center-note">Loading open jobs…</p>}
+      {!loading && !error && !jobs.length && (
         <EmptyState
           title="No open jobs right now"
-          detail="New customer jobs will appear in your feed."
+          detail="New customer jobs will appear here and update live."
         />
       )}
     </div>
@@ -2697,102 +2867,146 @@ function ProviderVerification() {
 }
 
 function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
-  const job =
-    store.jobs.find((item) => item.id === store.selectedJobId) ?? store.jobs[0]
-  const [price, setPrice] = useState(String(job.budget))
-  const [timing, setTiming] = useState("Tomorrow morning")
+  const { store } = useDemoStore()
+  const auth = useAuth()
+  const { job, quotes, loading, error, refresh } = useMarketplaceJobData(
+    store.selectedJobId,
+    "provider",
+  )
+  const [price, setPrice] = useState("")
+  const [timing, setTiming] = useState("")
   const [pitch, setPitch] = useState(
-    "I can complete this work carefully and bring the required supplies.",
+    "",
   )
   const [message, setMessage] = useState("")
-  const submitBid = () => {
+  const [submitting, setSubmitting] = useState(false)
+  const ownQuote = quotes[0]
+
+  useEffect(() => {
+    if (!price && job?.budgetMinor !== null && job?.budgetMinor !== undefined) {
+      setPrice(String(job.budgetMinor / 100))
+    }
+  }, [job, price])
+
+  const submitQuote = async () => {
     const amount = Number(price)
-    if (!Number.isFinite(amount) || amount <= 0 || !pitch.trim()) {
+    if (
+      !job ||
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      Math.round(amount * 100) < 1 ||
+      !Number.isSafeInteger(Math.round(amount * 100)) ||
+      !pitch.trim() ||
+      !timing.trim()
+    ) {
       setMessage("Enter a valid quote and a short message.")
       return
     }
-    const bid: DemoBid = {
-      provider: "Otieno Demo",
-      price: amount,
-      timing,
-      pitch: pitch.trim(),
-      trust: 90,
+    setSubmitting(true)
+    try {
+      await auth.submitMarketplaceQuote(job.id, {
+        amountMinor: Math.round(amount * 100),
+        availability: timing.trim(),
+        message: pitch.trim(),
+      })
+      setMessage("Your quote was sent to the customer.")
+      await refresh()
+    } catch (requestError) {
+      setMessage(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t submit your quote. Please try again.",
+      )
+    } finally {
+      setSubmitting(false)
     }
-    updateStore((current) => ({
-      ...current,
-      jobs: current.jobs.map((item) =>
-        item.id === job.id
-          ? {
-              ...item,
-              bids: [
-                ...item.bids.filter(
-                  (existing) => existing.provider !== bid.provider,
-                ),
-                bid,
-              ],
-            }
-          : item,
-      ),
-      notifications: [
-        `Your demo quote was added to ${job.title}.`,
-        ...current.notifications,
-      ],
-    }))
-    setMessage("Demo bid added to this job.")
   }
+
+  if (loading) return <p className="center-note">Loading job details…</p>
+
+  if (error || !job) {
+    return (
+      <div className="content narrow">
+        <PageHeader title="Job details" description="Live marketplace data." />
+        <p className={error ? "form-error" : "caption"} role={error ? "alert" : undefined}>
+          {error || "Select an open job from the provider feed."}
+        </p>
+        <Button onClick={() => go("feed")}>Back to job feed</Button>
+      </div>
+    )
+  }
+
   return (
     <div className="content narrow">
       <PageHeader
-        eyebrow={`Job #${job.id}`}
+        eyebrow={`Job ${job.id.slice(0, 8)}`}
         title={job.title}
-        description={`${job.category} · ${job.location} · Budget up to KES ${job.budget.toLocaleString()}`}
+        description={`${job.category} · ${job.locationLabel}${
+          job.budgetMinor === null
+            ? ""
+            : ` · Budget up to KES ${(job.budgetMinor / 100).toLocaleString()}`
+        }`}
       />
       <section className="card">
         <p>{job.description}</p>
         <p className="caption">
-          Customer timing: {job.timing} · {job.bids.length} bids received
+          {job.quoteCount} quotes received
         </p>
-        <div className="form-card">
-          <label>
-            Your quote (KES)
-            <input
-              inputMode="numeric"
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-            />
-          </label>
-          <label>
-            When can you start?
-            <select
-              value={timing}
-              onChange={(event) => setTiming(event.target.value)}
-            >
-              <option>Today after 2pm</option>
-              <option>Tomorrow morning</option>
-              <option>Within a week</option>
-            </select>
-          </label>
-          <label>
-            Message
-            <textarea
-              rows={4}
-              value={pitch}
-              onChange={(event) => setPitch(event.target.value)}
-            />
-          </label>
-          <label className="upload">
-            <Icon name="plus" />
-            <span>
-              Add quote attachments
-              <input type="file" accept="image/*,.pdf" multiple />
-            </span>
-          </label>
-          <Button onClick={submitBid}>Submit demo bid</Button>
-          {message && <DemoNotice>{message}</DemoNotice>}
-        </div>
-        <Button variant="ghost" onClick={() => go("chat")}>
-          Open job conversation
+        {ownQuote ? (
+          <div className="form-card">
+            <Badge>{ownQuote.status}</Badge>
+            <h2>Your quote</h2>
+            <p>{ownQuote.message}</p>
+            <p>
+              KES {(ownQuote.amountMinor / 100).toLocaleString()} ·{" "}
+              {ownQuote.availability}
+            </p>
+          </div>
+        ) : job.status !== "open" ? (
+          <p className="caption">This job is no longer accepting quotes.</p>
+        ) : (
+          <div className="form-card">
+            <label>
+              Your quote (KES)
+              <input
+                inputMode="decimal"
+                value={price}
+                onChange={(event) => setPrice(event.target.value)}
+                placeholder="Enter your price"
+              />
+            </label>
+            <label>
+              When can you start?
+              <input
+                value={timing}
+                onChange={(event) => setTiming(event.target.value)}
+                placeholder="For example, tomorrow morning"
+              />
+            </label>
+            <label>
+              Message to the customer
+              <textarea
+                rows={4}
+                value={pitch}
+                onChange={(event) => setPitch(event.target.value)}
+                placeholder="Explain how you will complete the work."
+              />
+            </label>
+            <Button disabled={submitting} onClick={() => void submitQuote()}>
+              {submitting ? "Sending…" : "Submit quote"}
+            </Button>
+            {message && (
+              <p className={message.startsWith("Your quote") ? "" : "form-error"} role="status">
+                {message}
+              </p>
+            )}
+          </div>
+        )}
+        <p className="caption">
+          Job messaging and file attachments are not enabled in this phase.
+        </p>
+        <Button variant="ghost" onClick={() => go("feed")}>
+          Back to job feed
         </Button>
       </section>
     </div>
@@ -2800,65 +3014,75 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
 }
 
 function JobManagement({ go }: { go: (screen: Screen) => void }) {
-  const { store, updateStore } = useDemoStore()
-  const advance = (job: DemoJob) => {
-    const status: DemoJob["status"] =
-      job.status === "Open"
-        ? "Active"
-        : job.status === "Active"
-          ? "Completed"
-          : "Completed"
-    updateStore({
-      jobs: store.jobs.map((item) =>
-        item.id === job.id ? { ...item, status } : item,
-      ),
-      notifications: [
-        `${job.title} marked ${status.toLowerCase()} in the demo.`,
-        ...store.notifications,
-      ],
-    })
+  const auth = useAuth()
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("provider")
+  const [actionError, setActionError] = useState("")
+  const transition = async (
+    jobId: string,
+    action: "start" | "submit-completion",
+  ) => {
+    try {
+      setActionError("")
+      await auth.transitionMarketplaceJob(jobId, action)
+      await refresh()
+    } catch (requestError) {
+      setActionError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldn’t update this job. Please try again.",
+      )
+    }
   }
   return (
     <div className="content">
       <PageHeader
         title="My jobs"
-        description="Manage your demo bookings and job progress."
+        description="Manage jobs awarded to you by customers."
       />
-      <DemoNotice>
-        Job states update locally; customer and provider workspaces share this
-        demo data.
-      </DemoNotice>
+      {(error || actionError) && (
+        <p className="form-error" role="alert">
+          {actionError || error}
+        </p>
+      )}
       <div className="job-list">
-        {store.jobs.map((job) => (
+        {jobs.map((job) => (
           <section className="card job-summary" key={job.id}>
-            <Badge>{job.status}</Badge>
+            <Badge>{job.status.replaceAll("_", " ")}</Badge>
             <h2>{job.title}</h2>
             <p>
-              {job.location} · {job.bids.length} bids
+              {job.locationLabel} · Job {job.id.slice(0, 8)}
             </p>
             <div className="card-actions">
-              <Button onClick={() => advance(job)}>
-                {job.status === "Open"
-                  ? "Accept demo job"
-                  : job.status === "Active"
-                    ? "Mark demo work complete"
-                    : "Completed"}
-              </Button>
-              {job.status === "Active" && (
-                <Button variant="secondary" onClick={() => go("chat")}>
-                  Message customer
+              {job.status === "awarded" && (
+                <Button onClick={() => void transition(job.id, "start")}>
+                  Start work
                 </Button>
               )}
-              <label className="upload">
-                <Icon name="plus" />
-                <span>
-                  Upload proof of work
-                  <input type="file" accept="image/*" multiple />
-                </span>
-              </label>
+              {job.status === "in_progress" && (
+                <Button
+                  onClick={() => void transition(job.id, "submit-completion")}
+                >
+                  Submit completion
+                </Button>
+              )}
+              {job.status === "completion_pending" && (
+                <p className="caption">Waiting for the customer to confirm completion.</p>
+              )}
+              {job.status === "completed" && (
+                <p className="caption">The customer confirmed this job complete.</p>
+              )}
             </div>
           </section>
         ))}
+        {loading && <p className="center-note">Loading your awarded jobs…</p>}
+        {!loading && !error && !jobs.length && (
+          <EmptyState
+            title="No jobs awarded yet"
+            detail="When a customer accepts your quote, the job will appear here."
+            action={() => go("feed")}
+            actionLabel="Browse open jobs"
+          />
+        )}
       </div>
     </div>
   )
@@ -3604,7 +3828,7 @@ function Verification() {
               Decision note (required to reject)
               <input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
             </label>
-            <Button disabled={saving} onClick={() => void decide("verified")}>{saving ? "Saving…" : "Approve status"}</Button>
+            <Button disabled={saving} onClick={() => void decide("verified")}>{saving ? "Saving…" : "Approve provider access"}</Button>
             <Button variant="danger" disabled={saving || !reason.trim()} onClick={() => void decide("rejected")}>Reject</Button>
           </div>
         )}
@@ -3615,8 +3839,9 @@ function Verification() {
         </div>
       </section>
       <DemoNotice>
-        Decisions update provider profile status only; they do not grant the
-        provider role. Identity-document evidence is not stored or reviewed.
+        Approval grants the provider role for this service application.
+        Identity-document evidence is not collected or reviewed, so approval is
+        not proof of identity.
       </DemoNotice>
     </div>
   )
@@ -4648,6 +4873,7 @@ function AppShell() {
     getAuthenticatedRoute(window.location.pathname, []),
   )
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
   const [store, setStore] = useState<DemoStore>(readDemoStore)
   const [storageError, setStorageError] = useState("")
   const [online, setOnline] = useState(navigator.onLine)
@@ -4669,10 +4895,16 @@ function AppShell() {
         : nextRole
     const requestedScreen =
       permittedRole === nextRole ? nextScreen : roleHomes[permittedRole]
+    const allowedScreen =
+      permittedRole === "consumer" &&
+      requestedScreen === "post" &&
+      auth.profile?.roles.includes("provider")
+        ? "jobs"
+        : requestedScreen
     const nextRoute = {
       role: permittedRole,
-      screen: roleScreens[permittedRole].includes(requestedScreen)
-        ? requestedScreen
+      screen: roleScreens[permittedRole].includes(allowedScreen)
+        ? allowedScreen
         : roleHomes[permittedRole],
     }
     window.history.pushState(null, "", workspacePath(nextRoute))
@@ -4690,6 +4922,31 @@ function AppShell() {
       setStorageError("Your session could not be cleared. Please try again.")
     })
   }
+  const signOutAndReturnToLogin = async () => {
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      await auth.signOut()
+      setStorageError("")
+      setMobileMenuOpen(false)
+      const nextRoute: WorkspaceRoute = {
+        role: "consumer",
+        screen: "welcome",
+      }
+      window.history.replaceState(null, "", workspacePath(nextRoute))
+      setRoute(nextRoute)
+      window.scrollTo({ top: 0, behavior: "smooth" })
+    } catch (error) {
+      console.error("Unable to sign out of OddJobs.", error)
+      setStorageError(
+        error instanceof Error
+          ? error.message
+          : "Your session could not be cleared. Please try again.",
+      )
+    } finally {
+      setSigningOut(false)
+    }
+  }
   const goWelcome = () => {
     clearAuthSession()
     const nextRoute: WorkspaceRoute = { role: "consumer", screen: "welcome" }
@@ -4698,12 +4955,30 @@ function AppShell() {
     setMobileMenuOpen(false)
   }
   const goWorkspacePicker = () => {
+    if (!auth.profile) {
+      navigate("consumer", "workspace")
+      return
+    }
+
     void auth
-      .signOut()
-      .then(() => navigate("consumer", "workspace"))
+      .refreshProfile()
+      .then((profile) => {
+        const availableRoles =
+          profile?.roles.filter((candidate): candidate is Role =>
+            workspaceRoles.includes(candidate as Role),
+          ) ?? []
+        const pickerRole = availableRoles.includes(role)
+          ? role
+          : (availableRoles[0] ?? role)
+        const nextRoute = { role: pickerRole, screen: "workspace" as const }
+        window.history.pushState(null, "", workspacePath(nextRoute))
+        setRoute(nextRoute)
+        setMobileMenuOpen(false)
+        window.scrollTo({ top: 0, behavior: "smooth" })
+      })
       .catch((error: unknown) => {
-        console.error("Unable to switch OddJobs workspaces.", error)
-        setStorageError("Your session could not be cleared. Please try again.")
+        console.error("Unable to refresh available workspaces.", error)
+        setStorageError("Your workspaces could not be refreshed. Please try again.")
       })
   }
 
@@ -4724,10 +4999,18 @@ function AppShell() {
   useEffect(() => {
     if (auth.loading) return
     const syncRoute = () => {
-      const nextRoute = getAuthenticatedRoute(
+      let nextRoute = getAuthenticatedRoute(
         window.location.pathname,
         authenticatedRoles,
       )
+      if (
+        auth.supplierSignupPending &&
+        authenticatedRoles.includes("consumer") &&
+        nextRoute.role === "consumer" &&
+        nextRoute.screen !== "providerApply"
+      ) {
+        nextRoute = { role: "consumer", screen: "providerApply" }
+      }
       setRoute(nextRoute)
       const canonicalPath = workspacePath(nextRoute)
       if (window.location.pathname !== canonicalPath) {
@@ -4737,7 +5020,7 @@ function AppShell() {
     window.addEventListener("popstate", syncRoute)
     syncRoute()
     return () => window.removeEventListener("popstate", syncRoute)
-  }, [auth.loading, auth.profile])
+  }, [auth.loading, auth.profile, auth.supplierSignupPending])
 
   useEffect(() => {
     try {
@@ -4799,12 +5082,62 @@ function AppShell() {
   const renderScreen = () => {
     switch (screen) {
       case "welcome":
-      case "workspace":
         return null
+      case "workspace":
+        if (!auth.profile) return null
+        return (
+          <div className="content narrow">
+            <PageHeader
+              title="Choose a workspace"
+              description="Switch between the workspaces assigned to your account."
+            />
+            <section className="surface">
+              <div className="card-actions">
+                {authenticatedRoles.map((availableRole) => (
+                  <Button
+                    key={availableRole}
+                    variant={availableRole === role ? "secondary" : "primary"}
+                    onClick={() =>
+                      navigate(availableRole, roleHomes[availableRole])
+                    }
+                  >
+                    {workspaceLabels[availableRole]}
+                  </Button>
+                ))}
+                {authenticatedRoles.includes("consumer") &&
+                  !authenticatedRoles.includes("provider") && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => navigate("consumer", "providerApply")}
+                    >
+                      Apply to offer services
+                    </Button>
+                  )}
+              </div>
+              <p className="auth-terms">
+                Provider access is added only after an administrator approves
+                your service application. Workspace choices come from your
+                account roles.
+              </p>
+              <Button
+                variant="secondary"
+                icon="logout"
+                disabled={signingOut}
+                onClick={() => void signOutAndReturnToLogin()}
+              >
+                {signingOut ? "Signing out…" : "Sign out"}
+              </Button>
+            </section>
+          </div>
+        )
       case "providerApply":
         return (
           <ProviderApplicationScreen
-            onComplete={() => navigate("consumer", "home")}
+            onComplete={() =>
+              auth.profile?.roles.includes("provider")
+                ? navigate("provider", "providerHome")
+                : navigate("consumer", "home")
+            }
           />
         )
       case "home":
@@ -4816,7 +5149,19 @@ function AppShell() {
       case "profile":
         return <Profile go={go} />
       case "post":
-        return <PostJob go={go} />
+        return auth.profile?.roles.includes("provider") ? (
+          <div className="content narrow">
+            <PageHeader
+              title="Find work, not post jobs"
+              description="Service-provider accounts can browse open customer jobs and submit quotes."
+            />
+            <Button onClick={() => navigate("provider", "feed")}>
+              Browse open jobs
+            </Button>
+          </div>
+        ) : (
+          <PostJob go={go} />
+        )
       case "jobs":
         return <ConsumerJobs go={go} />
       case "bids":
@@ -4879,6 +5224,8 @@ function AppShell() {
         return <AdApprovals />
       case "audit":
         return <AuditLog />
+      case "operations":
+        return <MarketplaceOperations />
       case "config":
         return <Config />
       case "disputes":
@@ -4994,7 +5341,10 @@ function AppShell() {
               </nav>
               <button
                 className="mobile-drawer-language mobile-workspace-change"
-                onClick={goWorkspacePicker}
+                onClick={() => {
+                  setMobileMenuOpen(false)
+                  goWorkspacePicker()
+                }}
               >
                 <Icon name="users" />
                 <span>Change workspace</span>
@@ -5013,6 +5363,14 @@ function AppShell() {
                 <strong>
                   {store.language} / {store.language === "EN" ? "SW" : "EN"}
                 </strong>
+              </button>
+              <button
+                className="mobile-drawer-language mobile-sign-out"
+                disabled={signingOut}
+                onClick={() => void signOutAndReturnToLogin()}
+              >
+                <Icon name="logout" />
+                <span>{signingOut ? "Signing out…" : "Sign out"}</span>
               </button>
             </aside>
           </>
@@ -5034,7 +5392,14 @@ function AppShell() {
             {role === "consumer" ? "Your account" : `${role} workspace`}
           </div>
           <nav>
-            {navigation[role].map((n) => (
+            {navigation[role]
+              .filter(
+                (item) =>
+                  !(role === "consumer" &&
+                    item.screen === "post" &&
+                    auth.profile?.roles.includes("provider")),
+              )
+              .map((n) => (
               <button
                 key={n.screen}
                 className={screen === n.screen ? "active" : ""}
@@ -5079,6 +5444,13 @@ function AppShell() {
                         : "System config"}
               </span>
             </button>
+            <button
+              disabled={signingOut}
+              onClick={() => void signOutAndReturnToLogin()}
+            >
+              <Icon name="logout" />
+              <span>{signingOut ? "Signing out…" : "Sign out"}</span>
+            </button>
             <div className="support-mini">
               <Icon name="message" />
               <div>
@@ -5089,14 +5461,6 @@ function AppShell() {
           </div>
         </aside>
         <main className="main">
-          {auth.profile && (
-            <div className="content">
-              <DemoNotice>
-                Your account is signed in. Listings, jobs, messages, tracking,
-                and payments are still demo content; no service or funds move.
-              </DemoNotice>
-            </div>
-          )}
           {renderScreen()}
         </main>
       </div>

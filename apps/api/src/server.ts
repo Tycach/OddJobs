@@ -20,6 +20,7 @@ export async function startServer(): Promise<void> {
     authVerifier,
     profileStore: database,
     adminStore: database,
+    marketplaceStore: database,
   })
 
   try {

@@ -18,7 +18,10 @@ import { randomUUID } from "node:crypto"
 
 import { getHeapStatistics } from "node:v8"
 
-import { ModerationEnforcementError } from "./auth/types.js"
+import {
+  MarketplaceConflictError,
+  ModerationEnforcementError,
+} from "./auth/types.js"
 
 import type {
   AccessTokenVerifier,
@@ -31,6 +34,7 @@ import type {
   AdminVerificationSummary,
   AdminVerificationStatus,
   AuthenticatedPrincipal,
+  MarketplaceStore,
   ProviderApplicationInput,
   UserProfileStore,
 } from "./auth/types.js"
@@ -49,6 +53,8 @@ type BuildAppOptions = {
   profileStore?: UserProfileStore | null
 
   adminStore?: AdminStore | null
+
+  marketplaceStore?: MarketplaceStore | null
 
   logger?: boolean
 }
@@ -97,6 +103,8 @@ export async function buildApp({
   profileStore = null,
 
   adminStore = null,
+
+  marketplaceStore = null,
 
   logger,
 }: BuildAppOptions): Promise<FastifyInstance> {
@@ -176,6 +184,8 @@ export async function buildApp({
         { name: "health", description: "Service health and readiness" },
 
         { name: "identity", description: "Authenticated account profile" },
+
+        { name: "marketplace", description: "Persistent job and quote workflows" },
 
         { name: "admin", description: "Protected read-only administration" },
       ],
@@ -291,6 +301,549 @@ export async function buildApp({
         .send({ error: "Admin data storage is unavailable." })
     }
   }
+
+  const requireMarketplaceRole = (
+    ...allowedRoles: ("consumer" | "provider")[]
+  ) => async (request: FastifyRequest, reply: FastifyReply) => {
+    await requireAuth(request, reply)
+
+    if (reply.sent) return
+
+    if (!profileStore || !request.authPrincipal) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace authorization is unavailable." })
+    }
+
+    const profile = await profileStore.getProfile(request.authPrincipal.id)
+    if (
+        !profile ||
+        profile.status !== "active" ||
+        !allowedRoles.some((role) => profile.roles.includes(role))
+    ) {
+        return reply
+          .code(403)
+          .send({ error: "An active consumer or provider role is required." })
+    }
+  }
+
+  const requireJobPoster = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
+    await requireMarketplaceRole("consumer")(request, reply)
+    if (reply.sent || !request.authPrincipal || !profileStore) return
+
+    const profile = await profileStore.getProfile(request.authPrincipal.id)
+    if (profile?.roles.includes("provider")) {
+      return reply
+        .code(403)
+        .send({ error: "Service providers cannot post marketplace jobs." })
+    }
+  }
+
+  const marketplacePathParamsSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["jobId"],
+    properties: {
+        jobId: { type: "string", format: "uuid" },
+        quoteId: { type: "string", format: "uuid" },
+    },
+  } as const
+
+  const marketplaceErrorSchema = {
+    type: "object",
+    required: ["error"],
+    properties: { error: { type: "string" } },
+  } as const
+
+  const marketplaceJobInputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "description", "category", "locationLabel"],
+    properties: {
+        title: { type: "string", minLength: 1, maxLength: 160 },
+        description: { type: "string", minLength: 1, maxLength: 5000 },
+        category: { type: "string", minLength: 1, maxLength: 80 },
+        locationLabel: { type: "string", minLength: 1, maxLength: 160 },
+        budgetMinor: {
+          anyOf: [
+            { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+            { type: "null" },
+          ],
+        },
+        requestedFor: {
+          anyOf: [
+            { type: "string", format: "date-time" },
+            { type: "null" },
+          ],
+        },
+    },
+  } as const
+
+  const marketplaceQuoteInputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["amountMinor", "message", "availability"],
+    properties: {
+        amountMinor: {
+          type: "integer",
+          minimum: 1,
+          maximum: Number.MAX_SAFE_INTEGER,
+        },
+        message: { type: "string", minLength: 1, maxLength: 2000 },
+        availability: { type: "string", minLength: 1, maxLength: 120 },
+    },
+  } as const
+
+  const marketplaceJobsQuerySchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+        view: {
+          type: "string",
+          enum: ["consumer", "provider", "feed"],
+          default: "consumer",
+        },
+    },
+  } as const
+
+  const marketplaceJobResponseSchema = {
+    type: "object",
+    required: [
+      "id",
+      "customerId",
+      "title",
+      "description",
+      "category",
+      "locationLabel",
+      "budgetMinor",
+      "currency",
+      "status",
+      "requestedFor",
+      "createdAt",
+      "updatedAt",
+      "quoteCount",
+    ],
+    properties: {
+      id: { type: "string", format: "uuid" },
+      customerId: { type: "string", format: "uuid" },
+      title: { type: "string" },
+      description: { type: "string" },
+      category: { type: "string" },
+      locationLabel: { type: "string" },
+      budgetMinor: {
+        anyOf: [{ type: "integer" }, { type: "null" }],
+      },
+      currency: { type: "string" },
+      status: {
+        type: "string",
+        enum: [
+          "open",
+          "awarded",
+          "in_progress",
+          "completion_pending",
+          "completed",
+          "cancelled",
+          "disputed",
+        ],
+      },
+      requestedFor: { type: "string", format: "date-time", nullable: true },
+      createdAt: { type: "string", format: "date-time" },
+      updatedAt: { type: "string", format: "date-time" },
+      quoteCount: { type: "integer" },
+    },
+  } as const
+
+  const marketplaceQuoteResponseSchema = {
+    type: "object",
+    required: [
+      "id",
+      "jobId",
+      "providerId",
+      "providerName",
+      "amountMinor",
+      "currency",
+      "message",
+      "availability",
+      "status",
+      "createdAt",
+      "updatedAt",
+    ],
+    properties: {
+      id: { type: "string", format: "uuid" },
+      jobId: { type: "string", format: "uuid" },
+      providerId: { type: "string", format: "uuid" },
+      providerName: { type: "string" },
+      amountMinor: { type: "integer" },
+      currency: { type: "string" },
+      message: { type: "string" },
+      availability: { type: "string" },
+      status: {
+        type: "string",
+        enum: ["submitted", "accepted", "declined", "withdrawn", "expired"],
+      },
+      createdAt: { type: "string", format: "date-time" },
+      updatedAt: { type: "string", format: "date-time" },
+    },
+  } as const
+
+  const marketplaceRoleQuerySchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      role: { type: "string", enum: ["consumer", "provider"], default: "consumer" },
+    },
+  } as const
+
+  const quotePathParamsSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["jobId", "quoteId"],
+    properties: {
+      jobId: { type: "string", format: "uuid" },
+      quoteId: { type: "string", format: "uuid" },
+    },
+  } as const
+
+  app.get(
+    "/v1/jobs",
+    {
+      preHandler: requireMarketplaceRole("consumer", "provider"),
+      schema: {
+        tags: ["marketplace"],
+        summary: "List the caller's jobs or open provider opportunities.",
+        security: [{ bearerAuth: [] }],
+        querystring: marketplaceJobsQuerySchema,
+        response: {
+          200: { type: "array", items: marketplaceJobResponseSchema },
+          403: marketplaceErrorSchema,
+          503: marketplaceErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!marketplaceStore || !request.authPrincipal || !profileStore) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace data storage is unavailable." })
+      }
+
+      const { view } = request.query as {
+        view: "consumer" | "provider" | "feed"
+      }
+      const role = view === "consumer" ? "consumer" : "provider"
+      const profile = await profileStore.getProfile(request.authPrincipal.id)
+      if (!profile?.roles.includes(role)) {
+        return reply
+          .code(403)
+          .send({ error: `An active ${role} role is required.` })
+      }
+
+      reply.header("Cache-Control", "no-store")
+      return marketplaceStore.listJobs(
+        request.authPrincipal.id,
+        role,
+        view === "feed" ? "feed" : "mine",
+      )
+    },
+  )
+
+  app.post(
+    "/v1/jobs",
+    {
+      preHandler: requireJobPoster,
+      schema: {
+        tags: ["marketplace"],
+        summary: "Create a persistent customer job.",
+        security: [{ bearerAuth: [] }],
+        body: marketplaceJobInputSchema,
+        response: {
+          201: marketplaceJobResponseSchema,
+          400: marketplaceErrorSchema,
+          403: marketplaceErrorSchema,
+          503: marketplaceErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!marketplaceStore || !request.authPrincipal) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace data storage is unavailable." })
+      }
+
+      const input = request.body as {
+        title: string
+        description: string
+        category: string
+        locationLabel: string
+        budgetMinor?: number | null
+        requestedFor?: string
+      }
+      const job = await marketplaceStore.createJob(
+        request.authPrincipal.id,
+        {
+          ...input,
+          budgetMinor: input.budgetMinor ?? null,
+          requestedFor: input.requestedFor ?? null,
+        },
+        request.id,
+      )
+      reply.header("Cache-Control", "no-store")
+      return reply.code(201).send(job)
+    },
+  )
+
+  app.get(
+    "/v1/jobs/:jobId",
+    {
+      preHandler: requireMarketplaceRole("consumer", "provider"),
+      schema: {
+        tags: ["marketplace"],
+        summary: "Read a job visible to the selected workspace.",
+        security: [{ bearerAuth: [] }],
+        params: marketplacePathParamsSchema,
+        querystring: marketplaceRoleQuerySchema,
+        response: {
+          200: marketplaceJobResponseSchema,
+          403: marketplaceErrorSchema,
+          404: marketplaceErrorSchema,
+          503: marketplaceErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!marketplaceStore || !request.authPrincipal || !profileStore) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace data storage is unavailable." })
+      }
+
+      const { jobId } = request.params as { jobId: string }
+      const { role } = request.query as { role: "consumer" | "provider" }
+      const profile = await profileStore.getProfile(request.authPrincipal.id)
+      if (!profile?.roles.includes(role)) {
+        return reply
+          .code(403)
+          .send({ error: `An active ${role} role is required.` })
+      }
+
+      const job = await marketplaceStore.getJob(
+        request.authPrincipal.id,
+        role,
+        jobId,
+      )
+      if (!job) return reply.code(404).send({ error: "Job not found." })
+      reply.header("Cache-Control", "no-store")
+      return job
+    },
+  )
+
+  app.get(
+    "/v1/jobs/:jobId/quotes",
+    {
+      preHandler: requireMarketplaceRole("consumer", "provider"),
+      schema: {
+        tags: ["marketplace"],
+        summary: "List quotes visible to the selected workspace.",
+        security: [{ bearerAuth: [] }],
+        params: marketplacePathParamsSchema,
+        querystring: marketplaceRoleQuerySchema,
+        response: {
+          200: { type: "array", items: marketplaceQuoteResponseSchema },
+          403: marketplaceErrorSchema,
+          404: marketplaceErrorSchema,
+          503: marketplaceErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!marketplaceStore || !request.authPrincipal || !profileStore) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace data storage is unavailable." })
+      }
+
+      const { jobId } = request.params as { jobId: string }
+      const { role } = request.query as { role: "consumer" | "provider" }
+      const profile = await profileStore.getProfile(request.authPrincipal.id)
+      if (!profile?.roles.includes(role)) {
+        return reply
+          .code(403)
+          .send({ error: `An active ${role} role is required.` })
+      }
+
+      const quotes = await marketplaceStore.listQuotes(
+        request.authPrincipal.id,
+        role,
+        jobId,
+      )
+      if (!quotes) return reply.code(404).send({ error: "Job not found." })
+      reply.header("Cache-Control", "no-store")
+      return quotes
+    },
+  )
+
+  app.post(
+    "/v1/jobs/:jobId/quotes",
+    {
+      preHandler: requireMarketplaceRole("provider"),
+      schema: {
+        tags: ["marketplace"],
+        summary: "Submit a provider quote for an open job.",
+        security: [{ bearerAuth: [] }],
+        params: marketplacePathParamsSchema,
+        body: marketplaceQuoteInputSchema,
+        response: {
+          201: marketplaceQuoteResponseSchema,
+          404: marketplaceErrorSchema,
+          409: marketplaceErrorSchema,
+          503: marketplaceErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!marketplaceStore || !request.authPrincipal) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace data storage is unavailable." })
+      }
+
+      const { jobId } = request.params as { jobId: string }
+      try {
+        const quote = await marketplaceStore.submitQuote(
+          request.authPrincipal.id,
+          jobId,
+          request.body as {
+            amountMinor: number
+            message: string
+            availability: string
+          },
+          request.id,
+        )
+        if (!quote) return reply.code(404).send({ error: "Open job not found." })
+        reply.header("Cache-Control", "no-store")
+        return reply.code(201).send(quote)
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) {
+          return reply.code(409).send({ error: error.message })
+        }
+        throw error
+      }
+    },
+  )
+
+  app.post(
+    "/v1/jobs/:jobId/quotes/:quoteId/accept",
+    {
+      preHandler: requireMarketplaceRole("consumer"),
+      schema: {
+        tags: ["marketplace"],
+        summary: "Accept one quote and decline competing submitted quotes.",
+        security: [{ bearerAuth: [] }],
+        params: quotePathParamsSchema,
+        response: {
+          200: marketplaceJobResponseSchema,
+          404: marketplaceErrorSchema,
+          409: marketplaceErrorSchema,
+          503: marketplaceErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!marketplaceStore || !request.authPrincipal) {
+        return reply
+          .code(503)
+          .send({ error: "Marketplace data storage is unavailable." })
+      }
+
+      const { jobId, quoteId } = request.params as {
+        jobId: string
+        quoteId: string
+      }
+      try {
+        const job = await marketplaceStore.acceptQuote(
+          request.authPrincipal.id,
+          jobId,
+          quoteId,
+          request.id,
+        )
+        if (!job) return reply.code(404).send({ error: "Job not found." })
+        reply.header("Cache-Control", "no-store")
+        return job
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) {
+          return reply.code(409).send({ error: error.message })
+        }
+        throw error
+      }
+    },
+  )
+
+  const addJobTransitionRoute = (
+    path: string,
+    role: "consumer" | "provider",
+    transition: "start" | "submit_completion" | "confirm_completion" | "cancel",
+  ) => {
+    app.post(
+      path,
+      {
+        preHandler: requireMarketplaceRole(role),
+        schema: {
+          tags: ["marketplace"],
+          summary: `Apply the ${transition.replaceAll("_", " ")} job transition.`,
+          security: [{ bearerAuth: [] }],
+          params: marketplacePathParamsSchema,
+          response: {
+            200: marketplaceJobResponseSchema,
+            404: marketplaceErrorSchema,
+            409: marketplaceErrorSchema,
+            503: marketplaceErrorSchema,
+          },
+        },
+      },
+      async (request, reply) => {
+        if (!marketplaceStore || !request.authPrincipal) {
+          return reply
+            .code(503)
+            .send({ error: "Marketplace data storage is unavailable." })
+        }
+
+        const { jobId } = request.params as { jobId: string }
+        try {
+          const job = await marketplaceStore.transitionJob(
+            request.authPrincipal.id,
+            jobId,
+            transition,
+            request.id,
+          )
+          if (!job) return reply.code(404).send({ error: "Job not found." })
+          reply.header("Cache-Control", "no-store")
+          return job
+        } catch (error) {
+          if (error instanceof MarketplaceConflictError) {
+            return reply.code(409).send({ error: error.message })
+          }
+          throw error
+        }
+      },
+    )
+  }
+
+  addJobTransitionRoute("/v1/jobs/:jobId/start", "provider", "start")
+  addJobTransitionRoute(
+    "/v1/jobs/:jobId/submit-completion",
+    "provider",
+    "submit_completion",
+  )
+  addJobTransitionRoute(
+    "/v1/jobs/:jobId/confirm-completion",
+    "consumer",
+    "confirm_completion",
+  )
+  addJobTransitionRoute("/v1/jobs/:jobId/cancel", "consumer", "cancel")
 
   const adminPageQuerySchema = {
     type: "object",
@@ -1265,6 +1818,87 @@ export async function buildApp({
       reply.header("Cache-Control", "no-store")
 
       return adminStore.listAdminAuditEvents(limit, offset)
+    },
+  )
+
+  app.get(
+    "/v1/admin/marketplace/activity",
+    {
+      preHandler: requireAdmin,
+      schema: {
+        tags: ["admin"],
+        summary: "Read the paginated customer and provider marketplace activity timeline.",
+        security: [{ bearerAuth: [] }],
+        querystring: adminPageQuerySchema,
+        response: {
+          200: {
+            type: "object",
+            required: ["items", "total", "limit", "offset"],
+            properties: {
+              items: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "id",
+                    "actorUserId",
+                    "actorDisplayName",
+                    "actorRole",
+                    "action",
+                    "jobId",
+                    "quoteId",
+                    "metadata",
+                    "requestId",
+                    "createdAt",
+                  ],
+                  properties: {
+                    id: { type: "string", format: "uuid" },
+                    actorUserId: { type: "string", format: "uuid" },
+                    actorDisplayName: { type: "string" },
+                    actorRole: { type: "string", enum: ["consumer", "provider", "admin"] },
+                    action: { type: "string" },
+                    jobId: { type: "string", format: "uuid" },
+                    quoteId: { type: "string", format: "uuid", nullable: true },
+                    metadata: { type: "object", additionalProperties: true },
+                    requestId: { type: "string" },
+                    createdAt: { type: "string", format: "date-time" },
+                  },
+                },
+              },
+              total: { type: "integer" },
+              limit: { type: "integer" },
+              offset: { type: "integer" },
+            },
+          },
+          401: { type: "object", properties: { error: { type: "string" } } },
+          403: { type: "object", properties: { error: { type: "string" } } },
+          503: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{
+        Querystring: { limit: number; offset: number }
+      }>,
+      reply,
+    ) => {
+      if (!adminStore || !request.authPrincipal) {
+        return reply
+          .code(503)
+          .send({ error: "Admin data storage is unavailable." })
+      }
+
+      const { limit, offset } = request.query
+      await adminStore.recordAdminAuditEvent({
+        actorUserId: request.authPrincipal.id,
+        action: "admin.marketplace_activity.read",
+        targetType: "marketplace_activity_event",
+        targetId: null,
+        metadata: { limit, offset },
+        requestId: request.id,
+      })
+      reply.header("Cache-Control", "no-store")
+      return adminStore.listAdminMarketplaceActivity(limit, offset)
     },
   )
 

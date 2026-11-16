@@ -42,14 +42,15 @@ export default function ProviderApplicationScreen({
           <span className="badge badge-amber">Application received</span>
           <h1>
             {applicationStatus === "verified"
-              ? "Your supplier profile is verified"
+              ? "Your supplier application is approved"
               : applicationStatus === "rejected"
                 ? "Your previous application was not approved"
                 : "Your supplier profile is under review"}
           </h1>
           <p>
-            You can keep using OddJobs as a customer. Provider access is only
-            added after the team reviews your application.
+            {applicationStatus === "verified"
+              ? "Provider access is now enabled for your account."
+              : "You can keep using OddJobs as a customer while the team reviews your application."}
           </p>
           <button className="btn btn-primary" onClick={onComplete}>
             Continue to OddJobs

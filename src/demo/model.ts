@@ -45,6 +45,7 @@ export type Screen =
   | "moderation"
   | "adApprovals"
   | "audit"
+  | "operations"
   | "config"
   | "disputes"
   | "inbox"

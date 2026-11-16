@@ -21,6 +21,9 @@ import type {
   AdminVerificationStatus,
   AdminVerificationSummary,
   AuthenticatedPrincipal,
+  MarketplaceJob,
+  MarketplaceQuote,
+  MarketplaceStore,
   UserProfile,
   UserProfileStore,
 } from "../src/auth/types.js"
@@ -75,13 +78,45 @@ const adminProfile: UserProfile = {
   roles: ["admin"],
 }
 
+const providerPrincipal: AuthenticatedPrincipal = {
+  id: "2f8f6dd6-a9de-4569-9d0d-fc22a31d0140",
+  email: "provider@example.com",
+  phone: null,
+  displayName: "Provider",
+}
+
+const providerProfile: UserProfile = {
+  id: providerPrincipal.id,
+  displayName: "Provider",
+  status: "active",
+  roles: ["provider"],
+}
+
+const dualRolePrincipal: AuthenticatedPrincipal = {
+  id: "de9fdc52-bfa6-4f4a-9b5b-1ef755a2a531",
+  email: "dual@example.com",
+  phone: null,
+  displayName: "Dual role",
+}
+
+const dualRoleProfile: UserProfile = {
+  id: dualRolePrincipal.id,
+  displayName: "Dual role",
+  status: "active",
+  roles: ["consumer", "provider"],
+}
+
 const authVerifier: AccessTokenVerifier = {
   verify: async (token) =>
     token === "valid-token"
       ? principal
       : token === "admin-token"
         ? adminPrincipal
-        : null,
+        : token === "provider-token"
+          ? providerPrincipal
+          : token === "dual-role-token"
+            ? dualRolePrincipal
+          : null,
 }
 
 const profileStore: UserProfileStore = {
@@ -96,7 +131,11 @@ const profileStore: UserProfileStore = {
       ? profile
       : userId === adminPrincipal.id
         ? adminProfile
-        : null,
+        : userId === providerPrincipal.id
+          ? providerProfile
+          : userId === dualRolePrincipal.id
+            ? dualRoleProfile
+          : null,
 
   recordPolicyConsents: async (userId, termsVersion, privacyVersion) => {
     assert.equal(userId, principal.id)
@@ -128,6 +167,7 @@ const adminUsers: AdminUserSummary[] = [
 ]
 
 const adminEvents: AdminAuditEvent[] = []
+const providerRoleAssignments = new Set<string>()
 
 const adminVerifications: AdminVerificationSummary[] = [
   {
@@ -244,6 +284,8 @@ const adminStore: AdminStore = {
     if (!item || item.status !== "in_review") return null
 
     item.status = decision
+
+    if (decision === "verified") providerRoleAssignments.add(item.userId)
 
     adminEvents.unshift({
       actorUserId: input.actorUserId,
@@ -433,6 +475,13 @@ const adminStore: AdminStore = {
     offset,
   }),
 
+  listAdminMarketplaceActivity: async (limit, offset) => ({
+    items: [],
+    total: 0,
+    limit,
+    offset,
+  }),
+
   recordAdminAuditEvent: async (event) => {
     adminEvents.unshift({
       ...event,
@@ -442,6 +491,141 @@ const adminStore: AdminStore = {
       createdAt: "2026-11-09T12:00:00.000Z",
     })
   },
+}
+
+function createTestMarketplaceStore(): MarketplaceStore {
+  let job: MarketplaceJob | null = null
+  const quotes: MarketplaceQuote[] = []
+
+  return {
+    listJobs: async (userId, role, view) => {
+      if (!job) return []
+      if (role === "consumer" && view === "mine" && job.customerId === userId) {
+        return [job]
+      }
+      if (
+        role === "provider" &&
+        view === "feed" &&
+        job.status === "open" &&
+        job.customerId !== userId
+      ) {
+        return [job]
+      }
+      if (
+        role === "provider" &&
+        view === "mine" &&
+        quotes.some(
+          (quote) =>
+            quote.providerId === userId && quote.status === "accepted",
+        )
+      ) {
+        return [job]
+      }
+      return []
+    },
+    getJob: async (userId, role, jobId) => {
+      if (!job || job.id !== jobId) return null
+      return role === "consumer"
+        ? job.customerId === userId
+          ? job
+          : null
+        : job.status === "open" ||
+            quotes.some(
+              (quote) =>
+                quote.jobId === jobId && quote.providerId === userId,
+            )
+          ? job
+          : null
+    },
+    listQuotes: async (userId, role, jobId) => {
+      if (
+        !job ||
+        job.id !== jobId ||
+        (role === "consumer" && job.customerId !== userId)
+      ) {
+        return null
+      }
+      return quotes.filter(
+        (quote) =>
+          quote.jobId === jobId &&
+          (role === "consumer" || quote.providerId === userId),
+      )
+    },
+    createJob: async (userId, input) => {
+      const now = new Date().toISOString()
+      job = {
+        id: "c2cc0027-b466-45db-a190-c89f981e6328",
+        customerId: userId,
+        ...input,
+        budgetMinor: input.budgetMinor,
+        currency: "KES",
+        status: "open",
+        requestedFor: input.requestedFor ?? null,
+        createdAt: now,
+        updatedAt: now,
+        quoteCount: 0,
+      }
+      return job
+    },
+    submitQuote: async (userId, jobId, input) => {
+      if (
+        !job ||
+        job.id !== jobId ||
+        job.customerId === userId ||
+        job.status !== "open"
+      ) return null
+      const now = new Date().toISOString()
+      const quote: MarketplaceQuote = {
+        id: "f769f903-1091-4c84-9e2f-ae6139701d0f",
+        jobId,
+        providerId: userId,
+        providerName: providerProfile.displayName,
+        ...input,
+        currency: "KES",
+        status: "submitted",
+        createdAt: now,
+        updatedAt: now,
+      }
+      quotes.push(quote)
+      job.quoteCount = quotes.length
+      return quote
+    },
+    acceptQuote: async (userId, jobId, quoteId) => {
+      if (!job || job.id !== jobId || job.customerId !== userId) return null
+      const quote = quotes.find(
+        (item) => item.id === quoteId && item.status === "submitted",
+      )
+      if (job.status !== "open" || !quote) return null
+      job.status = "awarded"
+      quote.status = "accepted"
+      return job
+    },
+    transitionJob: async (userId, jobId, transition) => {
+      if (!job || job.id !== jobId) return null
+      if (transition === "start") {
+        if (
+          !quotes.some(
+            (quote) =>
+              quote.jobId === jobId &&
+              quote.providerId === userId &&
+              quote.status === "accepted",
+          )
+        ) {
+          return null
+        }
+        job.status = "in_progress"
+      } else if (transition === "submit_completion") {
+        job.status = "completion_pending"
+      } else if (transition === "confirm_completion") {
+        if (job.customerId !== userId) return null
+        job.status = "completed"
+      } else {
+        if (job.customerId !== userId) return null
+        job.status = "cancelled"
+      }
+      return job
+    },
+  }
 }
 
 test("liveness reports the process is running and returns a request ID", async () => {
@@ -586,6 +770,8 @@ test("OpenAPI describes the health endpoints", async () => {
   assert.ok(paths["/v1/admin/users"])
 
   assert.ok(paths["/v1/admin/audit"])
+
+  assert.ok(paths["/v1/admin/marketplace/activity"])
 
   assert.ok(paths["/v1/admin/overview"])
 
@@ -868,6 +1054,8 @@ test("verification decisions require a rejection reason and are audited", async 
   assert.equal(response.statusCode, 200)
 
   assert.equal(response.json().status, "verified")
+
+  assert.equal(providerRoleAssignments.has(principal.id), true)
 
   assert.equal(adminEvents[0]?.action, "admin.verification.verified")
 
@@ -1620,6 +1808,171 @@ test("supplier applications are rate limited", async () => {
 
   assert.ok(limited.headers["retry-after"])
 
+  await app.close()
+})
+
+test("marketplace job and quote workflows are persistent and role-scoped", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+    marketplaceStore: createTestMarketplaceStore(),
+  })
+
+  const unauthenticated = await app.inject({
+    method: "GET",
+    url: "/v1/jobs",
+  })
+  assert.equal(unauthenticated.statusCode, 401)
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/v1/jobs",
+    headers: { authorization: "Bearer valid-token" },
+    payload: {
+      title: "Repair a leaking tap",
+      description: "The kitchen tap is leaking and needs repair.",
+      category: "Plumbing",
+      locationLabel: "Nairobi",
+      budgetMinor: 250000,
+      requestedFor: null,
+    },
+  })
+  assert.equal(created.statusCode, 201)
+  const job = created.json() as MarketplaceJob
+  assert.equal(job.status, "open")
+  assert.equal(job.customerId, principal.id)
+
+  const providerFeed = await app.inject({
+    method: "GET",
+    url: "/v1/jobs?view=feed",
+    headers: { authorization: "Bearer provider-token" },
+  })
+  assert.equal(providerFeed.statusCode, 200)
+  assert.equal(providerFeed.json()[0].id, job.id)
+
+  const forbiddenView = await app.inject({
+    method: "GET",
+    url: "/v1/jobs?view=provider",
+    headers: { authorization: "Bearer valid-token" },
+  })
+  assert.equal(forbiddenView.statusCode, 403)
+
+  const submitted = await app.inject({
+    method: "POST",
+    url: `/v1/jobs/${job.id}/quotes`,
+    headers: { authorization: "Bearer provider-token" },
+    payload: {
+      amountMinor: 230000,
+      message: "I can repair the tap tomorrow morning.",
+      availability: "Tomorrow morning",
+    },
+  })
+  assert.equal(submitted.statusCode, 201)
+  const quote = submitted.json() as MarketplaceQuote
+
+  const customerQuotes = await app.inject({
+    method: "GET",
+    url: `/v1/jobs/${job.id}/quotes?role=consumer`,
+    headers: { authorization: "Bearer valid-token" },
+  })
+  assert.equal(customerQuotes.statusCode, 200)
+  assert.equal(customerQuotes.json()[0].providerId, providerPrincipal.id)
+
+  const accepted = await app.inject({
+    method: "POST",
+    url: `/v1/jobs/${job.id}/quotes/${quote.id}/accept`,
+    headers: { authorization: "Bearer valid-token" },
+  })
+  assert.equal(accepted.statusCode, 200)
+  assert.equal(accepted.json().status, "awarded")
+
+  const started = await app.inject({
+    method: "POST",
+    url: `/v1/jobs/${job.id}/start`,
+    headers: { authorization: "Bearer provider-token" },
+  })
+  assert.equal(started.statusCode, 200)
+  assert.equal(started.json().status, "in_progress")
+
+  const submittedCompletion = await app.inject({
+    method: "POST",
+    url: `/v1/jobs/${job.id}/submit-completion`,
+    headers: { authorization: "Bearer provider-token" },
+  })
+  assert.equal(submittedCompletion.statusCode, 200)
+  assert.equal(submittedCompletion.json().status, "completion_pending")
+
+  const completed = await app.inject({
+    method: "POST",
+    url: `/v1/jobs/${job.id}/confirm-completion`,
+    headers: { authorization: "Bearer valid-token" },
+  })
+  assert.equal(completed.statusCode, 200)
+  assert.equal(completed.json().status, "completed")
+
+  await app.close()
+})
+
+test("service providers cannot create jobs even when the account also has consumer access", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+    marketplaceStore: createTestMarketplaceStore(),
+  })
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/jobs",
+    headers: { authorization: "Bearer dual-role-token" },
+    payload: {
+      title: "Cleaning work",
+      description: "A job description long enough to be valid.",
+      category: "Cleaning",
+      locationLabel: "Nairobi",
+    },
+  })
+
+  assert.equal(response.statusCode, 403)
+  assert.match(response.json().error, /Service providers cannot post/)
+  await app.close()
+})
+
+test("marketplace activity is available to admins only and access is audited", async () => {
+  const app = await buildApp({
+    config,
+    database: null,
+    authVerifier,
+    profileStore,
+    adminStore,
+  })
+
+  const denied = await app.inject({
+    method: "GET",
+    url: "/v1/admin/marketplace/activity",
+    headers: { authorization: "Bearer valid-token" },
+  })
+  assert.equal(denied.statusCode, 403)
+
+  const allowed = await app.inject({
+    method: "GET",
+    url: "/v1/admin/marketplace/activity?limit=10",
+    headers: { authorization: "Bearer admin-token" },
+  })
+  assert.equal(allowed.statusCode, 200)
+  assert.deepEqual(allowed.json(), {
+    items: [],
+    total: 0,
+    limit: 10,
+    offset: 0,
+  })
+  assert.equal(
+    adminEvents[0]?.action,
+    "admin.marketplace_activity.read",
+  )
   await app.close()
 })
 

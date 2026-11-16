@@ -4,8 +4,11 @@ OddJobs is a mobile-first marketplace app in phased implementation. The shared
 orange-branded login experience supports Supabase password and OTP sign-in,
 customer registration, password recovery, and configured Google/Apple OAuth.
 Supplier applications are stored for review; they do not grant provider access.
-Service discovery, jobs, chat, tracking, and payments still use prototype
-content and are not production marketplace flows.
+The first live marketplace milestone persists customer jobs and provider quotes,
+supports quote acceptance and job completion, and refreshes the relevant
+consumer/provider screens through scoped Supabase Realtime subscriptions.
+Messaging, tracking, reviews, verification evidence, support/partner data, and
+payments remain prototype or unavailable features.
 
 ## Project Map
 
@@ -38,12 +41,14 @@ workspace-specific login paths do not need separate allowlist entries. Add
 `http://localhost:8443/` to Supabase Auth's Redirect URLs for local development
 and add the deployed web app root URL for production. The OAuth provider must
 also be enabled and configured with valid provider credentials in Supabase.
-Set `VITE_REQUIRE_EMAIL_VERIFICATION=false` for local testing while email
-confirmation remains dormant; flip it back to `true` when the project is ready
-for production email verification. In `apps/api/.env`, set the matching
-`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. The publishable key is designed
-for client use; never put database passwords or the Supabase secret key in
-Vite.
+Supabase controls whether a new email account needs confirmation. When signup
+returns no session, the app clearly asks the user to verify their email before
+signing in. To skip email confirmation in a local-only Supabase project, disable
+email confirmation in that project's Auth settings; never do this in production.
+A frontend environment flag cannot bypass Supabase confirmation. In
+`apps/api/.env`, set the matching `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY`. The publishable key is designed for client use;
+never put database passwords or the Supabase secret key in Vite.
 
 Password recovery redirects to `/consumer/login` and requires the web app URL
 to be allowed by the Supabase Auth redirect URL settings. Supplier applications
@@ -79,10 +84,11 @@ screens still display sample content, partly persisted in browser
 escrow, uploads, exports, moderation actions, and live tracking remain
 simulated. Do not enter real identity documents or payment information.
 
-Production use requires a trusted backend to authenticate users and enforce
-role-based permissions on every protected operation. Payment credentials and
-payment/escrow operations must remain server-side and use a verified payment
-provider integration. Add server-side validation, secure session and CSRF
-protections where applicable, rate limits, audit logging, and privacy-safe
-retention before handling real user data or money. Never put secrets in
-browser code or commit them to this repository.
+The marketplace migration and Realtime policies must first be applied to a
+separate development Supabase project. Verify the API and frontend both target
+that project before running migrations; do not apply them to the currently
+configured shared project. Payments remain disabled: accepting a quote does
+not charge users or move funds. Before production, validate role access and
+Realtime row policies in staging, then implement the remaining real-data
+features and payment safeguards. Never put secrets in browser code or commit
+them to this repository.

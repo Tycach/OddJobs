@@ -2,13 +2,17 @@ import { PrismaPg } from "@prisma/adapter-pg"
 
 import { PrismaClient } from "./generated/prisma/client.ts"
 
-import { ModerationEnforcementError } from "./auth/types.js"
+import {
+  MarketplaceConflictError,
+  ModerationEnforcementError,
+} from "./auth/types.js"
 
 import type {
   AuthenticatedPrincipal,
   AdminAuditEvent,
   AdminAdCampaign,
   AdminCategory,
+  AdminMarketplaceActivity,
   AdminModerationDecision,
   AdminModerationReport,
   AdminModerationStatus,
@@ -23,6 +27,11 @@ import type {
   AdminVerificationStatus,
   ProviderApplication,
   ProviderApplicationInput,
+  CreateMarketplaceJobInput,
+  MarketplaceJob,
+  MarketplaceQuote,
+  MarketplaceStore,
+  SubmitMarketplaceQuoteInput,
   UserProfile,
   UserProfileStore,
 } from "./auth/types.js"
@@ -68,7 +77,7 @@ const defaultAdminSettings: AdminSystemSettings = {
 }
 
 export class PrismaDatabase
-  implements ReadinessDatabase, UserProfileStore, AdminStore
+  implements ReadinessDatabase, UserProfileStore, AdminStore, MarketplaceStore
 {
   readonly client: PrismaClient
 
@@ -331,6 +340,26 @@ export class PrismaDatabase
     return this.client.$transaction(async (transaction) => {
       const decision = input.decision === "verified" ? "VERIFIED" : "REJECTED"
 
+      const application = await transaction.providerProfile.findUnique({
+        where: { id: input.profileId },
+
+        select: {
+          userId: true,
+
+          verificationStatus: true,
+
+          user: { select: { status: true } },
+        },
+      })
+
+      if (
+        !application ||
+        application.verificationStatus !== "IN_REVIEW" ||
+        application.user.status !== "ACTIVE"
+      ) {
+        return null
+      }
+
       const updated = await transaction.providerProfile.updateMany({
         where: { id: input.profileId, verificationStatus: "IN_REVIEW" },
 
@@ -338,6 +367,18 @@ export class PrismaDatabase
       })
 
       if (updated.count !== 1) return null
+
+      if (input.decision === "verified") {
+        await transaction.userRoleAssignment.upsert({
+          where: {
+            userId_role: { userId: application.userId, role: "PROVIDER" },
+          },
+
+          create: { userId: application.userId, role: "PROVIDER" },
+
+          update: {},
+        })
+      }
 
       await transaction.providerVerificationReview.create({
         data: {
@@ -363,7 +404,10 @@ export class PrismaDatabase
 
           targetId: input.profileId,
 
-          metadata: { reason: input.reason },
+          metadata: {
+            reason: input.reason,
+            providerRoleGranted: input.decision === "verified",
+          },
 
           requestId: input.requestId,
         },
@@ -882,6 +926,39 @@ export class PrismaDatabase
     }
   }
 
+  async listAdminMarketplaceActivity(
+    limit: number,
+    offset: number,
+  ): Promise<AdminPage<AdminMarketplaceActivity>> {
+    const [events, total] = await this.client.$transaction([
+      this.client.marketplaceActivityEvent.findMany({
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: offset,
+        take: limit,
+        include: { actor: { select: { displayName: true } } },
+      }),
+      this.client.marketplaceActivityEvent.count(),
+    ])
+
+    return {
+      items: events.map((event) => ({
+        id: event.id,
+        actorUserId: event.actorUserId,
+        actorDisplayName: event.actor.displayName,
+        actorRole: event.actorRole as AdminMarketplaceActivity["actorRole"],
+        action: event.action,
+        jobId: event.jobId,
+        quoteId: event.quoteId,
+        metadata: event.metadata as AdminMarketplaceActivity["metadata"],
+        requestId: event.requestId,
+        createdAt: event.createdAt.toISOString(),
+      })),
+      total,
+      limit,
+      offset,
+    }
+  }
+
   async recordAdminAuditEvent(
     event: Omit<AdminAuditEvent, "id" | "createdAt">,
   ): Promise<void> {
@@ -940,6 +1017,432 @@ export class PrismaDatabase
 
       status: profile.verificationStatus.toLowerCase(),
     }
+  }
+
+  private mapMarketplaceJob(
+    job: {
+      id: string
+      customerId: string
+      title: string
+      description: string
+      category: string
+      locationLabel: string
+      budgetMinor: bigint | null
+      currency: string
+      status: string
+      requestedFor: Date | null
+      createdAt: Date
+      updatedAt: Date
+      _count: { quotes: number }
+    },
+  ): MarketplaceJob {
+    const budgetMinor =
+      job.budgetMinor === null ? null : Number(job.budgetMinor)
+    if (budgetMinor !== null && !Number.isSafeInteger(budgetMinor)) {
+      throw new Error("Stored job budget exceeds the supported currency range.")
+    }
+
+    return {
+      id: job.id,
+      customerId: job.customerId,
+      title: job.title,
+      description: job.description,
+      category: job.category,
+      locationLabel: job.locationLabel,
+      budgetMinor,
+      currency: job.currency.trim(),
+      status: job.status.toLowerCase() as MarketplaceJob["status"],
+      requestedFor: job.requestedFor?.toISOString() ?? null,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+      quoteCount: job._count.quotes,
+    }
+  }
+
+  private mapMarketplaceQuote(quote: {
+    id: string
+    jobId: string
+    providerId: string
+    amountMinor: bigint
+    currency: string
+    message: string
+    availability: string
+    status: string
+    createdAt: Date
+    updatedAt: Date
+    provider: { displayName: string }
+  }): MarketplaceQuote {
+    const amountMinor = Number(quote.amountMinor)
+    if (!Number.isSafeInteger(amountMinor)) {
+      throw new Error("Stored quote exceeds the supported currency range.")
+    }
+
+    return {
+      id: quote.id,
+      jobId: quote.jobId,
+      providerId: quote.providerId,
+      providerName: quote.provider.displayName,
+      amountMinor,
+      currency: quote.currency.trim(),
+      message: quote.message,
+      availability: quote.availability,
+      status: quote.status.toLowerCase() as MarketplaceQuote["status"],
+      createdAt: quote.createdAt.toISOString(),
+      updatedAt: quote.updatedAt.toISOString(),
+    }
+  }
+
+  async listJobs(
+    userId: string,
+    role: "consumer" | "provider",
+    view: "mine" | "feed",
+  ): Promise<MarketplaceJob[]> {
+    const where =
+      role === "consumer"
+        ? { customerId: userId }
+        : view === "feed"
+          ? { status: "OPEN" as const, customerId: { not: userId } }
+          : {
+              quotes: {
+                some: { providerId: userId, status: "ACCEPTED" as const },
+              },
+            }
+
+    const jobs = await this.client.job.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 100,
+      include: { _count: { select: { quotes: true } } },
+    })
+
+    return jobs.map((job) => this.mapMarketplaceJob(job))
+  }
+
+  async getJob(
+    userId: string,
+    role: "consumer" | "provider",
+    jobId: string,
+  ): Promise<MarketplaceJob | null> {
+    const where =
+      role === "consumer"
+        ? { id: jobId, customerId: userId }
+        : {
+            id: jobId,
+            customerId: { not: userId },
+            OR: [
+              { status: "OPEN" as const },
+              {
+                quotes: {
+                  some: {
+                    providerId: userId,
+                    status: "ACCEPTED" as const,
+                  },
+                },
+              },
+              { quotes: { some: { providerId: userId } } },
+            ],
+          }
+
+    const job = await this.client.job.findFirst({
+      where,
+      include: { _count: { select: { quotes: true } } },
+    })
+
+    return job ? this.mapMarketplaceJob(job) : null
+  }
+
+  async listQuotes(
+    userId: string,
+    role: "consumer" | "provider",
+    jobId: string,
+  ): Promise<MarketplaceQuote[] | null> {
+    const job = await this.client.job.findFirst({
+      where:
+        role === "consumer"
+          ? { id: jobId, customerId: userId }
+          : {
+              id: jobId,
+              customerId: { not: userId },
+              OR: [
+                { status: "OPEN" as const },
+                { quotes: { some: { providerId: userId } } },
+              ],
+            },
+      select: { id: true },
+    })
+
+    if (!job) return null
+
+    const quotes = await this.client.quote.findMany({
+      where: {
+        jobId,
+        ...(role === "provider" ? { providerId: userId } : {}),
+      },
+      include: { provider: { select: { displayName: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    })
+
+    return quotes.map((quote) => this.mapMarketplaceQuote(quote))
+  }
+
+  async createJob(
+    userId: string,
+    input: CreateMarketplaceJobInput,
+    requestId: string,
+  ): Promise<MarketplaceJob> {
+    const job = await this.client.$transaction(async (transaction) => {
+      const created = await transaction.job.create({
+        data: {
+          customerId: userId,
+          title: input.title,
+          description: input.description,
+          category: input.category,
+          locationLabel: input.locationLabel,
+          budgetMinor:
+            input.budgetMinor === null ? null : BigInt(input.budgetMinor),
+          currency: "KES",
+          requestedFor: input.requestedFor
+            ? new Date(input.requestedFor)
+            : null,
+        },
+        include: { _count: { select: { quotes: true } } },
+      })
+      await transaction.marketplaceActivityEvent.create({
+        data: {
+          actorUserId: userId,
+          actorRole: "consumer",
+          action: "job.created",
+          jobId: created.id,
+          metadata: { title: created.title, category: created.category },
+          requestId,
+        },
+      })
+      return created
+    })
+
+    return this.mapMarketplaceJob(job)
+  }
+
+  async submitQuote(
+    userId: string,
+    jobId: string,
+    input: SubmitMarketplaceQuoteInput,
+    requestId: string,
+  ): Promise<MarketplaceQuote | null> {
+    try {
+      return await this.client.$transaction(async (transaction) => {
+        const openJobs = await transaction.$queryRaw<{ id: string }[]>`
+          SELECT id
+          FROM public.jobs
+          WHERE id = ${jobId}::uuid
+            AND customer_id <> ${userId}::uuid
+            AND status = 'OPEN'
+          FOR UPDATE
+        `
+        if (!openJobs.length) return null
+
+        const existingQuote = await transaction.quote.findFirst({
+          where: { jobId, providerId: userId, status: "SUBMITTED" },
+          select: { id: true },
+        })
+        if (existingQuote) {
+          throw new MarketplaceConflictError(
+            "You have already submitted a quote for this job.",
+          )
+        }
+
+        const quote = await transaction.quote.create({
+          data: {
+            jobId,
+            providerId: userId,
+            amountMinor: BigInt(input.amountMinor),
+            currency: "KES",
+            message: input.message,
+            availability: input.availability,
+          },
+          include: { provider: { select: { displayName: true } } },
+        })
+        await transaction.marketplaceActivityEvent.create({
+          data: {
+            actorUserId: userId,
+            actorRole: "provider",
+            action: "quote.submitted",
+            jobId,
+            quoteId: quote.id,
+            metadata: { amountMinor: input.amountMinor },
+            requestId,
+          },
+        })
+
+        return this.mapMarketplaceQuote(quote)
+      })
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "P2002"
+      ) {
+        throw new MarketplaceConflictError(
+          "You have already submitted a quote for this job.",
+        )
+      }
+      throw error
+    }
+  }
+
+  async acceptQuote(
+    userId: string,
+    jobId: string,
+    quoteId: string,
+    requestId: string,
+  ): Promise<MarketplaceJob | null> {
+    return this.client.$transaction(async (transaction) => {
+      const ownedJob = await transaction.job.findFirst({
+        where: { id: jobId, customerId: userId },
+        select: { id: true },
+      })
+      if (!ownedJob) return null
+
+      const jobUpdate = await transaction.job.updateMany({
+        where: { id: jobId, customerId: userId, status: "OPEN" },
+        data: { status: "AWARDED" },
+      })
+      if (jobUpdate.count !== 1) {
+        throw new MarketplaceConflictError(
+          "This job is no longer open for quote acceptance.",
+        )
+      }
+
+      const quoteUpdate = await transaction.quote.updateMany({
+        where: { id: quoteId, jobId, status: "SUBMITTED" },
+        data: { status: "ACCEPTED" },
+      })
+      if (quoteUpdate.count !== 1) {
+        throw new MarketplaceConflictError(
+          "This quote is no longer available.",
+        )
+      }
+
+      const declinedQuotes = await transaction.quote.findMany({
+        where: { jobId, id: { not: quoteId }, status: "SUBMITTED" },
+        select: { id: true },
+      })
+      await transaction.quote.updateMany({
+        where: { jobId, id: { not: quoteId }, status: "SUBMITTED" },
+        data: { status: "DECLINED" },
+      })
+      await transaction.marketplaceActivityEvent.create({
+        data: {
+          actorUserId: userId,
+          actorRole: "consumer",
+          action: "quote.accepted",
+          jobId,
+          quoteId,
+          metadata: {},
+          requestId,
+        },
+      })
+      if (declinedQuotes.length > 0) {
+        await transaction.marketplaceActivityEvent.createMany({
+          data: declinedQuotes.map((quote) => ({
+            actorUserId: userId,
+            actorRole: "consumer",
+            action: "quote.declined",
+            jobId,
+            quoteId: quote.id,
+            metadata: { reason: "Another quote was accepted." },
+            requestId,
+          })),
+        })
+      }
+
+      const acceptedJob = await transaction.job.findUnique({
+        where: { id: jobId },
+        include: { _count: { select: { quotes: true } } },
+      })
+      return acceptedJob ? this.mapMarketplaceJob(acceptedJob) : null
+    })
+  }
+
+  async transitionJob(
+    userId: string,
+    jobId: string,
+    transition: "start" | "submit_completion" | "confirm_completion" | "cancel",
+    requestId: string,
+  ): Promise<MarketplaceJob | null> {
+    const providerTransitions = {
+      start: { expected: "AWARDED", next: "IN_PROGRESS" },
+      submit_completion: {
+        expected: "IN_PROGRESS",
+        next: "COMPLETION_PENDING",
+      },
+    } as const
+
+    const providerTransition =
+      transition === "start" || transition === "submit_completion"
+        ? providerTransitions[transition]
+        : null
+    const where =
+      transition === "confirm_completion"
+        ? { id: jobId, customerId: userId }
+        : transition === "cancel"
+          ? { id: jobId, customerId: userId }
+          : {
+              id: jobId,
+              quotes: {
+                some: {
+                  providerId: userId,
+                  status: "ACCEPTED" as const,
+                },
+              },
+            }
+
+    const job = await this.client.job.findFirst({
+      where,
+      include: { _count: { select: { quotes: true } } },
+    })
+    if (!job) return null
+
+    const expectedStatus =
+      providerTransition?.expected ??
+      (transition === "confirm_completion"
+        ? "COMPLETION_PENDING"
+        : "OPEN")
+    const nextStatus =
+      providerTransition?.next ??
+      (transition === "confirm_completion" ? "COMPLETED" : "CANCELLED")
+
+    const updatedJob = await this.client.$transaction(async (transaction) => {
+      const update = await transaction.job.updateMany({
+        where: { ...where, status: expectedStatus },
+        data: { status: nextStatus },
+      })
+      if (update.count !== 1) {
+        throw new MarketplaceConflictError(
+          "The job status changed. Refresh the page and try again.",
+        )
+      }
+      await transaction.marketplaceActivityEvent.create({
+        data: {
+          actorUserId: userId,
+          actorRole: providerTransition ? "provider" : "consumer",
+          action: `job.${transition === "submit_completion" ? "completion_submitted" : transition === "confirm_completion" ? "completion_confirmed" : transition === "cancel" ? "withdrawn" : transition}`,
+          jobId,
+          metadata:
+            transition === "cancel"
+              ? { reason: "Poster withdrew this open job." }
+              : { from: expectedStatus.toLowerCase(), to: nextStatus.toLowerCase() },
+          requestId,
+        },
+      })
+
+      return transaction.job.findUnique({
+        where: { id: jobId },
+        include: { _count: { select: { quotes: true } } },
+      })
+    })
+    return updatedJob ? this.mapMarketplaceJob(updatedJob) : null
   }
 
   async close(): Promise<void> {

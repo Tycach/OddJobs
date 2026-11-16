@@ -1,0 +1,1 @@
+-- Baseline for pre-existing Supabase tables not managed by the OddJobs Prisma schema.

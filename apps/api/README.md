@@ -3,15 +3,16 @@
 This is the independently installable OddJobs API service. It is built and
 tested separately from the Figma Make/Vite web application. It verifies
 Supabase Auth access tokens and provides protected profile bootstrap/read and
-supplier-application routes. Supplier applications are saved as provider
-profiles in review and never grant the provider role by themselves.
-Job/quote/message APIs and payments are not implemented.
+supplier-application routes. It also provides persistent job, quote, hiring,
+and completion workflows. Supplier applications are saved as provider
+profiles in review and never grant the provider role by themselves. Messaging,
+payments, identity verification, and payouts are not implemented.
 
 ## Boundary
 
 - The repository root currently remains the Figma Make/Vite web application.
-- The API owns authentication, authorization, validation, jobs, fee
-  calculation, payment state, disputes, ledger entries, and payout decisions.
+- The API owns authentication, authorization, validation, job and quote state.
+- The current marketplace milestone does not charge users or move funds.
 - The web client calls the API over authenticated HTTP and treats API responses
   as authoritative. It must not import API implementation files.
 - Define the client/server contract explicitly (prefer a versioned OpenAPI
@@ -30,7 +31,9 @@ npm run db:migrate:dev
 npm run dev
 ```
 
-Before running, copy `.env.example` to `.env`. For Supabase, set `DATABASE_URL`
+Before running, copy `.env.example` to `.env`. Use a dedicated Supabase
+development project, not the previously configured shared/production project.
+Point `DATABASE_URL`
 to the transaction-mode pooler URL for API runtime and `DIRECT_URL` to the
 session-mode pooler URL for Prisma migrations. Set `SUPABASE_URL` and
 `SUPABASE_PUBLISHABLE_KEY` for server-side token verification. Do not configure
@@ -64,9 +67,36 @@ redeploy the frontend so Vite includes it in the build. Set the frontend's
 `VITE_` values are public client configuration; never put database credentials
 or Supabase secret keys in Vercel frontend variables.
 
-Run `npm run db:migrate:deploy` before releasing the signup policy-consent
-flow. The API accepts only the current policy versions and stores each
-user/document/version acceptance once with a server-generated timestamp.
+Only after verifying `.env` targets the dedicated development project, run
+`npm run db:migrate:deploy` to apply the additive policy-consent and marketplace
+Realtime migrations. Do not run that command against the previously configured
+shared/production project. The API accepts only the current policy versions and
+stores each user/document/version acceptance once with a server-generated
+timestamp.
+
+## Marketplace jobs and quotes
+
+The authenticated marketplace API supports `POST /v1/jobs`, role-scoped
+`GET /v1/jobs`, job/quote reads, provider quote submission, customer quote
+acceptance, and the awarded → in-progress → completion-pending → completed
+workflow. Job and quote writes are server-validated and persisted in Postgres;
+only the customer who owns a job and the authorized provider can advance its
+state. Accepting a quote does not create a payment or escrow record.
+
+The `20261109180000_marketplace_realtime_policies` migration adds the quote
+availability field, enables row-level read policies for authenticated
+marketplace participants, and adds jobs and quotes to the Supabase Realtime
+publication when available. Browser subscriptions are read-only and use
+Supabase Auth; all writes still go through the API. Apply this migration only
+to the dedicated development Supabase project until its row-level policies and
+role boundaries have been validated there.
+
+The web app's customer job list/post/quotes screens and provider job
+feed/detail/management screens use these API workflows and refresh from
+authorized Realtime events. Messaging, file uploads, reviews, provider
+verification evidence, support/partner data, external notifications, payment,
+escrow, and payout screens remain outside this milestone and must not be used
+as live services.
 
 The API applies Helmet security headers, exact-origin CORS checks, and
 per-process request limits (120 requests/IP/minute globally; 5 supplier
@@ -87,9 +117,8 @@ a paginated directory without email or phone fields. `GET /v1/admin/verification
 returns provider profile records filtered by status. `POST
 /v1/admin/verification/:profileId/decision` records an audited `verified` or
 `rejected` status for a profile currently in review; rejection requires a
-reason. This status decision does not grant the provider role, and the current
-product has no identity-evidence upload or review storage. Do not use the
-decision endpoint as proof of identity until that evidence workflow exists.
+reason. Approving the service application transactionally grants the provider role; rejection does not. This is not identity verification, and the current
+product has no identity-evidence upload or review storage. Do not treat approval as proof of identity; identity evidence is not collected or reviewed.
 `POST /v1/reports` accepts authenticated reports (limited to five per IP per
 hour); `GET /v1/admin/moderation` lists them, and `POST
 /v1/admin/moderation/:reportId/decision` updates workflow status with an audit
@@ -146,12 +175,12 @@ limits. Do not run load, brute-force, or destructive tests against production.
 ## Current Limits
 
 - `/v1/me/bootstrap` and `/v1/me` require a verified Supabase bearer token.
-  New accounts receive only the consumer role; provider/staff provisioning is
-  not implemented.
+  New accounts receive only the consumer role; provider access is granted only
+  by an admin approving an active user's submitted service application.
 - `POST /v1/provider-applications` stores the authenticated user's requested
   public name, service description, and region as a profile in review. It does
-  not grant provider access; provider approval and role provisioning remain a
-  trusted administrative operation.
+  not grant provider access; approval and role provisioning are a trusted,
+  audited administrative operation.
 - Job, quote, message CRUD, realtime updates, payment collection, worker
   payouts, and production deployment are not implemented.
 - Service categories and marketplace settings are persisted, but the
