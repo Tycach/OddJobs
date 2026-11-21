@@ -73,11 +73,21 @@ enum JobStatus {
   AWARDED
   IN_PROGRESS
   COMPLETION_PENDING
+  REVISION_REQUESTED
   COMPLETED
   CANCELLED
   DISPUTED
+  EXPIRED
 
   @@map("job_status")
+}
+
+enum JobLocationMode {
+  ONSITE
+  REMOTE
+  FLEXIBLE
+
+  @@map("job_location_mode")
 }
 
 enum QuoteStatus {
@@ -93,23 +103,119 @@ enum QuoteStatus {
 model User {
   id                String               @id @default(uuid()) @db.Uuid
   displayName       String               @map("display_name") @db.VarChar(120)
+  avatarPath        String?              @map("avatar_path") @db.VarChar(300)
   status            UserStatus           @default(PENDING)
   identities        AuthIdentity[]
   roleAssignments   UserRoleAssignment[]
   sessions          Session[]
   providerProfile   ProviderProfile?
+  customerVerification CustomerIdentityVerification?
   policyConsents    PolicyConsent[]
   customerJobs      Job[]                @relation("CustomerJobs")
+  serviceListings   ServiceListing[]     @relation("ProviderListings")
+  claimedListings   ServiceListing[]     @relation("CustomerClaims")
+  serviceListingActivity ServiceListingActivity[]
+  reviewsGiven      ServiceListingReview[] @relation("ReviewsGiven")
+  reviewsReceived   ServiceListingReview[] @relation("ReviewsReceived")
   quotes            Quote[]
   messages          Message[]
+  serviceListingMessages ServiceListingMessage[] @relation("ServiceListingMessageSender")
   moderationReports ModerationReport[]
   enforcementActions AdminUserEnforcement[]
   marketplaceActivityEvents MarketplaceActivityEvent[]
+  notifications     MarketplaceNotification[]
+  savedProviders    SavedProvider[]         @relation("SavedProviders")
   createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([status, createdAt])
   @@map("users")
+}
+
+enum ListingStatus {
+  OPEN
+  CLAIMED
+  IN_PROGRESS
+  COMPLETION_PENDING
+  COMPLETED
+  CANCELLED
+
+  @@map("listing_status")
+}
+
+model ServiceListing {
+  id                   String        @id @default(uuid()) @db.Uuid
+  providerId           String        @map("provider_id") @db.Uuid
+  claimedByCustomerId  String?       @map("claimed_by_customer_id") @db.Uuid
+  title                String        @db.VarChar(160)
+  description          String        @db.VarChar(5000)
+  category             String        @db.VarChar(80)
+  locationLabel        String        @map("location_label") @db.VarChar(160)
+  budgetMinor          BigInt?       @map("budget_minor")
+  media                Json          @default("[]") @db.JsonB
+  currency             String        @default("KES") @db.Char(3)
+  status               ListingStatus @default(OPEN)
+  claimExpiresAt       DateTime?     @map("claim_expires_at") @db.Timestamptz(3)
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  provider             User          @relation("ProviderListings", fields: [providerId], references: [id], onDelete: Restrict)
+  claimedByCustomer    User?         @relation("CustomerClaims", fields: [claimedByCustomerId], references: [id], onDelete: Restrict)
+  activity              ServiceListingActivity[]
+  reviews               ServiceListingReview[]
+  messages              ServiceListingMessage[]
+
+  @@index([status, category, createdAt])
+  @@index([providerId, status, createdAt])
+  @@index([claimedByCustomerId, status, createdAt])
+  @@map("service_listings")
+}
+
+model ServiceListingActivity {
+  id          String         @id @default(uuid()) @db.Uuid
+  listingId   String         @map("listing_id") @db.Uuid
+  actorUserId String?        @map("actor_user_id") @db.Uuid
+  action      String         @db.VarChar(80)
+  metadata    Json           @default("{}") @db.JsonB
+  requestId   String         @map("request_id") @db.VarChar(80)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  listing     ServiceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  actor       User?          @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([listingId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("service_listing_activity")
+}
+
+model ServiceListingReview {
+  id             String         @id @default(uuid()) @db.Uuid
+  listingId      String         @map("listing_id") @db.Uuid
+  reviewerUserId String         @map("reviewer_user_id") @db.Uuid
+  revieweeUserId String         @map("reviewee_user_id") @db.Uuid
+  rating         Int
+  comment        String         @default("") @db.VarChar(2000)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  listing        ServiceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  reviewer       User           @relation("ReviewsGiven", fields: [reviewerUserId], references: [id], onDelete: Restrict)
+  reviewee       User           @relation("ReviewsReceived", fields: [revieweeUserId], references: [id], onDelete: Restrict)
+
+  @@unique([listingId, reviewerUserId])
+  @@index([revieweeUserId, createdAt])
+  @@index([reviewerUserId, createdAt])
+  @@map("service_listing_reviews")
+}
+
+model ServiceListingMessage {
+  id        String         @id @default(uuid()) @db.Uuid
+  listingId String         @map("listing_id") @db.Uuid
+  senderId  String         @map("sender_id") @db.Uuid
+  body      String         @db.VarChar(5000)
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  listing   ServiceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  sender    User           @relation("ServiceListingMessageSender", fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([listingId, createdAt])
+  @@index([senderId, createdAt])
+  @@map("service_listing_messages")
 }
 
 model AdminAuditEvent {
@@ -186,14 +292,46 @@ model ProviderProfile {
   publicName         String                       @map("public_name") @db.VarChar(120)
   bio                String?                      @db.VarChar(2000)
   region             String?                      @db.VarChar(120)
+  verificationDocumentType String?                 @map("verification_document_type") @db.VarChar(40)
+  verificationDocumentPath String?                 @map("verification_document_path") @db.VarChar(300)
+  skillsEvidence     String?                       @map("skills_evidence") @db.VarChar(2000)
   verificationStatus VerificationStatus           @default(NOT_STARTED) @map("verification_status")
   createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
   user               User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
   reviews            ProviderVerificationReview[]
+  savedBy            SavedProvider[]
 
   @@index([verificationStatus, region])
   @@map("provider_profiles")
+}
+
+model SavedProvider {
+  customerId       String          @map("customer_id") @db.Uuid
+  providerProfileId String         @map("provider_profile_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  customer         User            @relation("SavedProviders", fields: [customerId], references: [id], onDelete: Cascade)
+  providerProfile  ProviderProfile @relation(fields: [providerProfileId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, providerProfileId])
+  @@index([providerProfileId, createdAt])
+  @@map("saved_providers")
+}
+
+model CustomerIdentityVerification {
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @unique @map("user_id") @db.Uuid
+  documentType       String             @map("document_type") @db.VarChar(40)
+  documentPath       String             @map("document_path") @db.VarChar(300)
+  status             VerificationStatus @default(IN_REVIEW)
+  submittedAt        DateTime           @default(now()) @map("submitted_at") @db.Timestamptz(3)
+  reviewedAt         DateTime?          @map("reviewed_at") @db.Timestamptz(3)
+  reviewedByUserId   String?            @map("reviewed_by_user_id") @db.Uuid
+  reviewReason       String?            @map("review_reason") @db.VarChar(1000)
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, submittedAt])
+  @@map("customer_identity_verifications")
 }
 
 model ProviderVerificationReview {
@@ -315,6 +453,14 @@ model Job {
   currency      String    @default("KES") @db.Char(3)
   status        JobStatus @default(OPEN)
   requestedFor  DateTime? @map("requested_for") @db.Timestamptz(3)
+  applicationDeadlineAt DateTime? @map("application_deadline_at") @db.Timestamptz(3)
+  dueAt         DateTime? @map("due_at") @db.Timestamptz(3)
+  locationMode  JobLocationMode @default(ONSITE) @map("location_mode")
+  locationLatitude Float? @map("location_latitude")
+  locationLongitude Float? @map("location_longitude")
+  completionNote String? @map("completion_note") @db.VarChar(5000)
+  revisionNote String? @map("revision_note") @db.VarChar(2000)
+  media         Json      @default("[]")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   customer      User      @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Restrict)
@@ -344,6 +490,7 @@ model Quote {
   provider    User        @relation(fields: [providerId], references: [id], onDelete: Restrict)
 
   @@unique([jobId, providerId, revision])
+  @@unique([jobId, providerId], where: { status: "SUBMITTED" }, map: "quotes_one_active_per_provider_per_job_key")
   @@unique([jobId], where: { status: "ACCEPTED" }, map: "quotes_one_accepted_per_job_key")
   @@index([jobId, status, createdAt])
   @@index([providerId, createdAt])
@@ -381,4 +528,42 @@ model MarketplaceActivityEvent {
   @@index([jobId, createdAt])
   @@index([actorUserId, createdAt])
   @@map("marketplace_activity_events")
+}
+
+model MarketplaceNotification {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  type        String    @db.VarChar(60)
+  title       String    @db.VarChar(160)
+  body        String    @db.VarChar(500)
+  jobId       String?   @map("job_id") @db.Uuid
+  readAt      DateTime? @map("read_at") @db.Timestamptz(3)
+  dedupeKey   String    @unique @map("dedupe_key") @db.VarChar(180)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt, id])
+  @@index([userId, readAt, createdAt])
+  @@map("marketplace_notifications")
+}
+
+model OutboxEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  eventType       String    @map("event_type") @db.VarChar(80)
+  aggregateType   String    @map("aggregate_type") @db.VarChar(40)
+  aggregateId     String?   @map("aggregate_id") @db.Uuid
+  recipientUserId String?   @map("recipient_user_id") @db.Uuid
+  payload         Json      @default("{}") @db.JsonB
+  requestId       String    @map("request_id") @db.VarChar(80)
+  dedupeKey       String    @unique @map("dedupe_key") @db.VarChar(180)
+  status          String    @default("pending") @db.VarChar(20)
+  attempts        Int       @default(0)
+  availableAt     DateTime  @default(now()) @map("available_at") @db.Timestamptz(3)
+  processedAt     DateTime? @map("processed_at") @db.Timestamptz(3)
+  lastError       String?   @map("last_error") @db.VarChar(1000)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([status, availableAt, createdAt])
+  @@index([aggregateType, aggregateId, createdAt])
+  @@map("outbox_events")
 }

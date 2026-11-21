@@ -1,0 +1,1339 @@
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useAuth, type ServiceListingMedia } from "../../auth/AuthProvider"
+import { useDemoStore } from "../../demo/context"
+import type { Screen } from "../../demo/model"
+import { useMarketplaceJobData, useMarketplaceJobs, useMarketplaceProviders } from "../marketplace/hooks"
+import { JobTimeline } from "../marketplace/JobTimeline"
+import ListingMediaGallery from "../marketplace/ListingMediaGallery"
+import { ListingReviewForm } from "../marketplace/ListingReviewForm"
+import { ServiceMessages } from "../marketplace/ServiceMessages"
+import { Avatar, Badge, Button, Icon, Metric, PageHeader, ProviderCard, Sponsored } from "../../shared/components/WorkspaceUi"
+import { ProviderDirectoryCard } from "./ProviderDirectory"
+
+const photos = {
+  amina: "https://images.unsplash.com/photo-1764166471609-c75e2c6bfdb2?auto=format&fit=crop&w=500&q=80",
+  otieno: "https://images.unsplash.com/photo-1592896653886-98a644767f2f?auto=format&fit=crop&w=500&q=80",
+  wanjiku: "https://images.unsplash.com/photo-1713746965378-0140784d2ab9?auto=format&fit=crop&w=500&q=80",
+  work: "https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=900&q=80",
+}
+function Home({
+  go,
+  onOpenProvider,
+}: {
+  go: (s: Screen) => void
+  onOpenProvider: (providerId: string) => void
+}) {
+  const { store } = useDemoStore()
+  const auth = useAuth()
+  const profile = auth.profile
+  const { providers, loading, error } = useMarketplaceProviders("", "", 6)
+  const categories = [
+    ["Cleaning", "âŒ"],
+    ["Plumbing", "â—‰"],
+    ["Electrical", "ÏŸ"],
+    ["Care", "â™¡"],
+    ["Grooming", "âœ¦"],
+    ["Tutoring", "A+"],
+    ["Moving", "â–¡"],
+    ["More", "â€¢â€¢â€¢"],
+  ]
+  return (
+    <div className="content consumer-content">
+      <section className="welcome-row">
+        <div>
+          <span>Good morning, {profile?.displayName ?? "Wanjiku"}</span>
+          <h1>What do you need help with?</h1>
+        </div>
+        <Button onClick={() => go("workFeed")}>Find providers</Button>
+        <Avatar src={auth.getProfileAvatarUrl(profile?.avatarPath)} name={profile?.displayName ?? "Your profile"} />
+      </section>
+      <button className="search-box" onClick={() => go("search")}>
+        <Icon name="search" />
+        <span>Search cleaning, plumbing, tutoringâ€¦</span>
+      </button>
+      <section>
+        <div className="section-title">
+          <h2>Browse services</h2>
+          <button onClick={() => go("search")}>See all</button>
+        </div>
+        <div className="category-grid">
+          {categories.map(([name, icon]) => (
+            <button key={name} onClick={() => go("search")}>
+              <span>{icon}</span>
+              <label>{name}</label>
+            </button>
+          ))}
+        </div>
+      </section>
+      {!store.reduceAds && <Sponsored />}
+      <section>
+        <div className="section-title">
+          <h2>Available near you</h2>
+          <button onClick={() => go("search")}>Browse all providers</button>
+        </div>
+        <div className="providers-row">
+          {loading && <p role="status">Loading approved providersâ€¦</p>}
+          {error && <p className="form-error" role="alert">{error}</p>}
+          {providers.map((provider) => (
+            <ProviderDirectoryCard
+              key={provider.id}
+              provider={provider}
+              onClick={() => onOpenProvider(provider.id)}
+            />
+          ))}
+          {!loading && !error && !providers.length && (
+            <p className="caption">No approved providers are listed yet. You can still post a job and receive quotes.</p>
+          )}
+        </div>
+      </section>
+      <section className="trust-panel">
+        <Icon name="shield" size={28} />
+        <div>
+          <strong>Hire with confidence</strong>
+          <span>
+            Approved providers can quote on your jobs. Payments are not enabled yet.
+          </span>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function HiringDashboard({ go }: { go: (screen: Screen) => void }) {
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("consumer")
+  const openJobs = jobs.filter((job) => job.status === "open")
+  const jobsWithProposals = openJobs.filter((job) => job.quoteCount > 0).length
+  const proposalsToReview = openJobs.reduce((total, job) => total + job.quoteCount, 0)
+  const activeJobs = jobs.filter((job) => ["awarded", "in_progress", "completion_pending", "revision_requested"].includes(job.status))
+  const completedJobs = jobs.filter((job) => job.status === "completed").length
+  const value = (count: number) => loading ? "…" : error ? "—" : String(count)
+  const nextJob = openJobs.find((job) => job.quoteCount > 0) ?? openJobs[0] ?? activeJobs[0]
+  return <div className="content console-content">
+    <PageHeader eyebrow="Hiring workspace" title="Your hiring dashboard" description="See your job posts, proposals, and active work in one place." action={<Button onClick={() => go("post")}>Post a job</Button>} />
+    <div className="metrics">
+      <Metric label="Open job posts" value={value(openJobs.length)} />
+      <Metric label="Proposals to review" value={value(proposalsToReview)} />
+      <Metric label="Active jobs" value={value(activeJobs.length)} />
+      <Metric label="Completed jobs" value={value(completedJobs)} />
+    </div>
+    {error && <p className="form-error" role="alert">Your live job summary could not load. {error} <button className="btn btn-ghost" onClick={() => void refresh()}>Retry</button></p>}
+    <div className="dashboard-grid">
+      <section className="card">
+        <div className="section-title"><h2>Next step</h2><Badge>{loading ? "Loading" : nextJob ? nextJob.status.replace(/_/g, " ") : "Ready"}</Badge></div>
+        <h3>{nextJob?.title ?? "Find the right worker"}</h3>
+        <p>{nextJob ? `${nextJob.locationLabel} · ${nextJob.quoteCount} proposal${nextJob.quoteCount === 1 ? "" : "s"}` : "Post a job to receive proposals from workers."}</p>
+        <div className="card-actions">
+          <Button onClick={() => go(nextJob ? "jobs" : "post")}>{nextJob ? "Review my jobs" : "Post a job"}</Button>
+          <Button variant="secondary" onClick={() => go("workFeed")}>Browse workers</Button>
+        </div>
+      </section>
+      <section className="card">
+        <h2>Hiring resources</h2>
+        <p>Learn how to write a useful job post, compare proposals, and agree on the work before it starts.</p>
+        <Button variant="secondary" onClick={() => go("training")}>Open hiring guide</Button>
+      </section>
+    </div>
+    <div className="card-actions"><Button variant="ghost" onClick={() => go("hiringAnalytics")}>View hiring analytics</Button><Button variant="ghost" onClick={() => go("saved")}>View saved workers</Button></div>
+  </div>
+}
+
+function HiringAnalytics({ go }: { go: (screen: Screen) => void }) {
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("consumer")
+  const open = jobs.filter((job) => job.status === "open")
+  const awarded = jobs.filter((job) => ["awarded", "in_progress", "completion_pending", "revision_requested", "completed"].includes(job.status))
+  const completed = jobs.filter((job) => job.status === "completed").length
+  const proposalCount = jobs.reduce((sum, job) => sum + job.quoteCount, 0)
+  const jobsWithProposals = jobs.filter((job) => job.quoteCount > 0).length
+  const hired = jobs.filter((job) => ["awarded", "in_progress", "completion_pending", "revision_requested", "completed"].includes(job.status)).length
+  const hireRate = jobsWithProposals ? Math.round((hired / jobsWithProposals) * 100) : null
+  const metric = (count: number | string) => loading ? "…" : error ? "—" : String(count)
+  return <div className="content console-content">
+    <PageHeader title="Hiring analytics" description="Live activity from your job posts and worker proposals." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
+    {error && <p className="form-error" role="alert">Analytics could not load. {error}</p>}
+    <div className="metrics">
+      <Metric label="Jobs posted" value={metric(jobs.length)} />
+      <Metric label="Open jobs" value={metric(open.length)} />
+      <Metric label="Proposals received" value={metric(proposalCount)} />
+      <Metric label="Jobs awarded" value={metric(awarded.length)} />
+    </div>
+    <div className="dashboard-grid">
+      <section className="card"><h2>Hiring outcomes</h2><div className="review-facts"><span><small>Jobs with proposals</small><b>{metric(jobsWithProposals)}</b></span><span><small>Hire rate</small><b>{loading ? "…" : error ? "—" : hireRate === null ? "No proposals yet" : `${hireRate}%`}</b></span><span><small>Completed jobs</small><b>{metric(completed)}</b></span></div><p className="caption">Hire rate is awarded jobs divided by jobs that received at least one proposal. No payment or spending figures are shown.</p></section>
+      <section className="card"><h2>Keep your jobs moving</h2><p>Review proposals promptly and keep job details current so workers can make informed offers.</p><div className="card-actions"><Button onClick={() => go("jobs")}>Review proposals</Button><Button variant="secondary" onClick={() => go("post")}>Post another job</Button></div></section>
+    </div>
+  </div>
+}
+
+function HiringGuide({ go }: { go: (screen: Screen) => void }) {
+  const guides = [
+    ["Write a clear job post", "Describe the task, location, timing, and what a successful result looks like. Add photos only when they help explain the work."],
+    ["Compare proposals fairly", "Review each worker’s price, availability, experience, profile, and customer reviews. Ask for clarification before choosing."],
+    ["Agree on the scope", "Confirm what is included, when the work should happen, and any materials or access the worker needs."],
+    ["Track the job", "Accept one proposal to award the job. Follow progress in My jobs and confirm completion after reviewing the submitted work."],
+  ]
+  return <div className="content narrow"><PageHeader eyebrow="Hiring workspace" title="Hiring guide" description="Practical steps for posting a job and working with independent workers." /><div className="job-list">{guides.map(([title, detail], index) => <section className="card" key={title}><Badge>Step {index + 1}</Badge><h2>{title}</h2><p>{detail}</p></section>)}</div><section className="card"><h2>Ready to hire?</h2><p>Post a job and compare proposals from workers who are available for your task.</p><div className="card-actions"><Button onClick={() => go("post")}>Post a job</Button><Button variant="secondary" onClick={() => go("jobs")}>View my jobs</Button></div></section></div>
+}
+
+function PostJob({ go }: { go: (s: Screen) => void }) {
+  const { updateStore } = useDemoStore()
+  const auth = useAuth()
+  const [step, setStep] = useState(1)
+  const [title, setTitle] = useState("")
+  const [category, setCategory] = useState("Cleaning")
+  const [description, setDescription] = useState("")
+  const [budget, setBudget] = useState("")
+  const [location, setLocation] = useState("")
+  const [requestedDate, setRequestedDate] = useState("")
+  const [applicationDeadline, setApplicationDeadline] = useState(
+    () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+  )
+  const [dueDate, setDueDate] = useState("")
+  const [locationMode, setLocationMode] = useState<"onsite" | "remote" | "flexible">("onsite")
+  const [jobPin, setJobPin] = useState<{ latitude: number; longitude: number } | null>(null)
+  const [attachments, setAttachments] = useState<(ServiceListingMedia & { previewUrl: string; uploading: boolean })[]>([])
+  const [uploadingMedia, setUploadingMedia] = useState(false)
+  const previewUrls = useRef(new Set<string>())
+  const [error, setError] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  useEffect(() => () => previewUrls.current.forEach((url) => URL.revokeObjectURL(url)), [])
+  const addFiles = async (files: File[]) => {
+    setUploadingMedia(true)
+    setError("")
+    let imageCount = attachments.filter((item) => item.contentType.startsWith("image/")).length
+    let videoCount = attachments.filter((item) => item.contentType.startsWith("video/")).length
+    try {
+      for (const file of files) {
+        const isImage = ["image/jpeg", "image/png", "image/webp"].includes(file.type)
+        const isVideo = ["video/mp4", "video/webm"].includes(file.type)
+        if (!isImage && !isVideo) { setError("Choose JPG, PNG, WebP, MP4, or WebM files."); continue }
+        if (file.size > 6 * 1024 * 1024) { setError(`${file.name} is larger than 6 MB.`); continue }
+        if (isImage && imageCount >= 6) { setError("Attach up to six photos."); continue }
+        if (isVideo && videoCount >= 1) { setError("Attach one video per job."); continue }
+        if (isImage) imageCount += 1
+        if (isVideo) videoCount += 1
+        const previewUrl = URL.createObjectURL(file)
+        previewUrls.current.add(previewUrl)
+        setAttachments((current) => [...current, { path: "", contentType: file.type, size: file.size, previewUrl, uploading: true }])
+        try {
+          const uploaded = await auth.uploadServiceListingMedia(file)
+          setAttachments((current) => current.map((item) => item.previewUrl === previewUrl ? { ...uploaded, previewUrl, uploading: false } : item))
+        } catch (caught) {
+          previewUrls.current.delete(previewUrl)
+          URL.revokeObjectURL(previewUrl)
+          setAttachments((current) => current.filter((item) => item.previewUrl !== previewUrl))
+          setError(caught instanceof Error ? caught.message : "Could not upload this attachment.")
+        }
+      }
+    } finally { setUploadingMedia(false) }
+  }
+  const removeAttachment = (item: ServiceListingMedia & { previewUrl: string }) => {
+    previewUrls.current.delete(item.previewUrl)
+    URL.revokeObjectURL(item.previewUrl)
+    setAttachments((current) => current.filter((candidate) => candidate.previewUrl !== item.previewUrl))
+    if (item.path) void auth.deleteServiceListingMedia(item.path).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not remove this attachment."))
+  }
+  const postJob = async () => {
+    const parsedBudget = budget.trim() ? Number(budget) : null
+    if (
+      !title.trim() ||
+      !description.trim() ||
+      !category.trim() ||
+      !location.trim() ||
+      (parsedBudget !== null &&
+        (!Number.isFinite(parsedBudget) ||
+          parsedBudget <= 0 ||
+          Math.round(parsedBudget * 100) < 1 ||
+          !Number.isSafeInteger(Math.round(parsedBudget * 100))))
+    ) {
+      setError(
+        "Add a title, description, location, and a valid optional budget before posting.",
+      )
+      return
+    }
+
+    if (uploadingMedia || attachments.some((item) => !item.path)) { setError("Wait for all photos and videos to finish uploading."); return }
+    setSubmitting(true)
+    try {
+      const job = await auth.createMarketplaceJob({
+        title: title.trim(),
+        category: category.trim(),
+        description: description.trim(),
+        locationLabel: location.trim(),
+        budgetMinor:
+          parsedBudget === null ? null : Math.round(parsedBudget * 100),
+        requestedFor: requestedDate
+          ? new Date(`${requestedDate}T12:00:00`).toISOString()
+          : null,
+        applicationDeadlineAt: applicationDeadline
+          ? new Date(`${applicationDeadline}T23:59:59.000Z`).toISOString()
+          : null,
+        dueAt: dueDate ? new Date(`${dueDate}T23:59:59.000Z`).toISOString() : null,
+        locationMode,
+        locationLatitude: jobPin?.latitude ?? null,
+        locationLongitude: jobPin?.longitude ?? null,
+        media: attachments.map(({ path, contentType, size }) => ({ path, contentType, size })),
+      })
+      updateStore({ selectedJobId: job.id })
+      setError("")
+      go("bids")
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldnâ€™t post this job. Please try again.",
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+  return (
+    <div className="content form-page">
+      <PageHeader
+        eyebrow={`Step ${step} of 3`}
+        title={
+          step === 1
+            ? "Tell us what you need"
+            : step === 2
+              ? "Where and when?"
+              : "Review your job"
+        }
+        description="Clear details help you get accurate quotes."
+      />
+      <div className="progress">
+        <i style={{ width: `${step * 33.3}%` }} />
+      </div>
+      <div className="form-card">
+        {step === 1 && (
+          <>
+            <label>
+              Job title
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+            <label>
+              Category
+              <select
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+              >
+                {[
+                  "Cleaning",
+                  "Plumbing",
+                  "Electrical",
+                  "Care",
+                  "Grooming",
+                  "Tutoring",
+                  "Moving",
+                  "Repairs",
+                ].map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              What needs to be done?
+              <textarea
+                rows={5}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+              />
+            </label>
+            <label className="listing-media-picker">
+              <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple disabled={uploadingMedia || submitting} onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; void addFiles(files) }} />
+              {uploadingMedia ? "Uploading attachments…" : "Add job photos or video"}
+            </label>
+            <small>Attach up to 6 photos and 1 short video, up to 6 MB each. Providers who can bid will be able to view these files.</small>
+            {attachments.length > 0 && <div className="listing-media-gallery listing-media-previews">{attachments.map((item) => <div className="listing-media-preview" key={item.previewUrl}>{item.contentType.startsWith("video/") ? <video className="listing-media-item" src={item.previewUrl} controls playsInline preload="metadata" /> : <img className="listing-media-item" src={item.previewUrl} alt="Job attachment preview" />}{item.uploading && <span className="listing-media-status">Uploading…</span>}<button type="button" className="listing-media-remove" disabled={item.uploading} onClick={() => removeAttachment(item)}>Remove</button></div>)}</div>}
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <label>
+              Budget (KES)
+              <input
+                inputMode="decimal"
+                value={budget}
+                onChange={(event) => setBudget(event.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+            <label>
+              Area or neighborhood (shown to providers)
+              <input
+                value={location}
+                onChange={(event) => setLocation(event.target.value)}
+              />
+            </label>
+            <label>
+              Work location
+              <select value={locationMode} onChange={(event) => { const mode = event.target.value as typeof locationMode; setLocationMode(mode); if (mode === "remote") setJobPin(null) }}>
+                <option value="onsite">On site</option>
+                <option value="remote">Remote</option>
+                <option value="flexible">Flexible</option>
+              </select>
+            </label>
+            {locationMode !== "remote" && <div className="card-actions"><Button variant="secondary" onClick={() => {
+              if (!navigator.geolocation) { setError("Location is not available in this browser."); return }
+              navigator.geolocation.getCurrentPosition(
+                (position) => { setJobPin({ latitude: Number(position.coords.latitude.toFixed(2)), longitude: Number(position.coords.longitude.toFixed(2)) }); setError("") },
+                () => setError("We could not read your location. You can still post by area."),
+                { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+              )
+            }}>Use approximate current location</Button>{jobPin && <span className="caption">Approximate map pin added.</span>}</div>}
+            <div className="field-pair">
+              <label>
+                Preferred date
+                <input
+                  type="date"
+                  value={requestedDate}
+                  onChange={(event) => setRequestedDate(event.target.value)}
+                />
+              </label>
+              <label>
+                Applications close
+                <input type="date" value={applicationDeadline} min={new Date().toISOString().slice(0, 10)} onChange={(event) => setApplicationDeadline(event.target.value)} />
+              </label>
+            </div>
+            <div className="field-pair">
+              <label>
+                Work due date
+                <input type="date" value={dueDate} min={applicationDeadline ? new Date(new Date(`${applicationDeadline}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : undefined} onChange={(event) => setDueDate(event.target.value)} />
+              </label>
+            </div>
+          </>
+        )}
+        {step === 3 && (
+          <div className="job-review">
+            <Badge>Open to vetted providers</Badge>
+            <h2>{title}</h2>
+            <p>{description}</p>
+            <ListingMediaGallery media={attachments.filter((item) => item.path).map(({ path, contentType, size }) => ({ path, contentType, size }))} />
+            <div className="review-facts">
+              <span>
+                <small>Budget</small>
+                <b>
+                  {budget
+                    ? `KES ${Number(budget).toLocaleString()}`
+                    : "Open to quotes"}
+                </b>
+              </span>
+              <span>
+                <small>Location</small>
+                <b>{location}</b>
+              </span>
+              <span>
+                <small>Timing</small>
+                <b>{requestedDate || "Flexible"}</b>
+              </span>
+              <span>
+                <small>Applications close</small>
+                <b>{applicationDeadline || "7 days after posting"}</b>
+              </span>
+              {dueDate && <span><small>Work due</small><b>{dueDate}</b></span>}
+              <span><small>Work mode</small><b>{locationMode}</b></span>
+            </div>
+            <div className="safe-note">
+              <Icon name="shield" />
+              <span>
+                Only verified providers can bid. You choose who to hire.
+              </span>
+            </div>
+          </div>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="form-actions">
+          {step > 1 && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setError("")
+                setStep(step - 1)
+              }}
+            >
+              Back
+            </Button>
+          )}
+          <Button
+            disabled={submitting || uploadingMedia || attachments.some((item) => !item.path)}
+            onClick={() =>
+              step < 3
+                ? (setError(""), setStep(step + 1))
+                : void postJob()
+            }
+          >
+            {step < 3 ? "Continue" : submitting ? "Publishing…" : "Publish job"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider: (providerId: string) => void }) {
+  const { store, updateStore } = useDemoStore()
+  const auth = useAuth()
+  const [providerSummaries, setProviderSummaries] = useState<Record<string, { bio: string; region: string; rating: number; reviewCount: number; avatarPath?: string | null }>>({})
+  const {
+    jobs,
+    loading: jobsLoading,
+    error: jobsError,
+    refresh: refreshJobs,
+  } =
+    useMarketplaceJobs("consumer")
+  const selectedJob =
+    jobs.find((item) => item.id === store.selectedJobId) ?? jobs[0]
+  const {
+    job,
+    quotes,
+    loading,
+    error: jobError,
+    refresh,
+  } = useMarketplaceJobData(selectedJob?.id, "consumer")
+  const [selectedQuoteId, setSelectedQuoteId] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [accepting, setAccepting] = useState(false)
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshJobs()
+      void refresh()
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [refresh, refreshJobs])
+  const selectedQuote =
+    quotes.find((quote) => quote.id === selectedQuoteId) ??
+    quotes.find((quote) => quote.status === "accepted") ??
+    quotes.find((quote) => quote.status === "submitted") ??
+    quotes[0]
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all(quotes.map(async (quote) => {
+      try {
+        const [provider, reviews] = await Promise.all([
+          auth.getMarketplaceProvider(quote.providerId),
+          auth.getPublicProviderReviews(quote.providerId),
+        ])
+        const rating = reviews.length ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length : 0
+        return [quote.providerId, { bio: provider.bio, region: provider.region, rating, reviewCount: reviews.length, avatarPath: provider.avatarPath }] as const
+      } catch {
+        return [quote.providerId, { bio: "", region: "", rating: 0, reviewCount: 0, avatarPath: null }] as const
+      }
+    })).then((entries) => {
+      if (!cancelled) setProviderSummaries(Object.fromEntries(entries))
+    })
+    return () => { cancelled = true }
+  }, [auth.getMarketplaceProvider, auth.getPublicProviderReviews, quotes])
+
+  useEffect(() => {
+    if (quotes.length && !quotes.some((quote) => quote.id === selectedQuoteId)) {
+      setSelectedQuoteId((quotes.find((quote) => quote.status === "accepted") ?? quotes.find((quote) => quote.status === "submitted") ?? quotes[0]).id)
+    }
+  }, [quotes, selectedQuoteId])
+
+  const acceptQuote = async () => {
+    if (!job || !selectedQuote) return
+    setAccepting(true)
+    setActionError("")
+    try {
+      setSelectedQuoteId(selectedQuote.id)
+      await auth.acceptMarketplaceQuote(job.id, selectedQuote.id)
+      await refresh()
+    } catch (requestError) {
+      setActionError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldnâ€™t accept this quote. Please try again.",
+      )
+    } finally {
+      setAccepting(false)
+    }
+  }
+
+  if (jobsLoading || (selectedJob && loading)) {
+    return <p className="center-note">Loading your saved job and quotesâ€¦</p>
+  }
+
+  if (jobsError || jobError) {
+    return (
+      <div className="content">
+        <PageHeader title="Proposals for your jobs" description="Live marketplace data." />
+        <p className="form-error" role="alert">
+          {jobsError || jobError}
+        </p>
+        <Button
+          onClick={() =>
+            jobsError ? void refreshJobs() : void refresh()
+          }
+        >
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  if (!job) {
+    return (
+      <div className="content">
+        <PageHeader title="Proposals for your jobs" description="Compare provider bids for your posted jobs." />
+        <EmptyState
+          title="No posted jobs yet"
+          detail="Post a job and compare proposals from verified providers."
+          action={() => go("post")}
+          actionLabel="Post a job"
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="content">
+      <PageHeader
+        eyebrow={`${quotes.length} proposals · Job ${job.id.slice(0, 8)}`}
+        title="Review worker proposals"
+        description={job.title}
+      />
+      <label className="bid-job-picker">Your posted jobs
+        <select value={job.id} onChange={(event) => { updateStore({ selectedJobId: event.target.value }); setSelectedQuoteId("") }}>
+          {jobs.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.status.replace(/_/g, " ")} · {item.quoteCount} proposal{item.quoteCount === 1 ? "" : "s"}</option>)}
+        </select>
+      </label>
+      <JobTimeline job={job} />
+      <ListingMediaGallery media={job.media ?? []} />
+      <div className="bid-layout">
+        <div className="bid-list card table-card"><div className="table-wrap"><table>
+          <thead><tr><th>#</th><th>Worker</th><th>Rating</th><th>Proposal</th><th>Bid</th><th>Availability</th><th>Status</th><th></th></tr></thead>
+          <tbody>{quotes.map((quote, index) => <tr key={quote.id} className={selectedQuote?.id === quote.id ? "selected-proposal-row" : undefined}>
+            <td>{index + 1}</td>
+            <td><button className="table-link" onClick={() => onOpenProvider(quote.providerId)}>{quote.providerName}</button><br /><small>{providerSummaries[quote.providerId]?.region || "Area not provided"}</small></td>
+            <td>{providerSummaries[quote.providerId]?.reviewCount ? providerSummaries[quote.providerId].rating.toFixed(1) + " ? (" + providerSummaries[quote.providerId].reviewCount + ")" : "No reviews"}</td>
+            <td className="proposal-message-cell">{quote.message}</td>
+            <td>KES {(quote.amountMinor / 100).toLocaleString()}</td><td>{quote.availability}</td>
+            <td><Badge tone={quote.status === "accepted" ? "green" : quote.status === "submitted" ? "amber" : undefined}>{quote.status}</Badge></td>
+            <td><Button variant={selectedQuote?.id === quote.id ? "primary" : "secondary"} disabled={quote.status !== "submitted" && quote.status !== "accepted"} onClick={() => setSelectedQuoteId(quote.id)}>{selectedQuote?.id === quote.id ? "Selected" : "Review"}</Button></td>
+          </tr>)}
+          {!quotes.length && <tr><td colSpan={8}>No worker proposals have been submitted for this job yet.</td></tr>}
+          </tbody>
+        </table></div></div>
+        <aside className="summary-card">
+          <h2>{job.status === "open" ? "Your selection" : "Job status"}</h2>
+          {selectedQuote ? (
+            <>
+              <div className="selected-person">
+                <Avatar src="" name={selectedQuote.providerName} />
+                <span>
+                  <strong>{selectedQuote.providerName}</strong>
+                  <small>{selectedQuote.availability}</small>
+                </span>
+              </div>
+              <Button variant="secondary" onClick={() => onOpenProvider(selectedQuote.providerId)}>
+                View worker profile
+              </Button>
+              <div className="summary-line">
+                <span>Worker bid</span>
+                <strong>
+                  KES {(selectedQuote.amountMinor / 100).toLocaleString()}
+                </strong>
+              </div>
+              {job.status === "open" && selectedQuote.status === "submitted" && (
+                <Button disabled={accepting} onClick={() => void acceptQuote()}>
+                  {accepting ? "Acceptingâ€¦" : "Accept bid"}
+                </Button>
+              )}
+              {job.status === "awarded" && (
+                <p role="status">A worker has been selected for this job.</p>
+              )}
+            </>
+          ) : (
+            <p>No worker proposals yet. New bids will appear here automatically.</p>
+          )}
+          <p>
+            Payments are disabled. Accepting a quote does not charge or transfer
+            money.
+          </p>
+          {(jobError || actionError) && (
+            <p className="form-error" role="alert">
+              {actionError || jobError}
+            </p>
+          )}
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function Checkout({ go }: { go: (s: Screen) => void }) {
+  return (
+    <div className="content narrow">
+      <PageHeader
+        eyebrow="Payments disabled"
+        title="Payment is not available yet"
+        description="No payment method will be charged and no demo payment will change a jobâ€™s status."
+      />
+      <div className="checkout-card">
+        <p>
+          Customers can accept provider quotes without a payment. Payment
+          integration will be enabled only after a provider and settlement
+          safeguards are configured.
+        </p>
+        <Button onClick={() => go("jobs")}>Back to my jobs</Button>
+      </div>
+    </div>
+  )
+}
+
+function Tracking({ go }: { go: (s: Screen) => void }) {
+  const { store, updateStore } = useDemoStore()
+  const job =
+    store.jobs.find((item) => item.id === store.selectedJobId) ?? store.jobs[0]
+  const [notice, setNotice] = useState("")
+  return (
+    <div className="content">
+      <PageHeader
+        eyebrow={`Job #${job.id}`}
+        title={`${store.selectedBid.provider.split(" ")[0]} is on the way`}
+        description="Illustrative status Â· live location is not connected"
+      />
+      <div className="track-grid">
+        <main className="card">
+          <div className="map-placeholder">
+            <div className="map-roads" />
+            <span className="map-pin">
+              <Avatar src={photos.amina} name="Amina" />
+            </span>
+            <div className="eta">
+              <strong>12 min</strong>
+              <span>2.4 km away</span>
+            </div>
+          </div>
+          <div className="provider-contact">
+            <Avatar src={photos.amina} name="Amina" />
+            <div>
+              <strong>{store.selectedBid.provider}</strong>
+              <span>{job.category} Â· sample location</span>
+            </div>
+            <Button
+              variant="secondary"
+              icon="message"
+              onClick={() => go("chat")}
+            >
+              Chat
+            </Button>
+            <a className="btn btn-ghost" href="tel:+254700000000">
+              Call (demo)
+            </a>
+          </div>
+        </main>
+        <aside className="card timeline-card">
+          <h2>Job status</h2>
+          <DemoNotice>
+            Timeline is sample data; no live tracking available.
+          </DemoNotice>
+          <div className="timeline">
+            <div className="done">
+              <i>
+                <Icon name="check" size={14} />
+              </i>
+              <span>
+                <b>Accepted</b>
+                <small>Demo booking</small>
+              </span>
+            </div>
+            <div className="current">
+              <i />
+              <span>
+                <b>On the way</b>
+                <small>Estimated Â· sample</small>
+              </span>
+            </div>
+            <div>
+              <i />
+              <span>
+                <b>In progress</b>
+                <small>Up next</small>
+              </span>
+            </div>
+            <div>
+              <i />
+              <span>
+                <b>Done</b>
+                <small>Payment ready to release</small>
+              </span>
+            </div>
+          </div>
+          <Button onClick={() => go("chat")}>Open job chat</Button>
+          <Button
+            onClick={() => {
+              updateStore({
+                jobs: store.jobs.map((item) =>
+                  item.id === job.id ? { ...item, status: "Completed" } : item,
+                ),
+              })
+              go("review")
+            }}
+          >
+            Confirm completion & review
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() =>
+              setNotice("Reschedule/cancellation is a demo request only.")
+            }
+          >
+            Reschedule or cancel
+          </Button>
+          <Button variant="danger" onClick={() => go("dispute")}>
+            Open a dispute
+          </Button>
+          {notice && <DemoNotice>{notice}</DemoNotice>}
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function Review({ go }: { go: (s: Screen) => void }) {
+  const auth = useAuth()
+  const [page, setPage] = useState<import("../../auth/AuthProvider").ServiceListingReviewPage | null>(null)
+  const [error, setError] = useState("")
+  const refresh = () => auth.getServiceListingReviews("consumer").then(setPage).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load your reviews."))
+  useEffect(() => { void refresh() }, [auth.getServiceListingReviews])
+  return <div className="content narrow"><PageHeader title="Review completed work" description="Customers and providers can review each other after both confirm a job is complete." />{error && <p className="form-error" role="alert">{error}</p>}{!page ? <p role="status">Loading completed jobs…</p> : page.pending.length === 0 ? <section className="card"><h2>No reviews waiting</h2><p>When you confirm a completed job, you can leave the provider a review here.</p><Button variant="secondary" onClick={() => go("history")}>View my jobs</Button></section> : page.pending.map((item) => <ListingReviewForm key={item.listingId} listingId={item.listingId} listingTitle={item.listingTitle} revieweeName={item.revieweeName} onSaved={() => void refresh()} />)}{page?.received.length ? <section className="card reputation-section"><h2>Reviews about you</h2>{page.received.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} · {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}</section> : null}</div>
+}
+
+function EmptyState({
+  title,
+  detail,
+  action,
+  actionLabel,
+}: {
+  title: string
+  detail: string
+  action?: () => void
+  actionLabel?: string
+}) {
+  return (
+    <div className="empty-state">
+      <span>
+        <Icon name="search" size={26} />
+      </span>
+      <h2>{title}</h2>
+      <p>{detail}</p>
+      {action && (
+        <Button variant="secondary" onClick={action}>
+          {actionLabel ?? "Try again"}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function DemoNotice({
+  children = "Demo mode: changes are stored in this browser only. No real services or payments are contacted.",
+}: {
+  children?: React.ReactNode
+}) {
+  return (
+    <p className="demo-notice" role="note">
+      {children}
+    </p>
+  )
+}
+
+function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
+  const { updateStore } = useDemoStore()
+  const auth = useAuth()
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("consumer")
+  const [tab, setTab] = useState<"open" | "active" | "completed">("open")
+  const [actionError, setActionError] = useState("")
+  const [revisionNotes, setRevisionNotes] = useState<Record<string, string>>({})
+  const activeStatuses = ["awarded", "in_progress", "completion_pending", "revision_requested"]
+  const jobsForTab = jobs.filter((job) =>
+    tab === "open"
+      ? job.status === "open"
+      : tab === "active"
+        ? activeStatuses.includes(job.status)
+        : ["completed", "cancelled", "disputed", "expired"].includes(job.status),
+  )
+
+  const transition = async (
+    jobId: string,
+    action: "confirm-completion" | "request-revision" | "cancel",
+    note?: string,
+  ) => {
+    try {
+      setActionError("")
+      await auth.transitionMarketplaceJob(jobId, action, note ? { note } : undefined)
+      await refresh()
+    } catch (requestError) {
+      setActionError(
+        requestError instanceof Error
+          ? requestError.message
+          : "We couldnâ€™t update this job. Please try again.",
+      )
+    }
+  }
+
+  return (
+    <div className="content">
+      <PageHeader
+        title="My jobs"
+        description="Keep track of quotes, bookings, and finished work."
+        action={<Button onClick={() => go("workFeed")}>Find providers</Button>}
+      />
+      <div className="filters">
+        {(["open", "active", "completed"] as const).map((status) => (
+          <button
+            className={tab === status ? "active" : ""}
+            key={status}
+            onClick={() => setTab(status)}
+          >
+            {status[0].toUpperCase() + status.slice(1)} Â·{" "}
+            {jobs.filter((job) =>
+              status === "open"
+                ? job.status === "open"
+                : status === "active"
+                  ? activeStatuses.includes(job.status)
+                  : ["completed", "cancelled", "disputed", "expired"].includes(job.status),
+            ).length}
+          </button>
+        ))}
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+          <Button variant="ghost" onClick={() => void refresh()}>
+            Retry
+          </Button>
+        </p>
+      )}
+      {actionError && (
+        <p className="form-error" role="alert">
+          {actionError}
+        </p>
+      )}
+      <div className="job-list">
+        {!loading && jobsForTab.map((job) => (
+          <section className="card job-summary" key={job.id}>
+            <Badge>{job.status.replace(/_/g, " ")}</Badge>
+            <h2>{job.title}</h2>
+            <p>
+              {job.category} Â· {job.locationLabel}
+              {job.budgetMinor !== null &&
+                ` Â· KES ${(job.budgetMinor / 100).toLocaleString()}`}
+            </p>
+            <p>{job.quoteCount} proposals Â· Job {job.id.slice(0, 8)}</p>
+            {job.applicationDeadlineAt && job.status === "open" && <p className="caption">Applications close {new Date(job.applicationDeadlineAt).toLocaleString()}</p>}
+            {job.dueAt && <p className="caption">Work due {new Date(job.dueAt).toLocaleString()}</p>}
+            {job.completionNote && job.status === "completion_pending" && <div className="safe-note"><span><strong>Provider submission</strong><br />{job.completionNote}</span></div>}
+            {job.revisionNote && job.status === "revision_requested" && <div className="safe-note"><span><strong>Revision requested</strong><br />{job.revisionNote}</span></div>}
+            <div className="card-actions">
+              {job.status === "open" && (
+                <Button
+                  onClick={() => {
+                    updateStore({ selectedJobId: job.id })
+                    go("bids")
+                  }}
+                >
+                  {job.quoteCount} proposals Â· Compare
+                </Button>
+              )}
+              {job.status === "awarded" && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    updateStore({ selectedJobId: job.id })
+                    go("bids")
+                  }}
+                >
+                  View selected provider
+                </Button>
+              )}
+              {job.status === "completion_pending" && (
+                <div className="form-card">
+                  <Button onClick={() => void transition(job.id, "confirm-completion")}>Approve completed work</Button>
+                  <label>Request a revision
+                    <textarea rows={3} minLength={10} maxLength={5000} value={revisionNotes[job.id] ?? ""} onChange={(event) => setRevisionNotes((current) => ({ ...current, [job.id]: event.target.value }))} placeholder="Explain what needs to be changed." />
+                  </label>
+                  <Button variant="secondary" disabled={(revisionNotes[job.id] ?? "").trim().length < 10} onClick={() => void transition(job.id, "request-revision", revisionNotes[job.id]?.trim())}>Send revision request</Button>
+                </div>
+              )}
+              {job.status === "open" && (
+                <Button
+                  variant="ghost"
+                  onClick={() => void transition(job.id, "cancel")}
+                >
+                  Cancel job
+                </Button>
+              )}
+            </div>
+          </section>
+        ))}
+        {loading && <p className="center-note">Loading your jobsâ€¦</p>}
+        {!loading && !error && !jobsForTab.length && (
+          <EmptyState
+            title={`No ${tab} jobs yet`}
+            detail="Jobs posted from your account will appear here and update live."
+            action={() => go("post")}
+            actionLabel="Post your first job"
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function WorkFeed({ onOpenProvider, go }: { onOpenProvider: (providerId: string) => void; go: (s: Screen) => void }) {
+  const auth = useAuth()
+  const { updateStore } = useDemoStore()
+  const [view, setView] = useState<"workers" | "proposals">("workers")
+  const [search, setSearch] = useState("")
+  const [region, setRegion] = useState("")
+  const { providers, total: workerTotal, loading: workersLoading, error: workersError, refresh: refreshWorkers } = useMarketplaceProviders(search, region, 50)
+  const { jobs, loading: jobsLoading, error: jobsError, refresh: refreshJobs } = useMarketplaceJobs("consumer")
+  const [proposalRows, setProposalRows] = useState<Array<{ job: import("../../auth/AuthProvider").MarketplaceJob; quote: import("../../auth/AuthProvider").MarketplaceQuote }>>([])
+  const [proposalsLoading, setProposalsLoading] = useState(false)
+  const [proposalsError, setProposalsError] = useState("")
+  const jobsWithProposals = jobs.filter((job) => job.quoteCount > 0 && ["open", "awarded"].includes(job.status))
+
+  useEffect(() => {
+    let active = true
+    setProposalsLoading(true)
+    setProposalsError("")
+    void Promise.all(jobsWithProposals.map(async (job) => {
+      const quotes = await auth.getMarketplaceQuotes(job.id, "consumer")
+      return quotes.filter((quote) => quote.status === "submitted" || quote.status === "accepted").map((quote) => ({ job, quote }))
+    })).then((groups) => {
+      if (active) setProposalRows(groups.flat().sort((a, b) => new Date(b.quote.createdAt).getTime() - new Date(a.quote.createdAt).getTime()))
+    }).catch((caught: unknown) => {
+      if (active) setProposalsError(caught instanceof Error ? caught.message : "Could not load worker proposals.")
+    }).finally(() => { if (active) setProposalsLoading(false) })
+    return () => { active = false }
+  }, [auth.getMarketplaceQuotes, jobs])
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined
+    try { unsubscribe = auth.subscribeMarketplaceChanges(() => { void refreshJobs(); void refreshWorkers() }) } catch { /* Periodic refresh below covers unavailable realtime subscriptions. */ }
+    const timer = window.setInterval(() => { void refreshJobs(); void refreshWorkers() }, 20000)
+    return () => { unsubscribe?.(); window.clearInterval(timer) }
+  }, [auth.subscribeMarketplaceChanges, refreshJobs, refreshWorkers])
+
+  const reviewProposals = (jobId: string) => {
+    updateStore({ selectedJobId: jobId })
+    go("bids")
+  }
+
+  return <div className="content">
+    <PageHeader title="Find workers" description="Browse approved worker profiles or review proposals submitted for your jobs." action={<Button variant="secondary" onClick={() => { void refreshWorkers(); void refreshJobs() }}>Refresh</Button>} />
+    <div className="filters">
+      <button className={view === "workers" ? "active" : ""} onClick={() => setView("workers")}>Worker directory</button>
+      <button className={view === "proposals" ? "active" : ""} onClick={() => setView("proposals")}>Submitted proposals ({proposalRows.length})</button>
+    </div>
+    {view === "workers" ? <>
+      <div className="provider-directory-filters">
+        <label>Search workers<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, skill, or service" /></label>
+        <label>Service area<input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="For example, Nairobi" /></label>
+      </div>
+      {workersError && <p className="form-error" role="alert">{workersError}</p>}
+      <p className="caption">{workerTotal} approved {workerTotal === 1 ? "worker profile" : "worker profiles"}</p>
+      {workersLoading ? <p role="status">Loading workers…</p> : providers.length ? <div className="provider-directory-grid">{providers.map((worker) => <ProviderDirectoryCard key={worker.id} provider={worker} onClick={() => onOpenProvider(worker.id)} />)}</div> : !workersError ? <EmptyState title="No workers found" detail="Try another skill or service area. Approved worker profiles will appear here." /> : null}
+    </> : <>
+      <p className="caption">Proposals submitted by workers for your open jobs. Review a job to compare bids and select a worker.</p>
+      {jobsError && <p className="form-error" role="alert">{jobsError}</p>}
+      {proposalsError && <p className="form-error" role="alert">{proposalsError}</p>}
+      <section className="card table-card"><div className="table-wrap"><table>
+        <thead><tr><th>#</th><th>Job</th><th>Worker</th><th>Bid</th><th>Availability</th><th>Proposal</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {proposalRows.map(({ job, quote }, index) => <tr key={quote.id}>
+            <td>{index + 1}</td><td><strong>{job.title}</strong><br /><small>{job.category} · {job.locationLabel}</small></td>
+            <td><button className="table-link" onClick={() => onOpenProvider(quote.providerId)}>{quote.providerName}</button></td>
+            <td>KES {(quote.amountMinor / 100).toLocaleString()}</td><td>{quote.availability}</td><td className="proposal-message-cell">{quote.message}</td>
+            <td><Badge tone={quote.status === "accepted" ? "green" : "amber"}>{quote.status === "accepted" ? "selected" : "awaiting review"}</Badge></td>
+            <td><Button variant="secondary" onClick={() => reviewProposals(job.id)}>Review bids</Button></td>
+          </tr>)}
+          {(jobsLoading || proposalsLoading) && !proposalRows.length && <tr><td colSpan={8}>Loading worker proposals…</td></tr>}
+          {!jobsLoading && !proposalsLoading && !jobsError && !proposalsError && !proposalRows.length && <tr><td colSpan={8}>No proposals yet. Post a job to receive worker bids.</td></tr>}
+        </tbody>
+      </table></div></section>
+      {!proposalRows.length && !jobsLoading && !proposalsLoading && <div className="card-actions"><Button onClick={() => go("post")}>Post a job</Button></div>}
+    </>}
+  </div>
+}
+
+function MapView({ go }: { go: (screen: Screen) => void }) {
+  const [selected, setSelected] = useState("Amina Hassan")
+  return (
+    <div className="content">
+      <PageHeader
+        title="Nearby providers"
+        description="Illustrative map preview Â· locations are sample data."
+        action={
+          <Button variant="secondary" onClick={() => go("search")}>
+            Back to list
+          </Button>
+        }
+      />
+      <div className="map-demo">
+        <div className="map-road-label">NAIROBI Â· KILIMANI</div>
+        {["Amina Hassan", "Grace Wairimu", "Brian Otieno"].map(
+          (name, index) => (
+            <button
+              className={`map-marker marker-${index} ${
+                selected === name ? "selected" : ""
+              }`}
+              key={name}
+              onClick={() => setSelected(name)}
+              aria-label={`Show ${name}`}
+            >
+              <Icon name="location" size={22} />
+            </button>
+          ),
+        )}
+      </div>
+      <div className="card map-preview">
+        <div className="selected-person">
+          <Avatar
+            src={
+              selected === "Amina Hassan"
+                ? photos.amina
+                : selected === "Grace Wairimu"
+                  ? photos.wanjiku
+                  : photos.otieno
+            }
+            name={selected}
+          />
+          <span>
+            <strong>{selected}</strong>
+            <small>Available now Â· â˜… 4.9 Â· from KES 800</small>
+          </span>
+        </div>
+        <Button onClick={() => go("profile")}>View provider</Button>
+      </div>
+    </div>
+  )
+}
+
+function Chat() {
+  return <ServiceMessages role="consumer" />
+}
+
+function History({ go }: { go: (screen: Screen) => void }) {
+  const auth = useAuth()
+  const { updateStore } = useDemoStore()
+  const { jobs, loading, error, refresh } = useMarketplaceJobs("consumer")
+  const [workerNames, setWorkerNames] = useState<Record<string, string>>({})
+  const historyJobs = jobs
+    .filter((job) => ["awarded", "in_progress", "completion_pending", "revision_requested", "completed"].includes(job.status))
+    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime())
+
+  useEffect(() => {
+    let active = true
+    void Promise.all(historyJobs.map(async (job) => {
+      try {
+        const quotes = await auth.getMarketplaceQuotes(job.id, "consumer")
+        const accepted = quotes.find((quote) => quote.status === "accepted")
+        return [job.id, accepted?.providerName ?? "Worker selected"] as const
+      } catch {
+        return [job.id, "Worker details unavailable"] as const
+      }
+    })).then((entries) => {
+      if (active) setWorkerNames(Object.fromEntries(entries))
+    })
+    return () => { active = false }
+  }, [auth.getMarketplaceQuotes, jobs])
+
+  const openJob = (jobId: string) => {
+    updateStore({ selectedJobId: jobId })
+    go("bids")
+  }
+
+  return <div className="content">
+    <PageHeader title="Job history" description="Jobs awarded to workers and their live progress or completion status." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <section className="card">
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Job</th><th>Worker</th><th>Status</th><th>Area</th><th>Last updated</th><th></th></tr></thead>
+          <tbody>
+            {historyJobs.map((job, index) => <tr key={job.id}>
+              <td>{index + 1}</td>
+              <td><strong>{job.title}</strong><br /><small>{job.category} · {job.id.slice(0, 8)}</small></td>
+              <td>{workerNames[job.id] ?? "Loading…"}</td>
+              <td><Badge tone={job.status === "completed" ? "green" : job.status === "revision_requested" ? "red" : "amber"}>{job.status === "awarded" ? "worker selected" : job.status.replace(/_/g, " ")}</Badge></td>
+              <td>{job.locationLabel}</td>
+              <td>{new Date(job.updatedAt).toLocaleString()}</td>
+              <td><Button variant="ghost" onClick={() => openJob(job.id)}>View job</Button></td>
+            </tr>)}
+            {!loading && !error && historyJobs.length === 0 && <tr><td colSpan={7}>No jobs have been awarded to a worker yet.</td></tr>}
+            {loading && <tr><td colSpan={7}>Loading live job history…</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {!historyJobs.length && !loading && !error && <div className="card-actions"><Button onClick={() => go("workFeed")}>Find workers</Button></div>}
+  </div>
+}
+function SavedProviders({ go, onOpenProvider }: { go: (screen: Screen) => void; onOpenProvider: (providerId: string) => void }) {
+  const auth = useAuth()
+  const [providers, setProviders] = useState<import("../../auth/AuthProvider").MarketplaceProvider[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [removingId, setRemovingId] = useState("")
+  const refresh = useCallback(async () => {
+    setError("")
+    try { setProviders(await auth.getSavedProviders()) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load saved workers.") }
+    finally { setLoading(false) }
+  }, [auth.getSavedProviders])
+  useEffect(() => {
+    void refresh()
+    let unsubscribe: (() => void) | undefined
+    try { unsubscribe = auth.subscribeMarketplaceChanges(() => void refresh()) } catch { /* Polling below keeps the saved list current without realtime configuration. */ }
+    const timer = window.setInterval(() => void refresh(), 20000)
+    return () => { unsubscribe?.(); window.clearInterval(timer) }
+  }, [auth.subscribeMarketplaceChanges, refresh])
+  const remove = async (providerId: string) => {
+    setRemovingId(providerId)
+    setError("")
+    try { await auth.removeSavedProvider(providerId); setProviders((items) => items.filter((item) => item.id !== providerId)) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not remove this provider.") }
+    finally { setRemovingId("") }
+  }
+  return <div className="content">
+    <PageHeader title="Saved workers" description="Your personal shortlist of approved workers." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {loading ? <p role="status">Loading your saved workers…</p> : providers.length ? <div className="provider-directory-grid">
+      {providers.map((provider) => <section className="saved-provider-item" key={provider.id}>
+        <ProviderDirectoryCard provider={provider} onClick={() => onOpenProvider(provider.id)} />
+        <Button variant="ghost" disabled={removingId === provider.id} onClick={() => void remove(provider.id)}>{removingId === provider.id ? "Removing…" : "Remove from saved"}</Button>
+      </section>)}
+    </div> : !error ? <EmptyState title="No saved workers yet" detail="Open an approved worker profile and save it to keep it on your shortlist." action={() => go("workFeed")} actionLabel="Find workers" /> : null}
+  </div>
+}
+function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBack: () => void }) {
+  const auth = useAuth()
+  const [listings, setListings] = useState<import("../../auth/AuthProvider").ServiceListing[]>([])
+  const [selectedId, setSelectedId] = useState(listingId ?? "")
+  const [reason, setReason] = useState<"other" | "unsafe" | "fraud" | "harassment" | "off_platform_payment">("other")
+  const [details, setDetails] = useState("")
+  const [report, setReport] = useState<{ id: string; status: string; createdAt: string } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  useEffect(() => {
+    let active = true
+    void auth.getServiceListings("consumer", "mine").then((items) => { if (active) setListings(items) }).catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load your jobs.") }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [auth.getServiceListings])
+  useEffect(() => { if (listingId) setSelectedId(listingId) }, [listingId])
+  const selected = listings.find((item) => item.id === selectedId)
+  const submit = async () => {
+    if (!selected) { setError("Choose one of your jobs."); return }
+    setBusy(true)
+    setError("")
+    try {
+      setReport(await auth.createModerationReport({ subjectType: "job", subjectId: selected.id, reason, details: details.trim() }))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not submit your report.")
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <div className="content narrow">
+    <PageHeader title={report ? "Report submitted" : "Get help with your job"} description={selected ? selected.title + " · " + selected.providerName : "Choose a job from your history to contact support about it."} />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {report ? <section className="card"><Badge tone="green">Received</Badge><h2>Your report is in the support queue</h2><p>Reference: {report.id}</p><p>Status: {report.status.replace(/_/g, " ")}</p><Button onClick={onBack}>Back to job history</Button></section> : <section className="form-card">
+      {loading ? <p role="status">Loading your jobs…</p> : <label>Job<select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}><option value="">Choose a job</option>{listings.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.status.replace(/_/g, " ")}</option>)}</select></label>}
+      <label>Issue<select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)}><option value="other">Work quality, missed visit, or other issue</option><option value="unsafe">Safety concern</option><option value="harassment">Harassment</option><option value="fraud">Fraud</option><option value="off_platform_payment">Asked to pay outside OddJobs</option></select></label>
+      <label>Details<textarea rows={5} maxLength={2000} value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Describe what happened and what help you need." /></label>
+      <div className="card-actions"><Button variant="secondary" onClick={onBack}>Cancel</Button><Button disabled={busy || loading || !selected || details.trim().length < 10} onClick={() => void submit()}>{busy ? "Submitting…" : "Submit report"}</Button></div>
+    </section>}
+  </div>
+}
+function Settings({ go }: { go: (s: Screen) => void }) {
+  const auth = useAuth()
+  const [displayName, setDisplayName] = useState(auth.profile?.displayName ?? "")
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [avatarPreview, setAvatarPreview] = useState("")
+  const [profileBusy, setProfileBusy] = useState(false)
+  const [profileMessage, setProfileMessage] = useState("")
+  useEffect(() => { setDisplayName(auth.profile?.displayName ?? "") }, [auth.profile?.displayName])
+  useEffect(() => {
+    if (!avatarFile) { setAvatarPreview(""); return }
+    const previewUrl = URL.createObjectURL(avatarFile)
+    setAvatarPreview(previewUrl)
+    return () => URL.revokeObjectURL(previewUrl)
+  }, [avatarFile])
+  const saveProfile = async () => {
+    setProfileBusy(true)
+    setProfileMessage("")
+    try { await auth.updateProfile(displayName, avatarFile ?? undefined); setAvatarFile(null); setProfileMessage("Your account profile was updated.") }
+    catch (caught) { setProfileMessage(caught instanceof Error ? caught.message : "Could not update your profile.") }
+    finally { setProfileBusy(false) }
+  }
+  return (
+    <div className="content narrow">
+      <PageHeader
+        title="Settings"
+        description="Manage your account and identity details."
+      />
+      <section className="card setting-card account-settings-card">
+        <h2>Account profile</h2>
+        <label>Profile photo<div className="account-avatar-edit"><Avatar src={avatarPreview || auth.getProfileAvatarUrl(auth.profile?.avatarPath)} name={displayName || "Your profile"} /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} /></div><small>JPG, PNG, or WebP; up to 2 MB.</small></label>
+        <label>Display name<input value={displayName} maxLength={120} onChange={(event) => setDisplayName(event.target.value)} /></label>
+        {profileMessage && <p className={profileMessage.startsWith("Your account") ? "form-success" : "form-error"} role="status">{profileMessage}</p>}
+        <div className="card-actions"><Button disabled={profileBusy || !displayName.trim() || (displayName.trim() === auth.profile?.displayName && !avatarFile)} onClick={() => void saveProfile()}>{profileBusy ? "Saving…" : "Save profile"}</Button>{auth.profile?.roles.includes("consumer") && <Button variant="secondary" onClick={() => go("identityVerification")}>Hirer ID verification</Button>}{auth.profile?.roles.includes("provider") && <Button variant="secondary" onClick={() => go("providerVerification")}>Worker ID verification</Button>}</div>
+      </section>
+    </div>
+  )
+}
+
+export type CustomerScreenKey =
+  | "home"
+  | "hiringAnalytics"
+  | "hiringGuide"
+  | "post"
+  | "jobs"
+  | "bids"
+  | "checkout"
+  | "track"
+  | "chat"
+  | "review"
+  | "dispute"
+  | "history"
+  | "saved"
+  | "settings"
+  | "map"
+  | "workFeed"
+
+export default function CustomerScreens({ screen, go, onOpenProvider, disputeListingId = null, onOpenDispute = () => {} }: {
+  screen: CustomerScreenKey
+  go: (screen: Screen) => void
+  onOpenProvider: (providerId: string) => void
+  disputeListingId?: string | null
+  onOpenDispute?: (listingId: string) => void
+}) {
+  switch (screen) {
+    case "home": return <HiringDashboard go={go} />
+    case "hiringAnalytics": return <HiringAnalytics go={go} />
+    case "hiringGuide": return <HiringGuide go={go} />
+    case "post": return <PostJob go={go} />
+    case "jobs": return <ConsumerJobs go={go} />
+    case "bids": return <Bids go={go} onOpenProvider={onOpenProvider} />
+    case "checkout": return <Checkout go={go} />
+    case "track": return <Tracking go={go} />
+    case "chat": return <Chat />
+    case "review": return <Review go={go} />
+    case "dispute": return <CustomerDispute listingId={disputeListingId} onBack={() => go("history")} />
+    case "history": return <History go={go} />
+    case "saved": return <SavedProviders go={go} onOpenProvider={onOpenProvider} />
+    case "settings": return <Settings go={go} />
+    case "map": return <MapView go={go} />
+    case "workFeed": return <WorkFeed onOpenProvider={onOpenProvider} go={go} />
+    default: return null
+  }
+}

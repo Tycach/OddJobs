@@ -19,6 +19,7 @@ export type Screen =
   | "checkout"
   | "track"
   | "chat"
+  | "messages"
   | "review"
   | "dispute"
   | "history"
@@ -28,8 +29,10 @@ export type Screen =
   | "providerHome"
   | "onboarding"
   | "providerVerification"
+  | "identityVerification"
   | "feed"
   | "jobDetail"
+  | "providerBids"
   | "management"
   | "wallet"
   | "reputation"
@@ -53,6 +56,10 @@ export type Screen =
   | "programmes"
   | "impact"
   | "builder"
+  | "workFeed"
+  | "listingCreate"
+  | "hiringAnalytics"
+  | "hiringGuide"
 
 export type DemoBid = {
   provider: string

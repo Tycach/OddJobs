@@ -29,11 +29,13 @@ export class SupabaseTokenVerifier implements AccessTokenVerifier {
     }
 
     const displayName = user.user_metadata?.full_name
+    const accountIntent = user.user_metadata?.account_intent
     return {
       id: user.id,
       email: user.email ?? null,
       phone: user.phone ?? null,
       displayName: typeof displayName === "string" ? displayName : null,
+      ...(accountIntent === "supplier" ? { accountIntent } : {}),
     }
   }
 }

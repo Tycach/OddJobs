@@ -4,12 +4,11 @@ type TermsDialogProps = {
   open: boolean
   policy: "terms" | "privacy"
   onClose: () => void
-  onReadToEnd: () => void
 }
 
 export const POLICY_VERSIONS = {
   terms: "2026-11-05-v1",
-  privacy: "2026-11-05-v1",
+  privacy: "2026-11-19-v2",
 } as const
 
 const termsSections = [
@@ -138,6 +137,7 @@ const privacySections = [
     title: "2. Information we collect",
     paragraphs: [
       "Account information may include your name, email address or phone number, account identifiers, account type, authentication and verification status, and preferences. Passwords and authentication credentials are handled by the configured authentication provider and are not stored in the OddJobs application database.",
+      "If you apply to become a provider, OddJobs collects the government identity document you submit (currently a Kenyan national ID or passport), its document type, your service region, and skills evidence. The document is stored in a private bucket and is not part of your public profile. Authorized administrators can access it for identity review; each document access is audited and uses a link that expires after one minute. A specific retention period and deletion procedure must be established and published before production use.",
       "Marketplace information may include service profiles and applications, job descriptions, service location details you choose to provide, offers, booking and payment status, messages, reviews, and support requests. Do not include sensitive personal information unless it is necessary for the service.",
       "Technical information may include device and browser details, IP address and request metadata in security logs, session data, and information needed to diagnose errors or protect the service. The web app may store authentication session data and prototype/demo content in your browser's local or session storage.",
       "We do not intentionally collect precise location continuously. A location or address is collected when you choose to provide it as part of a service request or profile.",
@@ -210,7 +210,6 @@ export default function TermsDialog({
   open,
   policy,
   onClose,
-  onReadToEnd,
 }: TermsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -228,16 +227,6 @@ export default function TermsDialog({
   useEffect(() => {
     contentRef.current?.scrollTo(0, 0)
   }, [open, policy])
-
-  const handleScroll = () => {
-    const content = contentRef.current
-
-    if (!content) return
-
-    if (content.scrollTop + content.clientHeight >= content.scrollHeight - 8) {
-      onReadToEnd()
-    }
-  }
 
   const isTerms = policy === "terms"
   const title = isTerms ? "Terms & Conditions" : "Privacy Policy"
@@ -260,7 +249,7 @@ export default function TermsDialog({
             <p className="eyebrow">OddJobs.com</p>
             <h2 id="terms-dialog-title">{title}</h2>
             <p id="terms-dialog-description">
-              Version {POLICY_VERSIONS[policy]} · Last updated: 5 November 2026
+              Version {POLICY_VERSIONS[policy]} · Last updated: {policy === "privacy" ? "19 November 2026" : "5 November 2026"}
             </p>
           </div>
           <button
@@ -275,7 +264,6 @@ export default function TermsDialog({
         <div
           ref={contentRef}
           className="terms-dialog-content"
-          onScroll={handleScroll}
         >
           {sections.map((section) => (
             <section key={section.title}>
@@ -287,13 +275,13 @@ export default function TermsDialog({
           ))}
         </div>
         <footer className="terms-dialog-footer">
-          <p>Read to the end to enable the agreement checkbox.</p>
+          <p>You can close this document whenever you’re ready.</p>
           <button
             type="button"
             className="btn btn-primary"
             onClick={() => dialogRef.current?.close()}
           >
-            Return to sign up
+            Close
           </button>
         </footer>
       </div>

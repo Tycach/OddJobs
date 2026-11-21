@@ -5,6 +5,7 @@ import { useAuth, type AuthMethod, type OAuthProvider } from "./AuthProvider"
 import TermsDialog from "./TermsDialog"
 
 import type { Role } from "../demo/model"
+import { workspaceLabels } from "../app/access"
 
 type AuthStage =
   | "login"
@@ -19,6 +20,8 @@ type AuthStage =
   | "policyConsent"
 
 type SignupIntent = "customer" | "supplier"
+
+const defaultAdminEmail = import.meta.env.VITE_ADMIN_EMAIL?.trim() || "admin@oddjobs.com"
 
 type AuthExperienceProps = {
   initialRole?: Role | null
@@ -68,11 +71,13 @@ export default function AuthExperience({
 
   const [stage, setStage] = useState<AuthStage>(initialStage)
 
-  const [intent, setIntent] = useState<SignupIntent>("customer")
+  const [intent, setIntent] = useState<SignupIntent>(initialRole === "provider" ? "supplier" : "customer")
 
   const [name, setName] = useState("")
 
-  const [identifier, setIdentifier] = useState("")
+  const [identifier, setIdentifier] = useState(
+    initialRole === "admin" ? defaultAdminEmail : "",
+  )
 
   const [activeIdentifier, setActiveIdentifier] = useState("")
 
@@ -85,10 +90,6 @@ export default function AuthExperience({
   const [otp, setOtp] = useState("")
 
   const [termsAccepted, setTermsAccepted] = useState(false)
-
-  const [termsRead, setTermsRead] = useState(false)
-
-  const [privacyRead, setPrivacyRead] = useState(false)
 
   const [termsOpen, setTermsOpen] = useState(false)
 
@@ -108,7 +109,7 @@ export default function AuthExperience({
   const [logoFailed, setLogoFailed] = useState(false)
 
   const [showMobileWelcome, setShowMobileWelcome] = useState(
-    initialStage === "login",
+    initialStage === "login" && initialRole !== "admin",
   )
 
   const setError = (message: string) => {
@@ -138,15 +139,16 @@ export default function AuthExperience({
   const selectedRole = initialRole ?? "consumer"
 
   const canRegister = !["admin", "support", "partner"].includes(selectedRole)
+  const accountRoleMismatch = Boolean(
+    initialRole &&
+    auth.profile &&
+    !auth.profile.roles.includes(initialRole),
+  )
 
   const startSignup = (nextIntent: SignupIntent) => {
-    setIntent(nextIntent)
+    setIntent(initialRole === "provider" ? "supplier" : initialRole === "consumer" ? "customer" : nextIntent)
 
     setTermsAccepted(false)
-
-    setTermsRead(false)
-
-    setPrivacyRead(false)
 
     setError("")
 
@@ -185,7 +187,7 @@ export default function AuthExperience({
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    const contact = identify(identifier)
+    const contact = identify(initialRole === "admin" ? defaultAdminEmail : identifier)
 
     if (!contact) {
       setError("Enter a valid email address or Kenyan mobile number.")
@@ -252,7 +254,7 @@ export default function AuthExperience({
     }
 
     if (!termsAccepted) {
-      setError("Read and accept both policies to create an account.")
+      setError("Accept both policies to create an account.")
 
       return
     }
@@ -351,7 +353,7 @@ export default function AuthExperience({
     }
 
     if (!termsAccepted) {
-      setError("Read and accept both policies to create an account.")
+      setError("Accept both policies to create an account.")
 
       return
     }
@@ -396,7 +398,7 @@ export default function AuthExperience({
   const handlePolicyAcceptance = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!termsAccepted) {
-      setError("Read and accept both policies to continue.")
+      setError("Accept the current policies to continue.")
       return
     }
 
@@ -478,7 +480,7 @@ export default function AuthExperience({
     setBusy(true)
 
     try {
-      const message = await auth.requestPasswordReset(contact.identifier)
+      const message = await auth.requestPasswordReset(contact.identifier, initialRole === "provider" ? "provider" : "consumer")
 
       if (message) setError(message)
       else
@@ -535,7 +537,7 @@ export default function AuthExperience({
     auth.setRememberMe(remember)
 
     try {
-      const message = await auth.signInWithOAuth(provider)
+      const message = await auth.signInWithOAuth(provider, initialRole === "provider" ? "provider" : "consumer")
 
       if (message) setError(message)
     } catch (caught) {
@@ -638,32 +640,39 @@ export default function AuthExperience({
           />
         </div>
         <div className="mobile-auth-intro">
-          <h1>Find trusted local help. Get it done.</h1>
-          <p>Connect with reliable service professionals in your community.</p>
+          <h1>Hire a worker or find work.</h1>
+          <p>Post a job and choose a worker, or bid on jobs and do the work.</p>
         </div>
         <div className="mobile-auth-actions">
           <button type="button" className="auth-submit" onClick={openMobileLogin}>
             Log in
           </button>
-          {canRegister && (
+          {canRegister && initialRole !== "provider" && (
             <button
               type="button"
               className="mobile-auth-signup"
               onClick={() => openMobileSignup("customer")}
             >
-              Create account
+              Hire a worker
             </button>
           )}
         </div>
-        {canRegister && (
+        {canRegister && initialRole === "provider" && (
           <button
             type="button"
             className="mobile-auth-supplier"
             onClick={() => openMobileSignup("supplier")}
           >
-            Become a supplier
+            Find work
           </button>
         )}
+        <button
+          type="button"
+          className="auth-workspace-link"
+          onClick={() => chooseWorkspace("admin")}
+        >
+          Staff sign-in
+        </button>
       </section>
       <section
         className={`auth-panel${showMobileWelcome ? " auth-panel-mobile-hidden" : ""}`}
@@ -707,28 +716,39 @@ export default function AuthExperience({
           {stage === "role" && (
             <>
               <p className="auth-accent-line" />
-              <h1>Choose your workspace</h1>
+              <h1>What would you like to do?</h1>
               <p className="auth-subtitle">
-                How would you like to use OddJobs?
+                Choose whether you need work done or want to do the work.
               </p>
-              {(["consumer", "provider", "partner"] as const).map((role) => (
+              {(["consumer", "provider"] as const).map((role) => (
                 <button
                   type="button"
                   className="auth-role-choice"
                   key={role}
                   onClick={() => chooseWorkspace(role)}
                 >
-                  {role === "consumer"
-                    ? "Find trusted help"
-                    : role === "provider"
-                      ? "Offer services"
-                      : "Partner workspace"}
+                  <span>
+                    <strong>{role === "consumer" ? "Hire a worker" : "Find work"}</strong>
+                    <small>
+                      {role === "consumer"
+                        ? "Post a job, compare worker bids, and choose who will do the work."
+                        : "Browse jobs, submit bids, and manage work awarded to you."}
+                    </small>
+                  </span>
                   <span aria-hidden="true">→</span>
                 </button>
               ))}
+              <button
+                type="button"
+                className="auth-role-choice"
+                onClick={() => chooseWorkspace("admin")}
+              >
+                Staff sign-in
+                <span aria-hidden="true">→</span>
+              </button>
               <p className="auth-terms">
-                Provider access requires review. Staff workspaces are
-                provisioned by OddJobs.
+                Provider profiles are reviewed before quoting. Staff accounts are
+                created by OddJobs; there is no public staff registration.
               </p>
             </>
           )}
@@ -736,10 +756,10 @@ export default function AuthExperience({
           {stage === "policyConsent" && (
             <>
               <p className="auth-accent-line" />
-              <h1>Review our updated policies</h1>
+              <h1>Accept our updated policies</h1>
               <p className="auth-subtitle">
-                Please read the current Terms &amp; Conditions and Privacy
-                Policy to continue using OddJobs.
+                You can review the policies below. Check the box to accept and
+                continue.
               </p>
               <form className="auth-form" onSubmit={handlePolicyAcceptance}>
                 <div className="auth-terms-consent">
@@ -747,7 +767,6 @@ export default function AuthExperience({
                     <input
                       type="checkbox"
                       checked={termsAccepted}
-                      disabled={!termsRead || !privacyRead}
                       onChange={(event) =>
                         setTermsAccepted(event.target.checked)
                       }
@@ -767,9 +786,7 @@ export default function AuthExperience({
                         setTermsOpen(true)
                       }}
                     >
-                      {termsRead
-                        ? "Review Terms & Conditions"
-                        : "Read Terms & Conditions"}
+                      Review Terms &amp; Conditions
                     </button>
                     <button
                       type="button"
@@ -779,16 +796,9 @@ export default function AuthExperience({
                         setTermsOpen(true)
                       }}
                     >
-                      {privacyRead
-                        ? "Review Privacy Policy"
-                        : "Read Privacy Policy"}
+                      Review Privacy Policy
                     </button>
                   </div>
-                  {(!termsRead || !privacyRead) && (
-                    <span className="auth-terms-hint">
-                      Read both documents to the end before accepting.
-                    </span>
-                  )}
                 </div>
                 <button className="auth-submit" disabled={busy || !termsAccepted}>
                   {busy ? "Saving acceptance..." : "Accept and continue"}
@@ -808,8 +818,53 @@ export default function AuthExperience({
           {stage === "login" && (
             <>
               <p className="auth-accent-line" />
-              <h1>Welcome Back!</h1>
-              <p className="auth-subtitle">Log in to access your account</p>
+              <h1>
+                {initialRole === "admin" || initialRole === "support"
+                  ? "Staff sign-in"
+                  : initialRole === "provider"
+                    ? "Find work sign in"
+                    : "Hire a worker sign in"}
+              </h1>
+              {initialRole === "consumer" && (
+                <p className="auth-subtitle">
+                  Post jobs, review worker bids, and manage work you hire out.
+                </p>
+              )}
+              {initialRole === "provider" && (
+                <p className="auth-subtitle">
+                  Sign in to find jobs, submit bids, and manage your awarded work.
+                </p>
+              )}
+              {accountRoleMismatch && (
+                <div className="auth-inline-note" role="alert">
+                  <p>
+                    This account does not have access to the {workspaceLabels[initialRole]} workspace.
+                    Sign in with an account that has this role, or sign out to use a
+                    different account.
+                  </p>
+                  <button
+                    type="button"
+                    className="auth-text-button"
+                    onClick={() =>
+                      void auth
+                        .signOut()
+                        .then(() => {
+                          setError("")
+                          setNotice("You are signed out. Enter the account for this workspace.")
+                        })
+                        .catch((caught: unknown) =>
+                          setError(
+                            caught instanceof Error
+                              ? caught.message
+                              : "Could not sign out.",
+                          ),
+                        )
+                    }
+                  >
+                    Sign out of this account
+                  </button>
+                </div>
+              )}
               {initialRole &&
                 ["admin", "support", "partner"].includes(initialRole) && (
                   <p className="auth-inline-note">
@@ -818,17 +873,24 @@ export default function AuthExperience({
                   </p>
                 )}
               <form className="auth-form" onSubmit={handleLogin}>
-                <label className="auth-field">
-                  <span>Email address or phone number</span>
-                  <input
-                    type="text"
-                    value={identifier}
-                    onChange={(event) => setIdentifier(event.target.value)}
-                    autoComplete="username"
-                    placeholder="Email Address or Phone Number"
-                    required
-                  />
-                </label>
+                {initialRole === "admin" ? (
+                  <label className="auth-field">
+                    <span>Admin email</span>
+                    <input type="email" value={defaultAdminEmail} readOnly autoComplete="username" />
+                  </label>
+                ) : (
+                  <label className="auth-field">
+                    <span>Email address or phone number</span>
+                    <input
+                      type="text"
+                      value={identifier}
+                      onChange={(event) => setIdentifier(event.target.value)}
+                      autoComplete="username"
+                      placeholder="Email Address or Phone Number"
+                      required
+                    />
+                  </label>
+                )}
                 {renderPasswordFields()}
                 <div className="auth-options">
                   <label className="auth-remember">
@@ -861,7 +923,7 @@ export default function AuthExperience({
                   {busy ? "Signing in..." : "➜  Login"}
                 </button>
               </form>
-              <div className="auth-divider">
+              {initialRole !== "admin" && initialRole !== "provider" && <><div className="auth-divider">
                 <span>or</span>
               </div>
               <div className="auth-socials">
@@ -892,46 +954,48 @@ export default function AuthExperience({
                   </svg>
                   Continue with Apple
                 </button>
-              </div>
+              </div></>}
               {canRegister && (
                 <div className="auth-signup-links">
-                  <p>
+                  {initialRole === "consumer" && <p>
                     Don’t have an account?{" "}
                     <button
                       type="button"
                       className="auth-text-button"
                       onClick={() => startSignup("customer")}
                     >
-                      Sign Up as a Customer <span aria-hidden="true">→</span>
+                      Create a hirer account <span aria-hidden="true">→</span>
                     </button>
-                  </p>
-                  <button
+                  </p>}
+                  {initialRole === "provider" && <button
                     type="button"
                     className="auth-supplier-button"
                     onClick={() => startSignup("supplier")}
                   >
-                    <span aria-hidden="true">▣</span> Become a Supplier{" "}
+                    <span aria-hidden="true">▣</span> Create a worker account{" "}
                     <span aria-hidden="true">→</span>
-                  </button>
+                  </button>}
                 </div>
               )}
               {initialRole === null && (
-                <button
-                  type="button"
-                  className="auth-workspace-link"
-                  onClick={() => setStage("role")}
-                >
-                  Choose a different workspace
-                </button>
+                <div className="auth-workspace-actions">
+                  <button type="button" className="auth-workspace-link" onClick={() => setStage("role")}>
+                    Choose a different workspace
+                  </button>
+                  <button type="button" className="auth-workspace-link" onClick={() => chooseWorkspace("admin")}>
+                    Staff sign-in
+                  </button>
+                </div>
               )}
-              <button
+              {initialRole !== "admin" && <button
                 type="button"
                 className="auth-otp-link"
                 onClick={() => void sendOtp()}
                 disabled={busy}
               >
                 Use a one-time code instead
-              </button>
+              </button>}
+              {initialRole === "admin" && <p className="auth-inline-note">Staff accounts are provisioned by an OddJobs administrator.</p>}
             </>
           )}
 
@@ -943,13 +1007,16 @@ export default function AuthExperience({
               <p className="auth-accent-line" />
               <h1>
                 {intent === "supplier"
-                  ? "Become a Supplier"
+                  ? "Create a worker account"
                   : "Create your account"}
               </h1>
               <p className="auth-subtitle">
                 {intent === "supplier"
-                  ? "Create your account, then submit your supplier profile for review."
-                  : "Sign up as a customer to find trusted local services."}
+                  ? "Create a worker account to browse jobs and submit bids. Your separate service profile helps hirers review your skills; you can publish up to ten profiles while ID review is pending, and unlimited profiles after approval."
+                  : "Create a hirer account to post jobs, compare worker bids, and choose who does the work."}
+              </p>
+              <p className="auth-inline-note">
+                {intent === "supplier" ? "Worker workspace access starts after registration. Submit your ID for review when you reach ten service profiles; approval removes the profile limit." : "Hirer accounts post jobs and review bids. To do paid work, create a separate worker account."}
               </p>
               <form className="auth-form" onSubmit={handleSignup}>
                 <label className="auth-field">
@@ -991,7 +1058,6 @@ export default function AuthExperience({
                     <input
                       type="checkbox"
                       checked={termsAccepted}
-                      disabled={!termsRead || !privacyRead}
                       onChange={(event) =>
                         setTermsAccepted(event.target.checked)
                       }
@@ -1011,9 +1077,7 @@ export default function AuthExperience({
                         setTermsOpen(true)
                       }}
                     >
-                      {termsRead
-                        ? "Review Terms & Conditions"
-                        : "Read Terms & Conditions"}
+                      Review Terms &amp; Conditions
                     </button>
                     <button
                       type="button"
@@ -1023,24 +1087,21 @@ export default function AuthExperience({
                         setTermsOpen(true)
                       }}
                     >
-                      {privacyRead
-                        ? "Review Privacy Policy"
-                        : "Read Privacy Policy"}
+                      Review Privacy Policy
                     </button>
                   </div>
-                  {(!termsRead || !privacyRead) && (
-                    <span className="auth-terms-hint">
-                      Read both documents to the end before accepting.
-                    </span>
-                  )}
                 </div>
                 <button className="auth-submit" disabled={busy}>
-                  {busy ? "Creating account..." : "Create account"}
+                  {busy
+                    ? "Creating account..."
+                    : intent === "supplier"
+                      ? "Create worker account"
+                      : "Create hirer account"}
                 </button>
               </form>
               <p className="auth-terms">
-                Read and accept the Terms &amp; Conditions and Privacy Policy
-                before creating an account.
+                Agree to the Terms &amp; Conditions and Privacy Policy to create
+                an account. Reviewing the full documents is optional.
               </p>
               <button
                 type="button"
@@ -1099,7 +1160,6 @@ export default function AuthExperience({
                     <input
                       type="checkbox"
                       checked={termsAccepted}
-                      disabled={!termsRead || !privacyRead}
                       onChange={(event) =>
                         setTermsAccepted(event.target.checked)
                       }
@@ -1119,9 +1179,7 @@ export default function AuthExperience({
                         setTermsOpen(true)
                       }}
                     >
-                      {termsRead
-                        ? "Review Terms & Conditions"
-                        : "Read Terms & Conditions"}
+                      Review Terms &amp; Conditions
                     </button>
                     <button
                       type="button"
@@ -1131,16 +1189,9 @@ export default function AuthExperience({
                         setTermsOpen(true)
                       }}
                     >
-                      {privacyRead
-                        ? "Review Privacy Policy"
-                        : "Read Privacy Policy"}
+                      Review Privacy Policy
                     </button>
                   </div>
-                  {(!termsRead || !privacyRead) && (
-                    <span className="auth-terms-hint">
-                      Read both documents to the end before accepting.
-                    </span>
-                  )}
                 </div>
                 <button className="auth-submit" disabled={busy}>
                   {busy ? "Sending code..." : "Send verification code"}
@@ -1290,10 +1341,6 @@ export default function AuthExperience({
         open={termsOpen}
         policy={activePolicy}
         onClose={() => setTermsOpen(false)}
-        onReadToEnd={() => {
-          if (activePolicy === "terms") setTermsRead(true)
-          else setPrivacyRead(true)
-        }}
       />
     </main>
   )

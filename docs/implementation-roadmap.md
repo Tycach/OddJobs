@@ -6,14 +6,16 @@ explicit operational and verification gate.
 
 ## Phase 1: Product and Front-End Foundation
 
-**Status: Implementation complete.**
+**Status: Foundation implemented; the app is still being modularized.**
 
 - Set the orange-first visual identity with white surfaces and restrained blue
   informational accents; keep layout and interactions unchanged.
-- Separate demo domain data from the app composition root.
+- Separate demo domain data, access rules, provider discovery, and staff
+  marketplace operations from the app composition root.
 - Document code conventions, payment research, and the independent API
   boundary.
-- Keep the front end clearly in demo mode; no real user data or money.
+- Keep unfinished journeys clearly marked as prototypes; live job, quote,
+  provider discovery, staff operations, and notification journeys use the API.
 
 **Complete when:** the team approves the brand and project boundaries, the
 frontend build passes, and the API remains an independent service rather than
@@ -39,8 +41,9 @@ Still required before calling this phase production-ready:
   ownership.
 - Define the public API origin and environment-specific CORS policy when
   deployment is selected.
-- Keep authentication, user/job persistence, payments, and real-time events for
-  their later phases; none are implemented by this foundation.
+- Authentication, marketplace persistence, and read-only Realtime refresh are
+  now implemented in later milestones; payments and external event delivery
+  remain outside the current foundation.
 
 **Gate:** independent build/test/deploy; secrets are server-only; health,
 logging, migrations, backup/restore, rollback, and incident ownership are
@@ -48,7 +51,7 @@ documented and tested.
 
 ## Phase 3: Identity, Roles, and Marketplace Core
 
-**Status: Supabase sign-in and profile bootstrap implemented; marketplace CRUD remains open.**
+**Status: Core role-aware flows are implemented; broader marketplace completion remains open.**
 
 - Added Prisma ORM 7.10.1 to the independent API service with a PostgreSQL
   driver adapter and generated client.
@@ -67,6 +70,18 @@ documented and tested.
 - Added a shared responsive orange login/signup experience based on the
   supplied OddJobs reference artwork. Remember-me selects session-only or
   persistent browser storage for new Auth sessions.
+- Added a public role chooser for customer, provider, and staff sign-in. The
+  selected workspace guides navigation; API profile roles remain authoritative.
+- Customers can use both approved-provider discovery and job posting, including
+  when their account also has an approved provider role. Providers cannot quote
+  their own jobs. Staff can review customer and provider activity together.
+- Added an API-backed provider directory restricted to active, approved
+  providers, with public profile fields only.
+- Added audited staff marketplace job search and case details with quotes and
+  activity timeline.
+- Added persistent in-app notifications written in the same transaction as
+  marketplace events, plus user-scoped listing and read state. An outbox table
+  records events for future delivery integrations.
 
 Still required before Phase 3 is complete:
 
@@ -85,15 +100,28 @@ Still required before Phase 3 is complete:
   checks in an authorized staging environment before production.
 - Publish and link approved Terms/Privacy documents and persist versioned
   consent acceptance before enabling production signup.
-- Implement trusted review operations and server-side provisioning for
-  provider/admin/support roles; supplier applications intentionally do not
-  grant these roles.
-- Implement authenticated repositories/routes for jobs, quotes, and messages
-  before replacing their demo fixtures in the web client.
-- Replace demo local-storage state with API-backed queries/mutations and define
-  how job updates reach active clients (polling or a separate real-time channel).
+- Provider applications collect private ID evidence. Pending providers retain
+  customer access, may use the provider workspace, and are capped at three
+  listings until trusted, audited admin approval. Admin and support roles still
+  require trusted server-side provisioning.
+- Core authenticated job and quote routes exist, including ownership checks,
+  provider approval checks, quote acceptance, and the initial job lifecycle.
+- Complete job/quote editing, actual dispute handling, messaging, and external
+  notification delivery before removing their remaining demo fixtures.
+- Replace remaining demo local-storage journeys with API-backed
+  queries/mutations and confirm the refresh/realtime behavior for each workflow.
+- Use the public entry flow to guide customer, provider, and staff sign-in;
+  workspace selection is a navigation hint and server profile roles remain
+  authoritative.
 - Add privacy/retention policies and worker onboarding before real identity
   documents are collected.
+
+The app shell now delegates customer, provider, admin, notification, provider
+discovery, and support/partner prototype screens to feature modules. Unfinished
+journeys such as disputes, messaging, saved providers, and profile editing are
+visibly marked prototype experiences and must not be presented as live services.
+The outbox is persisted but has no delivery worker; only in-app notification
+rows are currently consumed by the client.
 
 **Gate:** authorization tests prove a user cannot access another user's jobs,
 provider data, admin screens, or support-only operations.

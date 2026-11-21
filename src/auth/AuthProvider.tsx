@@ -26,13 +26,33 @@ export type ProviderApplication = {
 
   region: string
 
+  documentType: "national_id" | "passport"
+
+  documentPath?: string | null
+
+  skillsEvidence: string
+
   status: string
+}
+
+export type ProviderVerificationSummary = {
+  status: string
+  documentType: string | null
+}
+
+export type CustomerVerificationSummary = {
+  status: string
+  documentType: string | null
+  submittedAt: string | null
+  reviewReason?: string | null
 }
 
 export type AuthProfile = {
   id: string
 
   displayName: string
+
+  avatarPath?: string | null
 
   status: string
 
@@ -44,9 +64,11 @@ export type MarketplaceJobStatus =
   | "awarded"
   | "in_progress"
   | "completion_pending"
+  | "revision_requested"
   | "completed"
   | "cancelled"
   | "disputed"
+  | "expired"
 
 export type MarketplaceQuoteStatus =
   | "submitted"
@@ -66,10 +88,59 @@ export type MarketplaceJob = {
   currency: string
   status: MarketplaceJobStatus
   requestedFor: string | null
+  applicationDeadlineAt?: string | null
+  dueAt?: string | null
+  locationMode?: "onsite" | "remote" | "flexible"
+  locationLatitude?: number | null
+  locationLongitude?: number | null
+  completionNote?: string | null
+  revisionNote?: string | null
+  media?: ServiceListingMedia[]
   createdAt: string
   updatedAt: string
   quoteCount: number
 }
+
+export type ServiceListingStatus = "open" | "claimed" | "in_progress" | "completion_pending" | "completed" | "cancelled"
+export type ServiceListingMedia = {
+  path: string
+  contentType: string
+  size: number
+}
+export type ServiceListing = {
+  id: string
+  providerId: string
+  providerName: string
+  customerId: string | null
+  customerName: string | null
+  title: string
+  description: string
+  category: string
+  locationLabel: string
+  budgetMinor: number | null
+  currency: string
+  status: ServiceListingStatus
+  media: ServiceListingMedia[]
+  claimExpiresAt: string | null
+  createdAt: string
+  updatedAt: string
+  activity?: { actorName: string; action: string; requestId: string; createdAt: string }[]
+}
+export type ServiceListingMessage = { id: string; listingId: string; senderId: string; senderName: string; body: string; createdAt: string }
+export type AdminServiceListingMessage = ServiceListingMessage & { listingTitle: string; providerName: string; customerName: string }
+export type ServiceListingReview = {
+  id: string
+  listingId: string
+  listingTitle: string
+  reviewerName: string
+  revieweeName: string
+  rating: number
+  comment: string
+  createdAt: string
+}
+export type ReviewableServiceListing = { listingId: string; listingTitle: string; revieweeName: string }
+export type ServiceListingReviewPage = { received: ServiceListingReview[]; pending: ReviewableServiceListing[] }
+export type ServiceListingInput = Pick<ServiceListing, "title" | "description" | "category" | "locationLabel" | "budgetMinor"> & { media?: ServiceListingMedia[] }
 
 export type MarketplaceQuote = {
   id: string
@@ -85,6 +156,32 @@ export type MarketplaceQuote = {
   updatedAt: string
 }
 
+export type MarketplaceProviderQuote = MarketplaceQuote & {
+  jobTitle: string
+  jobCategory: string
+  jobLocationLabel: string
+  jobStatus: string
+}
+
+export type MarketplaceProvider = {
+  id: string
+  userId?: string
+  publicName: string
+  bio: string
+  region: string
+  avatarPath?: string | null
+}
+
+export type MarketplaceNotification = {
+  id: string
+  type: string
+  title: string
+  body: string
+  jobId: string | null
+  readAt: string | null
+  createdAt: string
+}
+
 export type MarketplaceJobInput = {
   title: string
   description: string
@@ -92,6 +189,12 @@ export type MarketplaceJobInput = {
   locationLabel: string
   budgetMinor: number | null
   requestedFor?: string | null
+  applicationDeadlineAt?: string | null
+  dueAt?: string | null
+  locationMode?: "onsite" | "remote" | "flexible"
+  locationLatitude?: number | null
+  locationLongitude?: number | null
+  media?: ServiceListingMedia[]
 }
 
 export type MarketplaceQuoteInput = {
@@ -104,6 +207,7 @@ export type MarketplaceJobTransition =
   | "start"
   | "submit-completion"
   | "confirm-completion"
+  | "request-revision"
   | "cancel"
 
 export type AdminUserSummary = {
@@ -149,6 +253,21 @@ export type AdminMarketplaceActivity = {
   createdAt: string
 }
 
+export type AdminMarketplaceJob = MarketplaceJob & {
+  customerDisplayName: string
+  quotes: MarketplaceQuote[]
+  timeline: AdminMarketplaceActivity[]
+}
+
+export type AdminMarketplaceJobFilters = {
+  status: "all" | MarketplaceJobStatus
+  search: string
+  from: string
+  to: string
+}
+
+export type AdminServiceListing = ServiceListing
+
 export type AdminPage<T,> = {
   items: T[]
 
@@ -187,6 +306,17 @@ export type AdminVerificationSummary = {
   status: string
 
   submittedAt: string
+  documentType: string | null
+  skillsEvidence: string | null
+}
+
+export type AdminCustomerVerificationSummary = {
+  id: string
+  userId: string
+  displayName: string
+  status: string
+  submittedAt: string
+  documentType: string
 }
 
 export type AdminVerificationStatus = "all" | "not_started" | "in_review" | "verified" | "rejected"
@@ -276,7 +406,6 @@ type AuthContextValue = {
 
   rememberMe: boolean
 
-  supplierSignupPending: boolean
 
   policyConsentRequired: boolean
 
@@ -314,9 +443,9 @@ type AuthContextValue = {
     intent: "customer" | "supplier",
   ) => Promise<{ error: string | null; needsVerification: boolean }>
 
-  signInWithOAuth: (provider: OAuthProvider) => Promise<string | null>
+  signInWithOAuth: (provider: OAuthProvider, role?: "consumer" | "provider") => Promise<string | null>
 
-  requestPasswordReset: (email: string) => Promise<string | null>
+  requestPasswordReset: (email: string, role?: "consumer" | "provider") => Promise<string | null>
 
   updatePassword: (password: string) => Promise<string | null>
 
@@ -333,8 +462,14 @@ type AuthContextValue = {
   resendOtp: (method: AuthMethod, identifier: string) => Promise<string | null>
 
   submitProviderApplication: (
-    application: Omit<ProviderApplication, "status">,
+    application: Omit<ProviderApplication, "status"> & { document: File; identityDisclosureAccepted: boolean },
   ) => Promise<ProviderApplication>
+
+  getProviderVerification: () => Promise<ProviderVerificationSummary>
+  getCustomerVerification: () => Promise<CustomerVerificationSummary>
+  submitCustomerVerification: (input: { documentType: "national_id" | "passport"; document: File; identityDisclosureAccepted: boolean }) => Promise<CustomerVerificationSummary>
+  updateProfile: (displayName: string, avatarFile?: File) => Promise<AuthProfile>
+  getProfileAvatarUrl: (avatarPath?: string | null) => string
 
   getAdminUsers: (
     limit: number,
@@ -354,6 +489,16 @@ type AuthContextValue = {
     offset: number,
   ) => Promise<AdminPage<AdminMarketplaceActivity>>
 
+  getAdminMarketplaceJobs: (
+    filters: AdminMarketplaceJobFilters,
+    limit: number,
+    offset: number,
+  ) => Promise<AdminPage<AdminMarketplaceJob>>
+
+  getAdminMarketplaceJob: (jobId: string) => Promise<AdminMarketplaceJob>
+  getAdminServiceListings: (search: string, limit: number, offset: number) => Promise<AdminPage<AdminServiceListing>>
+  releaseAdminServiceListing: (listingId: string, reason: string) => Promise<AdminServiceListing>
+
   getAdminOverview: () => Promise<AdminOverview>
 
   getAdminVerifications: (
@@ -364,6 +509,8 @@ type AuthContextValue = {
     offset: number,
   ) => Promise<AdminPage<AdminVerificationSummary>>
 
+  getAdminVerificationDocument: (profileId: string) => Promise<{ url: string; expiresInSeconds: number }>
+
   decideAdminVerification: (
     profileId: string,
 
@@ -371,6 +518,10 @@ type AuthContextValue = {
 
     reason?: string,
   ) => Promise<AdminVerificationSummary>
+
+  getAdminCustomerVerifications: (status: AdminVerificationStatus, limit: number, offset: number) => Promise<AdminPage<AdminCustomerVerificationSummary>>
+  getAdminCustomerVerificationDocument: (verificationId: string) => Promise<{ url: string; expiresInSeconds: number }>
+  decideAdminCustomerVerification: (verificationId: string, decision: "verified" | "rejected", reason?: string) => Promise<AdminCustomerVerificationSummary>
 
   createModerationReport: (report: {
     subjectType: "account" | "job" | "provider_profile" | "message"
@@ -424,6 +575,23 @@ type AuthContextValue = {
     view: "consumer" | "provider" | "feed",
   ) => Promise<MarketplaceJob[]>
 
+  getMarketplaceProviders: (
+    search: string,
+    region: string,
+    limit: number,
+    offset: number,
+  ) => Promise<AdminPage<MarketplaceProvider>>
+
+  getMarketplaceProvider: (providerId: string) => Promise<MarketplaceProvider>
+  getSavedProviders: () => Promise<MarketplaceProvider[]>
+  saveProvider: (providerId: string) => Promise<void>
+  removeSavedProvider: (providerId: string) => Promise<void>
+  getPublicProviderReviews: (providerId: string) => Promise<ServiceListingReview[]>
+
+  getMarketplaceNotifications: (limit: number, offset: number) => Promise<AdminPage<MarketplaceNotification>>
+
+  markMarketplaceNotificationRead: (notificationId: string) => Promise<void>
+
   getMarketplaceJob: (
     jobId: string,
     role: "consumer" | "provider",
@@ -433,6 +601,8 @@ type AuthContextValue = {
     jobId: string,
     role: "consumer" | "provider",
   ) => Promise<MarketplaceQuote[]>
+
+  getMyMarketplaceQuotes: () => Promise<MarketplaceProviderQuote[]>
 
   createMarketplaceJob: (input: MarketplaceJobInput) => Promise<MarketplaceJob>
 
@@ -449,7 +619,21 @@ type AuthContextValue = {
   transitionMarketplaceJob: (
     jobId: string,
     transition: MarketplaceJobTransition,
+    details?: { note: string },
   ) => Promise<MarketplaceJob>
+
+  getServiceListings: (role: "consumer" | "provider", view: "feed" | "mine") => Promise<ServiceListing[]>
+  createServiceListing: (input: ServiceListingInput) => Promise<ServiceListing>
+  uploadServiceListingMedia: (file: File) => Promise<ServiceListingMedia>
+  deleteServiceListingMedia: (path: string) => Promise<void>
+  getServiceListingMediaUrl: (path: string) => string
+  claimServiceListing: (listingId: string) => Promise<ServiceListing>
+  transitionServiceListing: (listingId: string, transition: "start" | "submit-completion" | "confirm-completion" | "cancel" | "close") => Promise<ServiceListing>
+  getServiceListingReviews: (role: "consumer" | "provider") => Promise<ServiceListingReviewPage>
+  createServiceListingReview: (listingId: string, rating: number, comment: string) => Promise<ServiceListingReview>
+  getServiceListingMessages: (listingId: string, role: "consumer" | "provider") => Promise<ServiceListingMessage[]>
+  sendServiceListingMessage: (listingId: string, role: "consumer" | "provider", body: string) => Promise<ServiceListingMessage>
+  getAdminServiceListingMessages: (limit: number, offset: number) => Promise<AdminPage<AdminServiceListingMessage>>
 
   subscribeMarketplaceChanges: (onChange: () => void) => () => void
 
@@ -693,11 +877,20 @@ async function adminRequest(
 
   if (!data.session) throw new Error("Please sign in to continue.")
 
-  const headers = new Headers(init?.headers)
+  const sendWithSession = (accessToken: string) => {
+    const headers = new Headers(init?.headers)
+    headers.set("Authorization", `Bearer ${accessToken}`)
+    return fetch(`${apiUrl}${path}`, { ...init, headers })
+  }
 
-  headers.set("Authorization", "Bearer " + data.session.access_token)
+  const response = await sendWithSession(data.session.access_token)
+  if (response.status !== 401) return response
 
-  return fetch(`${apiUrl}${path}`, { ...init, headers })
+  // An access token can expire between getSession() and the API request.
+  // Refresh once so callers do not fail because they used a stale session token.
+  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession()
+  if (refreshError || !refreshed.session) return response
+  return sendWithSession(refreshed.session.access_token)
 }
 
 function getAdminResponseError(status: number) {
@@ -713,7 +906,7 @@ function getAdminResponseError(status: number) {
 }
 
 async function fetchAdminPage<T>(
-  resource: "users" | "audit" | "verification" | "moderation",
+  resource: "users" | "audit" | "verification" | "customer-verification" | "moderation" | "marketplace/activity" | "messages",
 
   limit: number,
 
@@ -775,7 +968,16 @@ async function marketplaceRequest<T>(
           : response.status === 409
             ? "This job has changed. Refresh and try again."
             : "We couldn’t complete that marketplace action. Please try again."
-    throw new Error(getApiErrorMessage(response.status, fallback))
+    const payload = await response.clone().json().catch(() => null) as
+      | { error?: unknown; message?: unknown }
+      | null
+    const serverMessage =
+      typeof payload?.error === "string"
+        ? payload.error
+        : typeof payload?.message === "string"
+          ? payload.message
+          : fallback
+    throw new Error(getApiErrorMessage(response.status, serverMessage))
   }
   return (await response.json()) as T
 }
@@ -795,7 +997,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const [recovery, setRecovery] = useState(false)
 
-  const [supplierSignupPending, setSupplierSignupPending] = useState(false)
 
   const [policyConsentRequired, setPolicyConsentRequired] = useState(false)
 
@@ -810,8 +1011,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!session) {
         loadingToken = null
 
-        setSupplierSignupPending(false)
-
         setPolicyConsentRequired(false)
 
         setProfile(null)
@@ -820,10 +1019,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         return
       }
-
-      setSupplierSignupPending(
-        session.user.user_metadata?.account_intent === "supplier",
-      )
 
       if (loadingToken === session.access_token) return
 
@@ -939,7 +1134,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!data.session) {
       setProfile(null)
-      setSupplierSignupPending(false)
       setPolicyConsentRequired(false)
       return null
     }
@@ -948,9 +1142,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await fetchProfile(data.session)
       setProfile(result.profile)
-      setSupplierSignupPending(
-        data.session.user.user_metadata?.account_intent === "supplier",
-      )
       setPolicyConsentRequired(result.policyConsentRequired)
       return result.profile
     } finally {
@@ -1073,7 +1264,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...(intent === "supplier" ? { account_intent: intent } : {}),
       },
 
-      emailRedirectTo: `${window.location.origin}/consumer/login`,
+      emailRedirectTo: `${window.location.origin}/${intent === "supplier" ? "provider" : "consumer"}/login`,
     }
 
     const result =
@@ -1108,7 +1299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const signInWithOAuth = async (provider: OAuthProvider) => {
+  const signInWithOAuth = async (provider: OAuthProvider, role: "consumer" | "provider" = "consumer") => {
     if (!supabase) {
       return "Account services are temporarily unavailable. Please try again later."
     }
@@ -1116,7 +1307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
 
-      options: { redirectTo: `${window.location.origin}/` },
+      options: { redirectTo: `${window.location.origin}/${role}/login` },
     })
 
     return error
@@ -1128,13 +1319,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : null
   }
 
-  const requestPasswordReset = async (email: string) => {
+  const requestPasswordReset = async (email: string, role: "consumer" | "provider" = "consumer") => {
     if (!supabase) {
       return "Account services are temporarily unavailable. Please try again later."
     }
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/consumer/login`,
+      redirectTo: `${window.location.origin}/${role}/login`,
     })
 
     return error
@@ -1223,7 +1414,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const submitProviderApplication = async (
-    application: Omit<ProviderApplication, "status">,
+    application: Omit<ProviderApplication, "status"> & { document: File; identityDisclosureAccepted: boolean },
   ): Promise<ProviderApplication> => {
     if (!supabase) {
       throw new Error(
@@ -1249,6 +1440,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       )
     }
 
+    const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"])
+    if (!allowedTypes.has(application.document.type)) {
+      throw new Error("Upload a JPG, PNG, WebP, or PDF identity document.")
+    }
+    if (application.document.size < 1 || application.document.size > 8 * 1024 * 1024) {
+      throw new Error("The identity document must be 8 MB or smaller.")
+    }
+    const extension = application.document.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "file"
+    const documentPath = `${data.session.user.id}/${crypto.randomUUID()}.${extension}`
+    const { error: uploadError } = await supabase.storage
+      .from("provider-verification")
+      .upload(documentPath, application.document, {
+        cacheControl: "0",
+        contentType: application.document.type,
+        upsert: false,
+      })
+    if (uploadError) {
+      throw new Error("Could not upload your ID securely. Check the connection and try again.")
+    }
+
+    const { document, ...applicationDetails } = application
     const response = await fetch(`${apiUrl}/v1/provider-applications`, {
       method: "POST",
 
@@ -1258,10 +1470,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         "Content-Type": "application/json",
       },
 
-      body: JSON.stringify(application),
+      body: JSON.stringify({ ...applicationDetails, documentPath }),
     })
 
     if (!response.ok) {
+      await supabase.storage.from("provider-verification").remove([documentPath])
       throw new Error(
         getApiErrorMessage(
           response.status,
@@ -1272,6 +1485,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const result = (await response.json()) as ProviderApplication
+    if (result.documentPath !== documentPath) {
+      await supabase.storage.from("provider-verification").remove([documentPath])
+    }
 
     const metadataResult = await supabase.auth.updateUser({
       data: { account_intent: null },
@@ -1283,10 +1499,86 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       )
     }
 
-    setSupplierSignupPending(false)
+    await refreshProfile()
 
     return result
   }
+
+  const getProviderVerification = useCallback(async (): Promise<ProviderVerificationSummary> => {
+    if (!supabase) throw new Error("Account services are temporarily unavailable.")
+    const { data: { session }, error } = await supabase.auth.getSession()
+    if (error || !session) throw new Error("Sign in again to view your verification status.")
+    const response = await fetch(`${apiUrl}/v1/provider-verification`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+      cache: "no-store",
+    })
+    if (!response.ok) throw new Error(getApiErrorMessage(response.status, "Could not load your verification status."))
+    return await response.json() as ProviderVerificationSummary
+  }, [])
+
+  const getCustomerVerification = useCallback(async (): Promise<CustomerVerificationSummary> => {
+    if (!supabase) throw new Error("Account services are temporarily unavailable.")
+    const { data: { session }, error } = await supabase.auth.getSession()
+    if (error || !session) throw new Error("Sign in again to view your identity status.")
+    const response = await fetch(`${apiUrl}/v1/customer-verification`, { headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store" })
+    if (!response.ok) throw new Error(getApiErrorMessage(response.status, "Could not load your identity status."))
+    return await response.json() as CustomerVerificationSummary
+  }, [])
+
+  const submitCustomerVerification = useCallback(async (input: { documentType: "national_id" | "passport"; document: File; identityDisclosureAccepted: boolean }): Promise<CustomerVerificationSummary> => {
+    if (!supabase) throw new Error("Account services are temporarily unavailable.")
+    if (!input.identityDisclosureAccepted) throw new Error("Confirm the identity-document disclosure before submitting.")
+    if (!new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]).has(input.document.type)) throw new Error("Upload a JPG, PNG, WebP, or PDF identity document.")
+    if (input.document.size < 1 || input.document.size > 8 * 1024 * 1024) throw new Error("The identity document must be 8 MB or smaller.")
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+    if (sessionError || !session) throw new Error("Sign in again before submitting your identity document.")
+    const extension = input.document.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "file"
+    const documentPath = `${session.user.id}/${crypto.randomUUID()}.${extension}`
+    const { error: uploadError } = await supabase.storage.from("customer-verification").upload(documentPath, input.document, { cacheControl: "0", contentType: input.document.type, upsert: false })
+    if (uploadError) throw new Error("Could not upload your ID securely. Check the connection and try again.")
+    const response = await fetch(`${apiUrl}/v1/customer-verification`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ documentType: input.documentType, documentPath, identityDisclosureAccepted: true }),
+    })
+    if (!response.ok) {
+      await supabase.storage.from("customer-verification").remove([documentPath])
+      throw new Error(getApiErrorMessage(response.status, "Could not submit your identity check."))
+    }
+    return await response.json() as CustomerVerificationSummary
+  }, [])
+
+  const updateProfile = useCallback(async (displayName: string, avatarFile?: File): Promise<AuthProfile> => {
+    if (!supabase) throw new Error("Account services are temporarily unavailable.")
+    const { data: { session }, error } = await supabase.auth.getSession()
+    if (error || !session) throw new Error("Sign in again before updating your profile.")
+    let avatarPath: string | undefined
+    if (avatarFile) {
+      if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(avatarFile.type)) throw new Error("Choose a JPG, PNG, or WebP profile photo.")
+      if (avatarFile.size < 1 || avatarFile.size > 2 * 1024 * 1024) throw new Error("Profile photos must be 2 MB or smaller.")
+      const extension = avatarFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg"
+      avatarPath = `${session.user.id}/${crypto.randomUUID()}.${extension}`
+      const { error: uploadError } = await supabase.storage.from("account-avatars").upload(avatarPath, avatarFile, { cacheControl: "3600", contentType: avatarFile.type, upsert: false })
+      if (uploadError) throw new Error("Could not upload your profile photo. Try again.")
+    }
+    const response = await fetch(`${apiUrl}/v1/me`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: displayName.trim(), ...(avatarPath ? { avatarPath } : {}) }),
+    })
+    if (!response.ok) {
+      if (avatarPath) await supabase.storage.from("account-avatars").remove([avatarPath])
+      throw new Error(getApiErrorMessage(response.status, "Could not save your profile."))
+    }
+    const updated = await response.json() as AuthProfile
+    setProfile(updated)
+    return updated
+  }, [])
+
+  const getProfileAvatarUrl = useCallback((avatarPath?: string | null) => {
+    if (!supabase || !avatarPath) return ""
+    return supabase.storage.from("account-avatars").getPublicUrl(avatarPath).data.publicUrl
+  }, [])
 
   const signOut = async () => {
     if (!supabase) return
@@ -1338,6 +1630,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getAdminMarketplaceJobs = useCallback(
+    async (
+      filters: AdminMarketplaceJobFilters,
+      limit: number,
+      offset: number,
+    ) => {
+      const query = new URLSearchParams({
+        status: filters.status,
+        search: filters.search,
+        limit: String(limit),
+        offset: String(offset),
+      })
+      if (filters.from) query.set("from", filters.from)
+      if (filters.to) query.set("to", filters.to)
+      const response = await adminRequest(`/v1/admin/marketplace/jobs?${query}`)
+      if (!response.ok) throw getAdminResponseError(response.status)
+      return (await response.json()) as AdminPage<AdminMarketplaceJob>
+    },
+    [],
+  )
+
+  const getAdminMarketplaceJob = useCallback(
+    async (jobId: string) => {
+      const response = await adminRequest(
+        `/v1/admin/marketplace/jobs/${encodeURIComponent(jobId)}`,
+      )
+      if (!response.ok) throw getAdminResponseError(response.status)
+      return (await response.json()) as AdminMarketplaceJob
+    },
+    [],
+  )
+
   const getAdminOverview = useCallback(() => fetchAdminOverview(), [])
 
   const getAdminVerifications = useCallback(
@@ -1355,6 +1679,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getAdminVerificationDocument = useCallback(async (profileId: string) => {
+    const response = await adminRequest(`/v1/admin/verification/${encodeURIComponent(profileId)}/document`)
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return await response.json() as { url: string; expiresInSeconds: number }
+  }, [])
+
   const decideAdminVerification = useCallback(
     (profileId: string, decision: "verified" | "rejected", reason?: string) =>
       postAdminAction<AdminVerificationSummary>(
@@ -1365,6 +1695,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     [],
   )
+
+  const getAdminCustomerVerifications = useCallback((status: AdminVerificationStatus, limit: number, offset: number) => fetchAdminPage<AdminCustomerVerificationSummary>("customer-verification", limit, offset, status), [])
+
+  const getAdminCustomerVerificationDocument = useCallback(async (verificationId: string) => {
+    const response = await adminRequest(`/v1/admin/customer-verification/${encodeURIComponent(verificationId)}/document`)
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return await response.json() as { url: string; expiresInSeconds: number }
+  }, [])
+
+  const decideAdminCustomerVerification = useCallback((verificationId: string, decision: "verified" | "rejected", reason?: string) => postAdminAction<AdminCustomerVerificationSummary>(`/v1/admin/customer-verification/${encodeURIComponent(verificationId)}/decision`, { decision, ...(reason ? { reason } : {}) }), [])
 
   const createModerationReport = useCallback(
     (report: Parameters<AuthContextValue["createModerationReport"]>[0]) =>
@@ -1479,6 +1819,125 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getAdminServiceListings = useCallback((search: string, limit: number, offset: number) => adminRequest(`/v1/admin/listings?search=${encodeURIComponent(search)}&limit=${limit}&offset=${offset}`).then(async (response) => {
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return await response.json() as AdminPage<AdminServiceListing>
+  }), [])
+
+  const releaseAdminServiceListing = useCallback((listingId: string, reason: string) => postAdminAction<AdminServiceListing>(`/v1/admin/listings/${encodeURIComponent(listingId)}/release`, { reason }), [])
+
+  const getServiceListings = useCallback(
+    (role: "consumer" | "provider", view: "feed" | "mine") => marketplaceRequest<ServiceListing[]>(`/v1/listings?role=${role}&view=${view}`),
+    [],
+  )
+
+  const createServiceListing = useCallback((input: ServiceListingInput) => marketplacePost<ServiceListing>("/v1/listings", input), [])
+
+  const uploadServiceListingMedia = useCallback(async (file: File): Promise<ServiceListingMedia> => {
+    if (!supabase) throw new Error("Media storage is unavailable.")
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+    if (sessionError || !session) throw new Error("Sign in again before uploading listing media.")
+
+    const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"])
+    if (!allowedTypes.has(file.type)) throw new Error("Use a JPG, PNG, WebP, MP4, or WebM file.")
+    if (file.size < 1 || file.size > 6 * 1024 * 1024) throw new Error("Each photo or video must be 6 MB or smaller.")
+
+    const extension = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "media"
+    const path = `${session.user.id}/${crypto.randomUUID()}.${extension}`
+    const { error } = await supabase.storage.from("listing-media").upload(path, file, {
+      cacheControl: "3600",
+      contentType: file.type,
+      upsert: false,
+    })
+    if (error) throw new Error("Could not upload this file. Check your connection and try again.")
+    return { path, contentType: file.type, size: file.size }
+  }, [])
+
+  const deleteServiceListingMedia = useCallback(async (path: string) => {
+    if (!supabase) throw new Error("Media storage is unavailable.")
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || !path.startsWith(`${session.user.id}/`)) {
+      throw new Error("You can only remove media you uploaded.")
+    }
+    const { error } = await supabase.storage.from("listing-media").remove([path])
+    if (error) throw new Error("Could not remove this file. Try again.")
+  }, [])
+
+  const getServiceListingMediaUrl = useCallback((path: string) => {
+    if (!supabase) return ""
+    return supabase.storage.from("listing-media").getPublicUrl(path).data.publicUrl
+  }, [])
+
+  const claimServiceListing = useCallback((listingId: string) => marketplacePost<ServiceListing>(`/v1/listings/${encodeURIComponent(listingId)}/claim`, {}), [])
+
+  const transitionServiceListing = useCallback((listingId: string, transition: "start" | "submit-completion" | "confirm-completion" | "cancel" | "close") => marketplacePost<ServiceListing>(`/v1/listings/${encodeURIComponent(listingId)}/${transition}`, {}), [])
+
+  const getServiceListingReviews = useCallback((role: "consumer" | "provider") => marketplaceRequest<ServiceListingReviewPage>(`/v1/reviews?role=${role}`), [])
+
+  const createServiceListingReview = useCallback((listingId: string, rating: number, comment: string) => marketplacePost<ServiceListingReview>(`/v1/listings/${encodeURIComponent(listingId)}/reviews`, { rating, comment }), [])
+
+  const getServiceListingMessages = useCallback((listingId: string, role: "consumer" | "provider") => marketplaceRequest<ServiceListingMessage[]>(`/v1/listings/${encodeURIComponent(listingId)}/messages?role=${role}`), [])
+
+  const sendServiceListingMessage = useCallback((listingId: string, role: "consumer" | "provider", body: string) => marketplacePost<ServiceListingMessage>(`/v1/listings/${encodeURIComponent(listingId)}/messages?role=${role}`, { body }), [])
+
+  const getAdminServiceListingMessages = useCallback((limit: number, offset: number) => fetchAdminPage<AdminServiceListingMessage>("messages", limit, offset), [])
+
+  const getMarketplaceProviders = useCallback(
+    (search: string, region: string, limit = 25, offset = 0) => {
+      const query = new URLSearchParams({
+        search,
+        region,
+        limit: String(limit),
+        offset: String(offset),
+      })
+      return marketplaceRequest<AdminPage<MarketplaceProvider>>(
+        `/v1/providers?${query}`,
+      )
+    },
+    [],
+  )
+
+  const getMarketplaceProvider = useCallback(
+    (providerId: string) =>
+      marketplaceRequest<MarketplaceProvider>(
+        `/v1/providers/${encodeURIComponent(providerId)}`,
+      ),
+    [],
+  )
+
+  const getSavedProviders = useCallback(
+    () => marketplaceRequest<MarketplaceProvider[]>("/v1/me/saved-providers"),
+    [],
+  )
+
+  const saveProvider = useCallback(async (providerId: string) => {
+    await marketplacePost<{ saved: boolean }>("/v1/me/saved-providers", { providerId })
+  }, [])
+
+  const removeSavedProvider = useCallback(async (providerId: string) => {
+    await marketplaceRequest<{ saved: boolean }>(`/v1/me/saved-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" })
+  }, [])
+
+  const getPublicProviderReviews = useCallback((providerId: string) => marketplaceRequest<ServiceListingReview[]>(`/v1/providers/${encodeURIComponent(providerId)}/reviews`), [])
+
+  const getMarketplaceNotifications = useCallback(
+    (limit = 50, offset = 0) =>
+      marketplaceRequest<AdminPage<MarketplaceNotification>>(
+        `/v1/notifications?limit=${limit}&offset=${offset}`,
+      ),
+    [],
+  )
+
+  const markMarketplaceNotificationRead = useCallback(
+    async (notificationId: string) => {
+      await marketplacePost<{ read: boolean }>(
+        `/v1/notifications/${encodeURIComponent(notificationId)}/read`,
+        {},
+      )
+    },
+    [],
+  )
+
   const getMarketplaceJob = useCallback(
     (jobId: string, role: "consumer" | "provider") =>
       marketplaceRequest<MarketplaceJob>(
@@ -1492,6 +1951,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       marketplaceRequest<MarketplaceQuote[]>(
         `/v1/jobs/${encodeURIComponent(jobId)}/quotes?role=${role}`,
       ),
+    [],
+  )
+
+  const getMyMarketplaceQuotes = useCallback(
+    () => marketplaceRequest<MarketplaceProviderQuote[]>("/v1/me/quotes"),
     [],
   )
 
@@ -1519,9 +1983,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const transitionMarketplaceJob = useCallback(
-    (jobId: string, transition: MarketplaceJobTransition) =>
+    (jobId: string, transition: MarketplaceJobTransition, details?: { note: string }) =>
       marketplacePost<MarketplaceJob>(
         `/v1/jobs/${encodeURIComponent(jobId)}/${transition}`,
+        details ?? {},
       ),
     [],
   )
@@ -1541,6 +2006,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "quotes" },
+        () => onChange(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "service_listings" },
+        () => onChange(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "saved_providers" },
+        () => onChange(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "provider_profiles" },
         () => onChange(),
       )
       .subscribe((status) => {
@@ -1567,7 +2047,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         rememberMe: rememberSession,
 
-        supplierSignupPending,
 
         policyConsentRequired,
 
@@ -1605,6 +2084,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         submitProviderApplication,
 
+        getProviderVerification,
+        getCustomerVerification,
+        submitCustomerVerification,
+        updateProfile,
+        getProfileAvatarUrl,
+
         getAdminUsers,
 
         reinstateAdminUser,
@@ -1613,11 +2098,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         getAdminMarketplaceActivity,
 
+        getAdminMarketplaceJobs,
+
+        getAdminMarketplaceJob,
+        getAdminServiceListings,
+        releaseAdminServiceListing,
+
         getAdminOverview,
 
         getAdminVerifications,
 
+        getAdminVerificationDocument,
+
         decideAdminVerification,
+        getAdminCustomerVerifications,
+        getAdminCustomerVerificationDocument,
+        decideAdminCustomerVerification,
 
         createModerationReport,
 
@@ -1642,10 +2138,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         decideAdminAdCampaign,
 
         getMarketplaceJobs,
+        getServiceListings,
+        createServiceListing,
+        uploadServiceListingMedia,
+        deleteServiceListingMedia,
+        getServiceListingMediaUrl,
+        claimServiceListing,
+        transitionServiceListing,
+        getServiceListingReviews,
+        createServiceListingReview,
+        getServiceListingMessages,
+        sendServiceListingMessage,
+        getAdminServiceListingMessages,
+
+        getMarketplaceProviders,
+
+        getMarketplaceProvider,
+        getSavedProviders,
+        saveProvider,
+        removeSavedProvider,
+        getPublicProviderReviews,
+
+        getMarketplaceNotifications,
+
+        markMarketplaceNotificationRead,
 
         getMarketplaceJob,
 
         getMarketplaceQuotes,
+        getMyMarketplaceQuotes,
 
         createMarketplaceJob,
 

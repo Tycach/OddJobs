@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "@oddjobs/api",
   "version": "0.1.0",
   "private": true,
@@ -13,7 +13,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "pretest": "npm run generate",
-    "test": "tsx --test test/app.test.ts",
+    "test": "tsx --test test/app.test.ts test/security.test.ts",
     "pretypecheck": "npm run generate",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:migrate:dev": "prisma migrate dev",
@@ -40,3 +40,4 @@
     "typescript": "^5.7.3"
   }
 }
+

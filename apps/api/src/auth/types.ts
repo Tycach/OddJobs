@@ -6,12 +6,16 @@ export type AuthenticatedPrincipal = {
   phone: string | null
 
   displayName: string | null
+
+  accountIntent?: "customer" | "supplier"
 }
 
 export type UserProfile = {
   id: string
 
   displayName: string
+
+  avatarPath?: string | null
 
   status: string
 
@@ -24,10 +28,30 @@ export type ProviderApplicationInput = {
   bio: string
 
   region: string
+
+  identityDisclosureAccepted?: boolean
+
+  documentType?: "national_id" | "passport"
+
+  documentPath?: string
+
+  skillsEvidence?: string
 }
 
 export type ProviderApplication = ProviderApplicationInput & {
   status: string
+}
+
+export type ProviderVerificationSummary = {
+  status: string
+  documentType: string | null
+}
+
+export type CustomerVerificationSummary = {
+  status: string
+  documentType: string | null
+  submittedAt: string | null
+  reviewReason?: string | null
 }
 
 export type MarketplaceJobStatus =
@@ -35,9 +59,11 @@ export type MarketplaceJobStatus =
   | "awarded"
   | "in_progress"
   | "completion_pending"
+  | "revision_requested"
   | "completed"
   | "cancelled"
   | "disputed"
+  | "expired"
 
 export type MarketplaceQuoteStatus =
   | "submitted"
@@ -57,10 +83,85 @@ export type MarketplaceJob = {
   currency: string
   status: MarketplaceJobStatus
   requestedFor: string | null
+  applicationDeadlineAt?: string | null
+  dueAt?: string | null
+  locationMode?: "onsite" | "remote" | "flexible"
+  locationLatitude?: number | null
+  locationLongitude?: number | null
+  completionNote?: string | null
+  revisionNote?: string | null
+  media?: ServiceListingMedia[]
   createdAt: string
   updatedAt: string
   quoteCount: number
 }
+
+export type ServiceListingStatus = "open" | "claimed" | "in_progress" | "completion_pending" | "completed" | "cancelled"
+
+export type ServiceListingMedia = {
+  path: string
+  contentType: string
+  size: number
+}
+
+export type ServiceListing = {
+  id: string
+  providerId: string
+  providerName: string
+  customerId: string | null
+  customerName: string | null
+  title: string
+  description: string
+  category: string
+  locationLabel: string
+  budgetMinor: number | null
+  currency: string
+  status: ServiceListingStatus
+  media: ServiceListingMedia[]
+  claimExpiresAt: string | null
+  createdAt: string
+  updatedAt: string
+  activity?: { actorName: string; action: string; requestId: string; createdAt: string }[]
+}
+
+export type ServiceListingReview = {
+  id: string
+  listingId: string
+  listingTitle: string
+  reviewerName: string
+  revieweeName: string
+  rating: number
+  comment: string
+  createdAt: string
+}
+
+export type ReviewableServiceListing = {
+  listingId: string
+  listingTitle: string
+  revieweeName: string
+}
+
+export type ServiceListingReviewPage = {
+  received: ServiceListingReview[]
+  pending: ReviewableServiceListing[]
+}
+
+export type ServiceListingMessage = {
+  id: string
+  listingId: string
+  senderId: string
+  senderName: string
+  body: string
+  createdAt: string
+}
+
+export type AdminServiceListingMessage = ServiceListingMessage & {
+  listingTitle: string
+  providerName: string
+  customerName: string
+}
+
+export type CreateServiceListingInput = Omit<ServiceListing, "id" | "providerId" | "providerName" | "customerId" | "customerName" | "status" | "claimExpiresAt" | "createdAt" | "updatedAt" | "currency" | "activity" | "media"> & { media?: ServiceListingMedia[] }
 
 export type MarketplaceQuote = {
   id: string
@@ -74,6 +175,45 @@ export type MarketplaceQuote = {
   status: MarketplaceQuoteStatus
   createdAt: string
   updatedAt: string
+}
+
+export type MarketplaceProviderQuote = MarketplaceQuote & {
+  jobTitle: string
+  jobCategory: string
+  jobLocationLabel: string
+  jobStatus: string
+}
+
+export type MarketplaceProvider = {
+  id: string
+  userId: string
+  publicName: string
+  bio: string
+  region: string
+  avatarPath?: string | null
+}
+
+export type MarketplaceNotification = {
+  id: string
+  type: string
+  title: string
+  body: string
+  jobId: string | null
+  readAt: string | null
+  createdAt: string
+}
+
+export type AdminMarketplaceJob = MarketplaceJob & {
+  customerDisplayName: string
+  quotes: MarketplaceQuote[]
+  timeline: AdminMarketplaceActivity[]
+}
+
+export type AdminMarketplaceJobFilters = {
+  status: "all" | MarketplaceJobStatus
+  search: string
+  from: string | null
+  to: string | null
 }
 
 export type AdminMarketplaceActivity = {
@@ -96,6 +236,12 @@ export type CreateMarketplaceJobInput = {
   locationLabel: string
   budgetMinor: number | null
   requestedFor?: string | null
+  applicationDeadlineAt?: string | null
+  dueAt?: string | null
+  locationMode?: "onsite" | "remote" | "flexible"
+  locationLatitude?: number | null
+  locationLongitude?: number | null
+  media?: ServiceListingMedia[]
 }
 
 export type SubmitMarketplaceQuoteInput = {
@@ -112,6 +258,37 @@ export class MarketplaceConflictError extends Error {
 }
 
 export interface MarketplaceStore {
+  listServiceListings?(userId: string, role: "consumer" | "provider", view: "feed" | "mine"): Promise<ServiceListing[]>
+  createServiceListing?(userId: string, input: CreateServiceListingInput, requestId: string): Promise<ServiceListing>
+  claimServiceListing?(userId: string, listingId: string, requestId: string): Promise<ServiceListing | null>
+  transitionServiceListing?(userId: string, listingId: string, transition: "start" | "submit_completion" | "confirm_completion" | "cancel" | "close", requestId: string): Promise<ServiceListing | null>
+  listServiceListingMessages?(userId: string, role: "consumer" | "provider", listingId: string): Promise<ServiceListingMessage[] | null>
+  createServiceListingMessage?(userId: string, role: "consumer" | "provider", listingId: string, body: string): Promise<ServiceListingMessage | null>
+  listServiceListingReviews?(userId: string, role: "consumer" | "provider"): Promise<ServiceListingReviewPage>
+  listPublicProviderReviews?(providerId: string): Promise<ServiceListingReview[]>
+  createServiceListingReview?(userId: string, listingId: string, rating: number, comment: string, requestId: string): Promise<ServiceListingReview>
+  listAdminServiceListings?(query: string, limit: number, offset: number): Promise<AdminPage<ServiceListing>>
+  releaseAdminServiceListing?(adminUserId: string, listingId: string, reason: string, requestId: string): Promise<ServiceListing | null>
+
+  listProviders?(input: {
+    search: string
+    region: string
+    limit: number
+    offset: number
+  }): Promise<AdminPage<MarketplaceProvider>>
+
+  getProvider?(providerId: string, requesterUserId?: string): Promise<MarketplaceProvider | null>
+
+  listSavedProviders?(customerId: string): Promise<MarketplaceProvider[]>
+
+  saveProvider?(customerId: string, providerId: string): Promise<boolean>
+
+  removeSavedProvider?(customerId: string, providerId: string): Promise<void>
+
+  listNotifications?(userId: string, limit: number, offset: number): Promise<AdminPage<MarketplaceNotification>>
+
+  markNotificationRead?(userId: string, notificationId: string): Promise<boolean>
+
   listJobs(
     userId: string,
     role: "consumer" | "provider",
@@ -129,6 +306,8 @@ export interface MarketplaceStore {
     role: "consumer" | "provider",
     jobId: string,
   ): Promise<MarketplaceQuote[] | null>
+
+  listProviderQuotes?(userId: string): Promise<MarketplaceProviderQuote[]>
 
   createJob(
     userId: string,
@@ -153,8 +332,9 @@ export interface MarketplaceStore {
   transitionJob(
     userId: string,
     jobId: string,
-    transition: "start" | "submit_completion" | "confirm_completion" | "cancel",
+    transition: "start" | "submit_completion" | "confirm_completion" | "request_revision" | "cancel",
     requestId: string,
+    details?: { note: string },
   ): Promise<MarketplaceJob | null>
 }
 
@@ -226,6 +406,19 @@ export type AdminVerificationSummary = {
   status: string
 
   submittedAt: string
+
+  documentType?: string | null
+
+  skillsEvidence?: string | null
+}
+
+export type AdminCustomerVerificationSummary = {
+  id: string
+  userId: string
+  displayName: string
+  status: string
+  submittedAt: string
+  documentType: string
 }
 
 export type AdminVerificationStatus = "all" | "not_started" | "in_review" | "verified" | "rejected"
@@ -329,6 +522,8 @@ export interface AdminStore {
     offset: number,
   ): Promise<AdminPage<AdminVerificationSummary>>
 
+  getAdminVerificationDocument?(profileId: string): Promise<string | null>
+
   decideAdminVerification(input: {
     actorUserId: string
 
@@ -340,6 +535,12 @@ export interface AdminStore {
 
     requestId: string
   }): Promise<AdminVerificationSummary | null>
+
+  listAdminCustomerVerifications?(status: AdminVerificationStatus, limit: number, offset: number): Promise<AdminPage<AdminCustomerVerificationSummary>>
+
+  getAdminCustomerVerificationDocument?(verificationId: string): Promise<string | null>
+
+  decideAdminCustomerVerification?(input: { actorUserId: string; verificationId: string; decision: AdminVerificationDecision; reason: string | null; requestId: string }): Promise<AdminCustomerVerificationSummary | null>
 
   createModerationReport(input: {
     reporterUserId: string
@@ -444,6 +645,16 @@ export interface AdminStore {
     offset: number,
   ): Promise<AdminPage<AdminMarketplaceActivity>>
 
+  listAdminServiceListingMessages?(limit: number, offset: number): Promise<AdminPage<AdminServiceListingMessage>>
+
+  listAdminMarketplaceJobs?(input: {
+    filters: AdminMarketplaceJobFilters
+    limit: number
+    offset: number
+  }): Promise<AdminPage<AdminMarketplaceJob>>
+
+  getAdminMarketplaceJob?(jobId: string): Promise<AdminMarketplaceJob | null>
+
   recordAdminAuditEvent(
     event: Omit<AdminAuditEvent, "id" | "createdAt">,
   ): Promise<void>
@@ -458,6 +669,10 @@ export interface UserProfileStore {
 
   getProfile(userId: string): Promise<UserProfile | null>
 
+  updateProfile?(userId: string, displayName: string, avatarPath?: string): Promise<UserProfile | null>
+
+  canSaveProfileAvatar?(): Promise<boolean>
+
   recordPolicyConsents(
     userId: string,
 
@@ -471,4 +686,8 @@ export interface UserProfileStore {
 
     application: ProviderApplicationInput,
   ): Promise<ProviderApplication>
+
+  getProviderVerification?(userId: string): Promise<ProviderVerificationSummary | null>
+  getCustomerVerification?(userId: string): Promise<CustomerVerificationSummary | null>
+  submitCustomerVerification?(userId: string, documentType: "national_id" | "passport", documentPath: string): Promise<CustomerVerificationSummary>
 }

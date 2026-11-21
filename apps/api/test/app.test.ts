@@ -1557,7 +1557,7 @@ test("policy consent records the current versions for the verified active user",
     payload: {
       termsVersion: "2026-11-05-v1",
 
-      privacyVersion: "2026-11-05-v1",
+      privacyVersion: "2026-11-19-v2",
     },
   })
 
@@ -1811,136 +1811,25 @@ test("supplier applications are rate limited", async () => {
   await app.close()
 })
 
-test("marketplace job and quote workflows are persistent and role-scoped", async () => {
-  const app = await buildApp({
-    config,
-    database: null,
-    authVerifier,
-    profileStore,
-    marketplaceStore: createTestMarketplaceStore(),
-  })
-
-  const unauthenticated = await app.inject({
-    method: "GET",
-    url: "/v1/jobs",
-  })
+test("legacy job creation, provider discovery, and quote workflows are retired", async () => {
+  const app = await buildApp({ config, database: null, authVerifier, profileStore, marketplaceStore: createTestMarketplaceStore() })
+  const unauthenticated = await app.inject({ method: "GET", url: "/v1/jobs" })
   assert.equal(unauthenticated.statusCode, 401)
-
-  const created = await app.inject({
-    method: "POST",
-    url: "/v1/jobs",
-    headers: { authorization: "Bearer valid-token" },
-    payload: {
-      title: "Repair a leaking tap",
-      description: "The kitchen tap is leaking and needs repair.",
-      category: "Plumbing",
-      locationLabel: "Nairobi",
-      budgetMinor: 250000,
-      requestedFor: null,
-    },
-  })
-  assert.equal(created.statusCode, 201)
-  const job = created.json() as MarketplaceJob
-  assert.equal(job.status, "open")
-  assert.equal(job.customerId, principal.id)
-
-  const providerFeed = await app.inject({
-    method: "GET",
-    url: "/v1/jobs?view=feed",
-    headers: { authorization: "Bearer provider-token" },
-  })
-  assert.equal(providerFeed.statusCode, 200)
-  assert.equal(providerFeed.json()[0].id, job.id)
-
-  const forbiddenView = await app.inject({
-    method: "GET",
-    url: "/v1/jobs?view=provider",
-    headers: { authorization: "Bearer valid-token" },
-  })
-  assert.equal(forbiddenView.statusCode, 403)
-
-  const submitted = await app.inject({
-    method: "POST",
-    url: `/v1/jobs/${job.id}/quotes`,
-    headers: { authorization: "Bearer provider-token" },
-    payload: {
-      amountMinor: 230000,
-      message: "I can repair the tap tomorrow morning.",
-      availability: "Tomorrow morning",
-    },
-  })
-  assert.equal(submitted.statusCode, 201)
-  const quote = submitted.json() as MarketplaceQuote
-
-  const customerQuotes = await app.inject({
-    method: "GET",
-    url: `/v1/jobs/${job.id}/quotes?role=consumer`,
-    headers: { authorization: "Bearer valid-token" },
-  })
-  assert.equal(customerQuotes.statusCode, 200)
-  assert.equal(customerQuotes.json()[0].providerId, providerPrincipal.id)
-
-  const accepted = await app.inject({
-    method: "POST",
-    url: `/v1/jobs/${job.id}/quotes/${quote.id}/accept`,
-    headers: { authorization: "Bearer valid-token" },
-  })
-  assert.equal(accepted.statusCode, 200)
-  assert.equal(accepted.json().status, "awarded")
-
-  const started = await app.inject({
-    method: "POST",
-    url: `/v1/jobs/${job.id}/start`,
-    headers: { authorization: "Bearer provider-token" },
-  })
-  assert.equal(started.statusCode, 200)
-  assert.equal(started.json().status, "in_progress")
-
-  const submittedCompletion = await app.inject({
-    method: "POST",
-    url: `/v1/jobs/${job.id}/submit-completion`,
-    headers: { authorization: "Bearer provider-token" },
-  })
-  assert.equal(submittedCompletion.statusCode, 200)
-  assert.equal(submittedCompletion.json().status, "completion_pending")
-
-  const completed = await app.inject({
-    method: "POST",
-    url: `/v1/jobs/${job.id}/confirm-completion`,
-    headers: { authorization: "Bearer valid-token" },
-  })
-  assert.equal(completed.statusCode, 200)
-  assert.equal(completed.json().status, "completed")
-
+  const created = await app.inject({ method: "POST", url: "/v1/jobs", headers: { authorization: "Bearer valid-token" }, payload: { title: "Repair a leaking tap", description: "The kitchen tap is leaking and needs repair.", category: "Plumbing", locationLabel: "Nairobi", budgetMinor: 250000, requestedFor: null } })
+  assert.equal(created.statusCode, 410)
+  const providerFeed = await app.inject({ method: "GET", url: "/v1/jobs?view=feed", headers: { authorization: "Bearer provider-token" } })
+  assert.equal(providerFeed.statusCode, 403)
+  const submitted = await app.inject({ method: "POST", url: "/v1/jobs/a1a1a1a1-0000-4000-8000-000000000001/quotes", headers: { authorization: "Bearer provider-token" }, payload: { amountMinor: 230000, message: "I can repair the tap tomorrow morning.", availability: "Tomorrow morning" } })
+  assert.equal(submitted.statusCode, 410)
   await app.close()
 })
 
-test("service providers cannot create jobs even when the account also has consumer access", async () => {
-  const app = await buildApp({
-    config,
-    database: null,
-    authVerifier,
-    profileStore,
-    marketplaceStore: createTestMarketplaceStore(),
-  })
-
-  const response = await app.inject({
-    method: "POST",
-    url: "/v1/jobs",
-    headers: { authorization: "Bearer dual-role-token" },
-    payload: {
-      title: "Cleaning work",
-      description: "A job description long enough to be valid.",
-      category: "Cleaning",
-      locationLabel: "Nairobi",
-    },
-  })
-
-  assert.equal(response.statusCode, 403)
-  assert.match(response.json().error, /Service providers cannot post/)
+test("dual-role accounts cannot create customer-posted jobs", async () => {
+  const app = await buildApp({ config, database: null, authVerifier, profileStore, marketplaceStore: createTestMarketplaceStore() })
+  const response = await app.inject({ method: "POST", url: "/v1/jobs", headers: { authorization: "Bearer dual-role-token" }, payload: { title: "Cleaning work", description: "A job description long enough to be valid.", category: "Cleaning", locationLabel: "Nairobi" } })
+  assert.equal(response.statusCode, 410)
   await app.close()
 })
-
 test("marketplace activity is available to admins only and access is audited", async () => {
   const app = await buildApp({
     config,

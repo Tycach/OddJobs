@@ -13,6 +13,7 @@ const EnvironmentSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_PUBLISHABLE_KEY: z.string().min(1).optional(),
   SUPABASE_ANON_KEY: z.string().min(1).optional(),
+  SUPABASE_SECRET_KEY: z.string().min(1).optional(),
 }).superRefine((config, context) => {
   const hasAuthKey = Boolean(
     config.SUPABASE_PUBLISHABLE_KEY || config.SUPABASE_ANON_KEY,
@@ -34,6 +35,7 @@ export type AppConfig = {
   databaseUrl?: string
   supabaseUrl?: string
   supabaseApiKey?: string
+  supabaseSecretKey?: string
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -76,5 +78,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       ? { supabaseUrl: parsed.data.SUPABASE_URL }
       : {}),
     ...(supabaseApiKey ? { supabaseApiKey } : {}),
+    ...(parsed.data.SUPABASE_SECRET_KEY
+      ? { supabaseSecretKey: parsed.data.SUPABASE_SECRET_KEY }
+      : {}),
   }
 }

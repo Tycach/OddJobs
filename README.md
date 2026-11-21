@@ -3,11 +3,14 @@
 OddJobs is a mobile-first marketplace app in phased implementation. The shared
 orange-branded login experience supports Supabase password and OTP sign-in,
 customer registration, password recovery, and configured Google/Apple OAuth.
-Supplier applications are stored for review; they do not grant provider access.
+Provider accounts can publish up to ten listings before identity approval;
+verified providers can publish without a listing cap.
 The first live marketplace milestone persists customer jobs and provider quotes,
 supports quote acceptance and job completion, and refreshes the relevant
 consumer/provider screens through scoped Supabase Realtime subscriptions.
-Messaging, tracking, reviews, verification evidence, support/partner data, and
+Provider verification now supports private ID uploads and the audited admin
+review queue once its migration is applied to the intended development
+Supabase project. Messaging, tracking, reviews, support/partner data, and
 payments remain prototype or unavailable features.
 
 ## Project Map
@@ -78,11 +81,14 @@ manifests, build commands, and runtime configuration.
 
 Supabase Auth verifies sign-in and the Fastify API verifies access tokens and
 returns database-assigned roles. The initial profile bootstrap grants only the
-consumer role; elevated roles must be provisioned server-side. Most workspace
+consumer role; provider workspace access is activated server-side when an
+application is submitted. Most workspace
 screens still display sample content, partly persisted in browser
-`localStorage`; do not treat it as real user or business data. M-Pesa payments,
-escrow, uploads, exports, moderation actions, and live tracking remain
-simulated. Do not enter real identity documents or payment information.
+`localStorage`; do not treat it as real user or business data. Before collecting
+real identity documents, apply the private verification migration to the
+intended development Supabase project and configure `SUPABASE_SECRET_KEY` on
+the API service only. M-Pesa payments, escrow, exports, and live tracking
+remain simulated. Do not enter real payment information.
 
 The marketplace migration and Realtime policies must first be applied to a
 separate development Supabase project. Verify the API and frontend both target

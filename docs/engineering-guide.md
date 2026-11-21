@@ -5,32 +5,60 @@
 OddJobs is a React 19/Vite client with an independent Fastify API. Supabase Auth
 password and OTP sign-in, customer registration, password recovery, optional
 Google/Apple OAuth, server-verified access tokens, and protected profile
-bootstrap are implemented. Supplier applications are API-backed and remain
-unapproved until a trusted operator provisions provider access. Marketplace
-screens still use prototype fixtures and browser state; jobs, chat, tracking,
-and payments are not production features yet.
+bootstrap are implemented. Provider applications are API-backed and reviewed
+by administrators with private identity documents. Providers can use the
+workspace and publish ten listings before approval; approval removes the cap.
+Core job and
+quote journeys, approved-provider discovery, staff marketplace review, and
+in-app notifications are API-backed. Several surrounding screens still use
+prototype fixtures and browser state; messaging, tracking, dispute resolution,
+and payments are not production features yet. The durable event outbox has no
+delivery worker.
 
 ## Source Layout
 
-- `src/App.tsx` is the current composition root. It owns demo navigation,
-  screen rendering, and the shared demo context. It remains large; split screen
-  groups incrementally when those features are next changed.
+- `src/App.tsx` owns the authenticated route shell, workspace switching, and
+  top-level feature composition. Keep screen behavior in feature modules.
+- `src/app/access.ts` owns workspace routes, navigation entries, role homes,
+  and the frontend route guard. The authenticated API profile remains the
+  source of workspace access; route selection never grants a role.
+- `src/features/marketplace/hooks.ts` owns the API-backed marketplace read and
+  refresh hooks. Keep feature API calls out of screen composition where
+  practical.
+- `src/features/customer/ProviderDirectory.tsx` owns live provider search and
+  public provider profile views.
+- `src/features/customer/CustomerScreens.tsx` groups customer job, quote,
+  history, and preference screens.
+- `src/features/provider/ProviderScreens.tsx` groups provider onboarding,
+  job management, and provider-only dashboard screens.
+- `src/features/admin/MarketplaceOperations.tsx` owns staff marketplace job
+  search, case details, quote review, and activity timelines.
+- `src/features/admin/AdminConsoleScreens.tsx` composes the admin overview,
+  user, verification, moderation, category, ads, audit, and settings screens.
+- `src/features/marketplace/Notifications.tsx` owns the API-backed in-app
+  notification list and read actions.
+- `src/features/prototype/PrototypeScreens.tsx` contains visibly marked
+  support and partner previews that do not write live records.
+- `src/shared/components/WorkspaceUi.tsx` provides shared visual components for
+  the feature modules.
 - `src/demo/model.ts` owns prototype-only role/screen contracts, job and bid
   types, browser storage keys, and seed data. Keep production API and payment
   contracts out of this module.
 - `src/index.css` owns global styles and shared visual rules.
 - `src/main.tsx` mounts the app and imports the global stylesheet.
 - `apps/api/` is an independently installable Fastify/TypeScript API service.
-   It verifies Supabase tokens and exposes protected profile routes. Prisma
-   defines identity, roles, provider profiles, jobs, quotes, and messages; only
-   account profile bootstrap/read is currently backed by live data.
+  It verifies Supabase tokens and exposes protected profile, marketplace, and
+  admin routes. Private provider IDs use Supabase Storage and admin-only,
+  short-lived links. Prisma defines identity, roles, provider profiles, jobs,
+  quotes, activity, messages, in-app notifications, and the event outbox.
 - `docs/` holds product/engineering decisions, implementation plans, and
    operational guidance that should be reviewed as the code evolves.
 
 ## Change Conventions
 
-1. Keep feature UI close to its user journey. When extracting screens, use
-   `src/features/<feature>/`; put reusable controls in `src/components/`.
+1. Keep feature UI close to its user journey. Use `src/features/<feature>/`
+   for screens, data hooks, and feature components; put reusable controls in
+   `src/shared/components/`.
 2. Keep route definitions, domain types, and infrastructure in purpose-named
    modules. Avoid creating a catch-all `utils` module.
 3. Keep demo state clearly named and visibly simulated. Do not silently turn
@@ -68,8 +96,10 @@ model. Do not add a backend framework to this front-end prototype by assumption.
 
 ## Before Production
 
-- Replace demo login and role switching with authenticated sessions and
-  server-enforced authorization.
+- Continue replacing prototype screens and local demo state with authenticated
+  API-backed journeys and server-enforced authorization. The public entry page
+  guides customer, provider, and staff sign-in; selected workspace is only a
+  navigation hint.
 - Replace local storage with API-backed records and a documented migration.
 - Complete legal, payments-provider, privacy, tax, and worker-classification
   reviews described in `marketplace-payments-plan.md`.

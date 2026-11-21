@@ -5,8 +5,11 @@ tested separately from the Figma Make/Vite web application. It verifies
 Supabase Auth access tokens and provides protected profile bootstrap/read and
 supplier-application routes. It also provides persistent job, quote, hiring,
 and completion workflows. Supplier applications are saved as provider
-profiles in review and never grant the provider role by themselves. Messaging,
-payments, identity verification, and payouts are not implemented.
+profiles in review. Provider accounts can publish ten listings before
+identity approval; the server removes the listing cap after verification is
+approved. Provider identity documents are stored in a private
+Supabase Storage bucket and are available to administrators through audited,
+short-lived links. Messaging, payments, and payouts are not implemented.
 
 ## Boundary
 
@@ -58,7 +61,10 @@ as the build command and `npm start` as the start command. The API defaults to
 Configure the API service environment with `NODE_ENV=production`,
 `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `WEB_ORIGIN`
 set to the exact Vercel site origin (scheme and hostname, without a path or
-trailing slash). `DIRECT_URL` is needed when running Prisma migrations.
+trailing slash). Set `SUPABASE_SECRET_KEY` only on the API service so it can
+mint one-minute signed links for private identity documents. Never add this
+secret key to Vite or the web hosting environment. `DIRECT_URL` is needed when
+running Prisma migrations.
 
 The Vercel frontend is built separately. Set `VITE_API_URL` in the Vercel
 project's environment variables to the public Render service origin, then
@@ -68,8 +74,9 @@ redeploy the frontend so Vite includes it in the build. Set the frontend's
 or Supabase secret keys in Vercel frontend variables.
 
 Only after verifying `.env` targets the dedicated development project, run
-`npm run db:migrate:deploy` to apply the additive policy-consent and marketplace
-Realtime migrations. Do not run that command against the previously configured
+`npm run db:migrate:deploy` to apply pending versioned migrations, including
+policy-consent, admin workflows, marketplace activity, and notification/outbox
+tables and the private provider-verification bucket. Do not run that command against the previously configured
 shared/production project. The API accepts only the current policy versions and
 stores each user/document/version acceptance once with a server-generated
 timestamp.
@@ -93,10 +100,21 @@ role boundaries have been validated there.
 
 The web app's customer job list/post/quotes screens and provider job
 feed/detail/management screens use these API workflows and refresh from
-authorized Realtime events. Messaging, file uploads, reviews, provider
-verification evidence, support/partner data, external notifications, payment,
-escrow, and payout screens remain outside this milestone and must not be used
-as live services.
+authorized Realtime events. The customer provider directory is API-backed and
+returns only active, approved provider profiles with public fields. Staff can
+search marketplace jobs and inspect quotes and activity timelines through
+audited admin routes. Admin job reads do not expose customer contact details.
+
+Marketplace changes persist in-app notifications and an outbox event in the
+same database transaction. `GET /v1/notifications` and
+`POST /v1/notifications/:notificationId/read` are scoped to the authenticated
+user. The frontend shows these durable in-app notifications. The outbox is only
+a durable event record today: no worker sends email, SMS, or push notifications,
+and no background retry/processing service is deployed.
+
+Messaging, reviews, support/partner data, payment, escrow, and payout screens remain outside this
+milestone and must not be used as live services. Dispute screens are prototypes;
+there is no customer dispute submission or admin job resolution workflow yet.
 
 The API applies Helmet security headers, exact-origin CORS checks, and
 per-process request limits (120 requests/IP/minute globally; 5 supplier
@@ -146,7 +164,8 @@ check; it is not continuous uptime monitoring and no external alert delivery is
 configured. `GET /v1/admin/audit` returns persisted administrative access
 events. Admin routes require the
 `20261109130000_admin_audit`, `20261109150000_admin_workflows`, and
-`20261109170000_admin_console_features` migrations. Admin roles must be
+`20261109170000_admin_console_features` migrations. Marketplace notifications
+also require `20261116120000_marketplace_notifications_outbox`. Admin roles must be
 provisioned by a trusted operator; public signup and provider application
 flows do not grant them. Do not expose the database connection or grant admin
 roles through browser-facing code.
@@ -175,14 +194,17 @@ limits. Do not run load, brute-force, or destructive tests against production.
 ## Current Limits
 
 - `/v1/me/bootstrap` and `/v1/me` require a verified Supabase bearer token.
-  New accounts receive only the consumer role; provider access is granted only
-  by an admin approving an active user's submitted service application.
-- `POST /v1/provider-applications` stores the authenticated user's requested
-  public name, service description, and region as a profile in review. It does
-  not grant provider access; approval and role provisioning are a trusted,
-  audited administrative operation.
-- Job, quote, message CRUD, realtime updates, payment collection, worker
-  payouts, and production deployment are not implemented.
+  New accounts receive only the consumer role. Submitting an ID-backed provider
+  application adds provider workspace access while retaining consumer access.
+- `POST /v1/provider-applications` stores provider details and private ID
+  evidence in review. Pending providers may create three service listings;
+  listing creation is transactionally capped by the API until an audited admin
+  approval verifies them. Admin and support roles remain trusted operations.
+- Core job and quote creation, reads, quote acceptance, and the initial job
+  lifecycle are implemented. Provider discovery, staff marketplace review, and
+  durable in-app notifications are API-backed. Job editing, message CRUD,
+  dispute workflows, outbox delivery, payment collection, worker payouts, and
+  production deployment are not implemented.
 - Service categories and marketplace settings are persisted, but the
   commission rate is not wired into any transaction or fee calculation, and
   job APIs do not yet validate new jobs against the category catalog. Promo
