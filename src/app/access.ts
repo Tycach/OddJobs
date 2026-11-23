@@ -35,7 +35,7 @@ export const workspaceLabels: Record<Role, string> = {
 
 export const roleScreens: Record<Role, readonly Screen[]> = {
   consumer: [
-    "workspace", "login", "providerApply", "identityVerification", "home", "workFeed", "post", "jobs", "bids", "profile", "chat",
+    "workspace", "login", "providerApply", "identityVerification", "home", "workFeed", "post", "jobs", "payments", "bids", "profile", "chat",
     "dispute", "history", "saved", "training", "analytics", "hiringAnalytics", "hiringGuide", "notifications", "settings",
   ],
   provider: [
@@ -45,7 +45,7 @@ export const roleScreens: Record<Role, readonly Screen[]> = {
   ],
   admin: [
     "login", "overview", "users", "verification", "categories", "moderation",
-    "adApprovals", "audit", "operations", "config", "monitoring", "messages", "settings",
+    "adApprovals", "audit", "payments", "operations", "config", "monitoring", "messages", "settings",
   ],
   support: ["login", "disputes", "inbox", "knowledgeBase", "settings"],
   partner: ["login", "programmes", "impact", "builder", "settings"],
@@ -58,6 +58,7 @@ export const navigation: Record<Role, { label: string; icon: string; screen: Scr
     { label: "Saved workers", icon: "star", screen: "saved" },
     { label: "Post a job", icon: "plus", screen: "post" },
     { label: "My jobs", icon: "briefcase", screen: "jobs" },
+    { label: "Payments", icon: "wallet", screen: "payments" },
     { label: "Hiring guide", icon: "book", screen: "training" },
     { label: "Analytics", icon: "chart", screen: "hiringAnalytics" },
     { label: "Messages", icon: "message", screen: "chat" },
@@ -87,6 +88,7 @@ export const navigation: Record<Role, { label: string; icon: string; screen: Scr
     { label: "Moderation", icon: "flag", screen: "moderation" },
     { label: "Ad approvals", icon: "megaphone", screen: "adApprovals" },
     { label: "Audit log", icon: "chart", screen: "audit" },
+    { label: "Payments & wallets", icon: "wallet", screen: "payments" },
     { label: "Marketplace operations", icon: "briefcase", screen: "operations" },
     { label: "Messages", icon: "message", screen: "messages" },
     { label: "Settings", icon: "settings", screen: "settings" },

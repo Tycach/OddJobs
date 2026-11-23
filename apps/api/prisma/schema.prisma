@@ -100,6 +100,32 @@ enum QuoteStatus {
   @@map("quote_status")
 }
 
+enum JobPaymentStatus {
+  AWAITING_PAYMENT
+  REPORTED
+  PAID
+  DISPUTED
+  REFUNDED
+
+  @@map("job_payment_status")
+}
+
+enum JobPaymentMethod {
+  CASH
+  MANUAL_TRANSFER
+
+  @@map("job_payment_method")
+}
+
+enum PlatformFeeStatus {
+  DUE
+  REPORTED
+  RECEIVED
+  DISPUTED
+
+  @@map("platform_fee_status")
+}
+
 model User {
   id                String               @id @default(uuid()) @db.Uuid
   displayName       String               @map("display_name") @db.VarChar(120)
@@ -118,6 +144,9 @@ model User {
   reviewsGiven      ServiceListingReview[] @relation("ReviewsGiven")
   reviewsReceived   ServiceListingReview[] @relation("ReviewsReceived")
   quotes            Quote[]
+  paymentsAsCustomer JobPayment[]         @relation("PaymentCustomer")
+  paymentsAsProvider JobPayment[]         @relation("PaymentProvider")
+  paymentEvents       JobPaymentEvent[]
   messages          Message[]
   customerConversations JobConversation[] @relation("JobConversationCustomer")
   providerConversations JobConversation[] @relation("JobConversationProvider")
@@ -295,6 +324,12 @@ model ProviderProfile {
   publicName         String                       @map("public_name") @db.VarChar(120)
   bio                String?                      @db.VarChar(2000)
   region             String?                      @db.VarChar(120)
+  serviceLatitude    Float?                       @map("service_latitude")
+  serviceLongitude   Float?                       @map("service_longitude")
+  maxTravelDistanceKm Int                         @default(25) @map("max_travel_distance_km")
+  payoutHoldAt        DateTime?                    @map("payout_hold_at") @db.Timestamptz(3)
+  payoutHoldReason    String?                      @map("payout_hold_reason") @db.VarChar(1000)
+  payoutHoldByUserId  String?                      @map("payout_hold_by_user_id") @db.Uuid
   verificationDocumentType String?                 @map("verification_document_type") @db.VarChar(40)
   verificationDocumentPath String?                 @map("verification_document_path") @db.VarChar(300)
   skillsEvidence     String?                       @map("skills_evidence") @db.VarChar(2000)
@@ -306,6 +341,7 @@ model ProviderProfile {
   savedBy            SavedProvider[]
 
   @@index([verificationStatus, region])
+  @@index([serviceLatitude, serviceLongitude])
   @@map("provider_profiles")
 }
 
@@ -462,6 +498,7 @@ model Job {
   locationMode  JobLocationMode @default(ONSITE) @map("location_mode")
   locationLatitude Float? @map("location_latitude")
   locationLongitude Float? @map("location_longitude")
+  shareExactLocationWithProvider Boolean @default(false) @map("share_exact_location_with_provider")
   completionNote String? @map("completion_note") @db.VarChar(5000)
   revisionNote String? @map("revision_note") @db.VarChar(2000)
   media         Json      @default("[]")
@@ -469,6 +506,7 @@ model Job {
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   customer      User      @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Restrict)
   quotes        Quote[]
+  payment       JobPayment?
   messages      Message[]
   conversations JobConversation[]
 
@@ -494,6 +532,7 @@ model Quote {
   job         Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
   provider    User        @relation(fields: [providerId], references: [id], onDelete: Restrict)
   conversation JobConversation?
+  payment      JobPayment?
 
   @@unique([jobId, providerId, revision])
   @@unique([jobId, providerId], where: { status: "SUBMITTED" }, map: "quotes_one_active_per_provider_per_job_key")
@@ -501,6 +540,64 @@ model Quote {
   @@index([jobId, status, createdAt])
   @@index([providerId, createdAt])
   @@map("quotes")
+}
+
+model JobPayment {
+  id                    String            @id @default(uuid()) @db.Uuid
+  paymentReference      String            @unique(map: "job_payments_payment_reference_key") @default(dbgenerated("('PAY-'::text || lpad(nextval('job_payment_reference_seq'::regclass)::text, 9, '0'::text))")) @map("payment_reference") @db.VarChar(13)
+  jobId                 String            @unique @map("job_id") @db.Uuid
+  quoteId               String            @unique @map("quote_id") @db.Uuid
+  customerId            String            @map("customer_id") @db.Uuid
+  providerId            String            @map("provider_id") @db.Uuid
+  grossAmountMinor      BigInt            @map("gross_amount_minor")
+  commissionBasisPoints Int               @map("commission_basis_points")
+  commissionAmountMinor BigInt            @map("commission_amount_minor")
+  providerAmountMinor   BigInt            @map("provider_amount_minor")
+  currency              String            @default("KES") @db.Char(3)
+  method                JobPaymentMethod?
+  status                JobPaymentStatus  @default(AWAITING_PAYMENT)
+  reportedByUserId      String?           @map("reported_by_user_id") @db.Uuid
+  reportedAt            DateTime?         @map("reported_at") @db.Timestamptz(3)
+  confirmedByUserId     String?           @map("confirmed_by_user_id") @db.Uuid
+  confirmedAt           DateTime?         @map("confirmed_at") @db.Timestamptz(3)
+  platformFeeStatus    PlatformFeeStatus @default(DUE) @map("platform_fee_status")
+  platformFeeReportedByUserId String?    @map("platform_fee_reported_by_user_id") @db.Uuid
+  platformFeeReportedAt DateTime?        @map("platform_fee_reported_at") @db.Timestamptz(3)
+  platformFeePaymentReference String?    @map("platform_fee_payment_reference") @db.VarChar(120)
+  platformFeeReceivedAt DateTime?        @map("platform_fee_received_at") @db.Timestamptz(3)
+  platformFeeReceiptReference String?   @map("platform_fee_receipt_reference") @db.VarChar(120)
+  disputeReason         String?           @map("dispute_reason") @db.VarChar(1000)
+  resolutionNote        String?           @map("resolution_note") @db.VarChar(1000)
+  resolvedByUserId      String?           @map("resolved_by_user_id") @db.Uuid
+  resolvedAt            DateTime?         @map("resolved_at") @db.Timestamptz(3)
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  job                   Job               @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  quote                 Quote             @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  customer              User              @relation("PaymentCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  provider              User              @relation("PaymentProvider", fields: [providerId], references: [id], onDelete: Restrict)
+  events                JobPaymentEvent[]
+
+  @@index([customerId, status, createdAt])
+  @@index([providerId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("job_payments")
+}
+
+model JobPaymentEvent {
+  id        String     @id @default(uuid()) @db.Uuid
+  paymentId String     @map("payment_id") @db.Uuid
+  actorId   String?    @map("actor_id") @db.Uuid
+  action    String     @db.VarChar(80)
+  metadata  Json       @default("{}") @db.JsonB
+  requestId String     @map("request_id") @db.VarChar(80)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  payment   JobPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  actor     User?      @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, action, requestId])
+  @@index([paymentId, createdAt])
+  @@map("job_payment_events")
 }
 
 model Message {

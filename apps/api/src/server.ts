@@ -8,7 +8,7 @@ import { PrismaDatabase } from "./database.js"
 export async function startServer(): Promise<void> {
   const config = loadConfig()
   const database = config.databaseUrl
-    ? new PrismaDatabase(config.databaseUrl)
+    ? new PrismaDatabase(config.databaseUrl, config.databasePoolMax)
     : null
   const authVerifier =
     config.supabaseUrl && config.supabaseApiKey

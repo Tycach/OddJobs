@@ -19,17 +19,27 @@ import {
 } from "./app/access"
 import { DemoContext } from "./demo/context"
 
-const ProviderDirectory = lazy(() => import("./features/customer/ProviderDirectory"))
+const loadProviderDirectory = () => import("./features/customer/ProviderDirectory")
+const loadCustomerScreens = () => import("./features/customer/CustomerScreens")
+const loadMarketplaceOperations = () => import("./features/admin/MarketplaceOperations")
+const loadAdminConsole = () => import("./features/admin/AdminConsoleScreens")
+const loadNotifications = () => import("./features/marketplace/Notifications")
+const loadProviderScreens = () => import("./features/provider/ProviderScreens")
+const loadPrototypeScreens = () => import("./features/prototype/PrototypeScreens")
+const loadLandingPage = () => import("./features/public/LandingPage")
+
+const ProviderDirectory = lazy(loadProviderDirectory)
 const ProviderProfile = lazy(async () => {
-  const module = await import("./features/customer/ProviderDirectory")
+  const module = await loadProviderDirectory()
   return { default: module.ProviderProfile }
 })
-const CustomerScreens = lazy(() => import("./features/customer/CustomerScreens"))
-const MarketplaceOperationsPage = lazy(() => import("./features/admin/MarketplaceOperations"))
-const AdminConsoleScreen = lazy(() => import("./features/admin/AdminConsoleScreens"))
-const Notifications = lazy(() => import("./features/marketplace/Notifications"))
-const ProviderScreens = lazy(() => import("./features/provider/ProviderScreens"))
-const PrototypeScreens = lazy(() => import("./features/prototype/PrototypeScreens"))
+const CustomerScreens = lazy(loadCustomerScreens)
+const MarketplaceOperationsPage = lazy(loadMarketplaceOperations)
+const AdminConsoleScreen = lazy(loadAdminConsole)
+const Notifications = lazy(loadNotifications)
+const ProviderScreens = lazy(loadProviderScreens)
+const PrototypeScreens = lazy(loadPrototypeScreens)
+const LandingPage = lazy(loadLandingPage)
 import {
   demoStorageKey,
   initialDemoStore,
@@ -38,6 +48,23 @@ import {
   type Screen,
 } from "./demo/model"
 
+function preloadPage(screen: Screen, role: Role) {
+  const customerPage = ["home", "workFeed", "map", "post", "jobs", "bids", "checkout", "track", "chat", "review", "dispute", "history", "saved", "settings", "hiringAnalytics", "hiringGuide"]
+  const providerPage = ["providerHome", "listingCreate", "onboarding", "providerVerification", "identityVerification", "feed", "jobDetail", "providerBids", "management", "wallet", "reputation", "training", "plans", "analytics", "ads"]
+  const adminPage = ["messages", "overview", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "config"]
+  let load: (() => Promise<unknown>) | undefined
+
+  if (screen === "welcome") load = loadLandingPage
+  else if (screen === "search" || (screen === "profile" && role === "consumer")) load = loadProviderDirectory
+  else if (screen === "profile" || (role === "consumer" && (customerPage.includes(screen) || screen === "payments" || screen === "analytics" || screen === "training"))) load = loadCustomerScreens
+  else if (screen === "notifications") load = loadNotifications
+  else if (screen === "operations") load = loadMarketplaceOperations
+  else if (role === "admin" && (adminPage.includes(screen) || screen === "payments")) load = loadAdminConsole
+  else if (role === "provider" && providerPage.includes(screen)) load = loadProviderScreens
+  else if (["disputes", "inbox", "knowledgeBase", "programmes", "impact", "builder"].includes(screen)) load = loadPrototypeScreens
+
+  if (load) void load().catch(() => undefined)
+}
 type IconProps = {
   name: string
   size?: number
@@ -477,7 +504,7 @@ function AppShell() {
   if (auth.loading) {
     return (
       <div className="auth-shell">
-        <p className="center-note">Checking your account…</p>
+        <p className="center-note">Checking your accountâ€¦</p>
       </div>
     )
   }
@@ -490,6 +517,7 @@ function AppShell() {
           initialStage="recovery"
           chooseWorkspace={chooseWorkspace}
           changeWorkspace={goWorkspacePicker}
+          goHome={goWelcome}
         />
       </DemoContext.Provider>
     )
@@ -503,6 +531,7 @@ function AppShell() {
           initialStage="policyConsent"
           chooseWorkspace={chooseWorkspace}
           changeWorkspace={goWorkspacePicker}
+          goHome={goWelcome}
         />
       </DemoContext.Provider>
     )
@@ -552,7 +581,7 @@ function AppShell() {
                 disabled={signingOut}
                 onClick={() => void signOutAndReturnToLogin()}
               >
-                {signingOut ? "Signing out…" : "Sign out"}
+                {signingOut ? "Signing outâ€¦" : "Sign out"}
               </Button>
             </section>
           </div>
@@ -664,6 +693,8 @@ function AppShell() {
         return <AdminConsoleScreen screen="adApprovals" />
       case "audit":
         return <AdminConsoleScreen screen="audit" />
+      case "payments":
+        return role === "consumer" ? <CustomerScreens screen="payments" go={go} onOpenProvider={openProvider} /> : <AdminConsoleScreen screen="payments" />
       case "operations":
         return <MarketplaceOperationsPage />
       case "config":
@@ -682,15 +713,26 @@ function AppShell() {
         return <PrototypeScreens screen="builder" />
     }
   }
-  if (screen === "welcome" || screen === "workspace" || screen === "login")
+  if (screen === "welcome") {
+    return (
+      <Suspense fallback={<p className="center-note" role="status">Loading OddJobsâ€¦</p>}>
+        <LandingPage
+          onSignIn={() => navigate("consumer", "workspace")}
+          onLogin={(nextRole) => navigate(nextRole, "login")}
+        />
+      </Suspense>
+    )
+  }
+  if (screen === "workspace" || screen === "login")
     return (
       <DemoContext.Provider value={{ store, updateStore }}>
         <AuthExperience
           key={`${role}-${screen}`}
           initialRole={screen === "login" ? role : null}
-          initialStage={screen === "workspace" || screen === "welcome" ? "role" : "login"}
+          initialStage={screen === "workspace" ? "role" : "login"}
           chooseWorkspace={chooseWorkspace}
           changeWorkspace={goWorkspacePicker}
+          goHome={goWelcome}
         />
       </DemoContext.Provider>
     )
@@ -774,6 +816,9 @@ function AppShell() {
                     key={item.screen}
                     className={screen === item.screen ? "active" : ""}
                     aria-current={screen === item.screen ? "page" : undefined}
+                    onPointerEnter={() => preloadPage(item.screen, role)}
+                    onPointerDown={() => preloadPage(item.screen, role)}
+                    onFocus={() => preloadPage(item.screen, role)}
                     onClick={() => go(item.screen)}
                   >
                     <Icon name={item.icon} />
@@ -812,7 +857,7 @@ function AppShell() {
                 onClick={() => void signOutAndReturnToLogin()}
               >
                 <Icon name="logout" />
-                <span>{signingOut ? "Signing out…" : "Sign out"}</span>
+                <span>{signingOut ? "Signing outâ€¦" : "Sign out"}</span>
               </button>
             </aside>
           </>
@@ -838,6 +883,9 @@ function AppShell() {
               <button
                 key={n.screen}
                 className={screen === n.screen || (role === "provider" && screen === "profile" && n.screen === "settings") ? "active" : ""}
+                onPointerEnter={() => preloadPage(n.screen, role)}
+                onPointerDown={() => preloadPage(n.screen, role)}
+                onFocus={() => preloadPage(n.screen, role)}
                 onClick={() => go(n.screen)}
               >
                 <Icon name={n.icon} />
@@ -859,7 +907,7 @@ function AppShell() {
               onClick={() => void signOutAndReturnToLogin()}
             >
               <Icon name="logout" />
-              <span>{signingOut ? "Signing out…" : "Sign out"}</span>
+              <span>{signingOut ? "Signing outâ€¦" : "Sign out"}</span>
             </button>
             {role === "consumer" && <button className="support-mini" onClick={() => navigate("consumer", "dispute")}>
               <Icon name="message" />
@@ -877,7 +925,7 @@ function AppShell() {
               <button type="button" onClick={() => setRouteNotice("")}>Dismiss</button>
             </div>
           )}
-          <Suspense fallback={<p className="center-note" role="status">Loading workspace…</p>}>
+          <Suspense fallback={<div className="page-loading-skeleton" role="status" aria-label="Loading page"><span /><span /><span /></div>}>
             {renderScreen()}
           </Suspense>
         </main>

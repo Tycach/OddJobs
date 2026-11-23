@@ -10,6 +10,7 @@ const EnvironmentSchema = z.object({
     .default("info"),
   WEB_ORIGIN: z.string().url().default("http://localhost:8443"),
   DATABASE_URL: z.string().url().optional(),
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(5),
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_PUBLISHABLE_KEY: z.string().min(1).optional(),
   SUPABASE_ANON_KEY: z.string().min(1).optional(),
@@ -33,6 +34,7 @@ export type AppConfig = {
   logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent"
   webOrigin: string
   databaseUrl?: string
+  databasePoolMax: number
   supabaseUrl?: string
   supabaseApiKey?: string
   supabaseSecretKey?: string
@@ -70,6 +72,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       (parsed.data.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1"),
     port: parsed.data.PORT,
     logLevel: parsed.data.LOG_LEVEL,
+    databasePoolMax: parsed.data.DATABASE_POOL_MAX,
     webOrigin: parsed.data.WEB_ORIGIN,
     ...(parsed.data.DATABASE_URL
       ? { databaseUrl: parsed.data.DATABASE_URL }

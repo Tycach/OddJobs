@@ -9,7 +9,10 @@ profiles in review. Provider accounts can publish ten listings before
 identity approval; the server removes the listing cap after verification is
 approved. Provider identity documents are stored in a private
 Supabase Storage bucket and are available to administrators through audited,
-short-lived links. Messaging, payments, and payouts are not implemented.
+short-lived links. Job-linked messaging, reviews, and the manual job-payment
+ledger are API-backed. The ledger records hirer reports, worker confirmations,
+disputes, and admin fee reconciliation; it does not collect funds, provide
+escrow, or issue automated payouts.
 
 ## Boundary
 
@@ -36,9 +39,12 @@ npm run dev
 
 Before running, copy `.env.example` to `.env`. Use a dedicated Supabase
 development project, not the previously configured shared/production project.
-Point `DATABASE_URL`
-to the transaction-mode pooler URL for API runtime and `DIRECT_URL` to the
-session-mode pooler URL for Prisma migrations. Set `SUPABASE_URL` and
+Point `DATABASE_URL` to the connection mode selected for the persistent API
+runtime and `DIRECT_URL` to the direct/session connection used for Prisma
+migrations. Set `DATABASE_POOL_MAX` to a safe per-instance connection cap
+(default 5), then verify maximum API instances multiplied by this value, plus
+worker and operational connections, stays below the Supabase pool's backend
+connection budget. Set `SUPABASE_URL` and
 `SUPABASE_PUBLISHABLE_KEY` for server-side token verification. Do not configure
 or use the Supabase secret key for this flow. Keep database credentials private
 and out of source control. The service listens on port
@@ -56,7 +62,11 @@ put API secrets in Vite variables.
 For a Render Web Service rooted at `apps/api`, use `npm ci && npm run build`
 as the build command and `npm start` as the start command. The API defaults to
 `0.0.0.0` in production (and `127.0.0.1` in development); Render supplies
-`PORT`. Set the Render health check path to `/health/live`.
+`PORT`. Set the Render HTTP health check path to `/health/ready`; use
+`/health/live` for process-only liveness probes. Keep at least two instances
+for production availability where the service plan allows it, and configure
+autoscaling bounds from measured load. Autoscaling is a Render service setting,
+not enabled by this repository alone.
 
 Configure the API service environment with `NODE_ENV=production`,
 `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `WEB_ORIGIN`
@@ -76,7 +86,10 @@ or Supabase secret keys in Vercel frontend variables.
 Only after verifying `.env` targets the dedicated development project, run
 `npm run db:migrate:deploy` to apply pending versioned migrations, including
 policy-consent, admin workflows, marketplace activity, and notification/outbox
-tables and the private provider-verification bucket. Do not run that command against the previously configured
+tables, marketplace media storage policies, and the private
+provider-verification bucket. The `20261123180000_hirer_job_media_upload`
+migration allows active hirers and providers to upload and remove media only
+inside their own storage folder. Do not run that command against the previously configured
 shared/production project. The API accepts only the current policy versions and
 stores each user/document/version acceptance once with a server-generated
 timestamp.
@@ -88,7 +101,8 @@ The authenticated marketplace API supports `POST /v1/jobs`, role-scoped
 acceptance, and the awarded → in-progress → completion-pending → completed
 workflow. Job and quote writes are server-validated and persisted in Postgres;
 only the customer who owns a job and the authorized provider can advance its
-state. Accepting a quote does not create a payment or escrow record.
+state. Accepting a quote creates a payment agreement in the ledger; it does
+not charge a user, move funds, or create escrow.
 
 The `20261109180000_marketplace_realtime_policies` migration adds the quote
 availability field, enables row-level read policies for authenticated
@@ -112,18 +126,21 @@ user. The frontend shows these durable in-app notifications. The outbox is only
 a durable event record today: no worker sends email, SMS, or push notifications,
 and no background retry/processing service is deployed.
 
-Messaging, reviews, support/partner data, payment, escrow, and payout screens remain outside this
-milestone and must not be used as live services. Dispute screens are prototypes;
-there is no customer dispute submission or admin job resolution workflow yet.
+Job-linked messages, provider reviews, and manual payment confirmation are
+implemented in the API. Payment records are not payment processing: no card or
+M-Pesa collection, escrow, automated worker payout, or external payment
+reconciliation is integrated. Some support/partner screens remain prototypes.
 
-The API applies Helmet security headers, exact-origin CORS checks, and
-per-process request limits (120 requests/IP/minute globally; 5 supplier
-application requests/IP/hour). The built-in limiter store is in-memory:
-configure a shared rate-limit store or enforce equivalent limits at the
-trusted gateway before running multiple API replicas. If deployed behind a
-reverse proxy, configure Fastify to trust only the known proxy IP ranges;
-never trust arbitrary forwarded-IP headers. Protected identity responses are
-sent with `Cache-Control: no-store`.
+The API applies Helmet security headers, exact-origin CORS checks, a one MiB
+JSON body limit, a configurable Postgres pool cap, API-wide
+`Cache-Control: no-store`, and per-process request limits (120 requests/IP/minute
+globally; 5 supplier application requests/IP/hour). The built-in limiter store
+is in-memory: configure a shared rate-limit store or enforce equivalent limits
+at the trusted gateway before running multiple API replicas. If deployed behind
+a reverse proxy, configure Fastify to trust only the known proxy IP ranges;
+never trust arbitrary forwarded-IP headers. The root `vercel.json` configures
+cache/security headers for the Vite frontend; it does not configure API/CDN
+behavior or Render scaling. See `../../docs/scalability-security-plan.md`.
 
 ## Initial Admin API
 
@@ -148,9 +165,9 @@ resolution is performed.
 `GET /v1/admin/categories` and `PUT /v1/admin/categories` manage the audited
 category catalog. `GET /v1/admin/settings` and `PUT /v1/admin/settings` manage
 an allowlisted set of marketplace settings. Provider application and ad
-submission switches are enforced by the API. The stored commission percentage
-is **not** applied to charges because job and payment fee calculation is not
-implemented. `POST /v1/ads` accepts authenticated campaign submissions (up to
+submission switches are enforced by the API. The configured fee percentage is
+captured in a payment agreement and shown as a separate hirer obligation; it
+is reconciled manually and is not collected by the app. `POST /v1/ads` accepts authenticated campaign submissions (up to
 five per IP per hour), and `GET /v1/admin/ads` plus
 `POST /v1/admin/ads/:campaignId/decision` provide the audited review workflow.
 Approval does not publish or serve an ad; an ad-serving integration is not
@@ -201,13 +218,15 @@ limits. Do not run load, brute-force, or destructive tests against production.
   listing creation is transactionally capped by the API until an audited admin
   approval verifies them. Admin and support roles remain trusted operations.
 - Core job and quote creation, reads, quote acceptance, and the initial job
-  lifecycle are implemented. Provider discovery, staff marketplace review, and
-  durable in-app notifications are API-backed. Job editing, message CRUD,
-  dispute workflows, outbox delivery, payment collection, worker payouts, and
-  production deployment are not implemented.
-- Service categories and marketplace settings are persisted, but the
-  commission rate is not wired into any transaction or fee calculation, and
-  job APIs do not yet validate new jobs against the category catalog. Promo
+  lifecycle are implemented. Provider discovery, job-linked messages, reviews,
+  staff marketplace review, durable in-app notifications, and the manual
+  payment ledger are API-backed. Automated payment collection, escrow, worker
+  payouts, outbox delivery, and multi-instance rate-limit coordination are not
+  implemented/configured.
+- Service categories and marketplace settings are persisted, and the selected
+  fee percentage is captured when an accepted bid creates its payment
+  agreement. Job APIs do not yet validate new jobs against the category
+  catalog. Promo
   codes and subscription plans are not implemented.
 - Ad campaign review does not publish campaigns; there is no ad-serving
   integration or advertiser-facing campaign management screen.

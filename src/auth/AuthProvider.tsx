@@ -94,6 +94,8 @@ export type MarketplaceJob = {
   locationMode?: "onsite" | "remote" | "flexible"
   locationLatitude?: number | null
   locationLongitude?: number | null
+  shareExactLocationWithProvider?: boolean
+  distanceKm?: number | null
   completionNote?: string | null
   revisionNote?: string | null
   media?: ServiceListingMedia[]
@@ -195,16 +197,39 @@ export type MarketplaceProviderQuote = MarketplaceQuote & {
   jobStatus: string
 }
 
+export type JobPaymentMethod = "cash" | "manual_transfer"
+export type JobPaymentStatus = "awaiting_payment" | "reported" | "paid" | "disputed" | "refunded"
+export type JobPaymentRecord = {
+  id: string; paymentReference: string; jobId: string; jobReference: string; jobTitle: string; jobStatus: string; quoteId: string
+  customerId: string; customerName: string; providerId: string; providerName: string
+  grossAmountMinor: number; commissionBasisPoints: number; commissionAmountMinor: number; providerAmountMinor: number
+  currency: string; method: JobPaymentMethod | null; status: JobPaymentStatus
+  reportedByUserId: string | null; reportedAt: string | null; confirmedByUserId: string | null; confirmedAt: string | null
+  platformFeeStatus: "due" | "reported" | "received" | "disputed"
+  platformFeeReportedByUserId: string | null; platformFeeReportedAt: string | null; platformFeePaymentReference: string | null
+  platformFeeReceivedAt: string | null; platformFeeReceiptReference: string | null
+  disputeReason: string | null; resolutionNote: string | null; resolvedAt: string | null
+  payoutHoldAt?: string | null; payoutHoldReason?: string | null; createdAt: string; updatedAt: string
+}
+export type AdminJobPaymentPage = AdminPage<JobPaymentRecord> & {
+  summary: { paidGrossMinor: number; commissionMinor: number; providerNetMinor: number; commissionDueMinor: number; disputedCount: number }
+  workers: Array<{ providerId: string; providerName: string; paidJobs: number; grossMinor: number; commissionMinor: number; netMinor: number; payoutHeld: boolean }>
+}
+export type ProviderWalletPayment = Pick<JobPaymentRecord, "id" | "paymentReference" | "jobId" | "jobReference" | "jobTitle" | "customerName" | "currency" | "method" | "status" | "reportedByUserId" | "reportedAt" | "confirmedAt" | "disputeReason" | "createdAt" | "updatedAt"> & { earningsMinor: number }
+
 export type MarketplaceProvider = {
   id: string
   userId?: string
   publicName: string
   bio: string
   region: string
+  serviceLatitude?: number | null
+  serviceLongitude?: number | null
+  maxTravelDistanceKm?: number
   avatarPath?: string | null
 }
 
-export type MarketplaceProviderProfileInput = Pick<MarketplaceProvider, "publicName" | "bio" | "region">
+export type MarketplaceProviderProfileInput = Pick<MarketplaceProvider, "publicName" | "bio" | "region"> & Pick<MarketplaceProvider, "serviceLatitude" | "serviceLongitude" | "maxTravelDistanceKm">
 
 export type MarketplaceNotification = {
   id: string
@@ -228,6 +253,7 @@ export type MarketplaceJobInput = {
   locationMode?: "onsite" | "remote" | "flexible"
   locationLatitude?: number | null
   locationLongitude?: number | null
+  shareExactLocationWithProvider?: boolean
   media?: ServiceListingMedia[]
 }
 
@@ -634,6 +660,12 @@ type AuthContextValue = {
     jobId: string,
     role: "consumer" | "provider",
   ) => Promise<MarketplaceJob>
+  getJobPayments: (role: "consumer" | "provider") => Promise<JobPaymentRecord[]>
+  getProviderWalletPayments: () => Promise<ProviderWalletPayment[]>
+  reportJobPayment: (jobId: string, method: JobPaymentMethod) => Promise<JobPaymentRecord>
+  reportHirerPlatformFee: (jobId: string, paymentReference: string) => Promise<JobPaymentRecord>
+  confirmJobPayment: (jobId: string) => Promise<JobPaymentRecord>
+  disputeJobPayment: (jobId: string, reason: string) => Promise<JobPaymentRecord>
 
   getMarketplaceQuotes: (
     jobId: string,
@@ -677,6 +709,10 @@ type AuthContextValue = {
   getServiceListingMessages: (listingId: string, role: "consumer" | "provider") => Promise<ServiceListingMessage[]>
   sendServiceListingMessage: (listingId: string, role: "consumer" | "provider", body: string) => Promise<ServiceListingMessage>
   getAdminServiceListingMessages: (limit: number, offset: number, search?: string) => Promise<AdminPage<AdminServiceListingMessage>>
+  getAdminJobPayments: (search: string, status: JobPaymentStatus | "all", limit: number, offset: number) => Promise<AdminJobPaymentPage>
+  resolveAdminJobPayment: (paymentId: string, resolution: "paid" | "refunded", reason: string) => Promise<JobPaymentRecord>
+  recordAdminPlatformFeeReceipt: (paymentId: string, receiptReference: string) => Promise<JobPaymentRecord>
+  setAdminProviderPayoutHold: (providerId: string, held: boolean, reason: string) => Promise<void>
 
   subscribeMarketplaceChanges: (onChange: () => void) => () => void
 
@@ -693,17 +729,25 @@ const apiUrl = (import.meta.env.VITE_API_URL || "http://127.0.0.1:3000")
 
   .replace(/\/$/, "")
 
-let rememberSession =
-  window.localStorage.getItem("oddjobs-auth-remember-session") === "1"
+type AuthHotData = {
+  rememberSessionState?: { current: boolean }
+  supabaseClient?: SupabaseClient
+}
+
+const authHotData = import.meta.hot?.data as AuthHotData | undefined
+const rememberSessionState = authHotData?.rememberSessionState ?? {
+  current: window.localStorage.getItem("oddjobs-auth-remember-session") === "1",
+}
+if (authHotData) authHotData.rememberSessionState = rememberSessionState
 
 const authStorage = {
   getItem: async (key: string) =>
     window.localStorage.getItem(key) ?? window.sessionStorage.getItem(key),
 
   setItem: async (key: string, value: string) => {
-    const target = rememberSession ? window.localStorage : window.sessionStorage
+    const target = rememberSessionState.current ? window.localStorage : window.sessionStorage
 
-    const other = rememberSession ? window.sessionStorage : window.localStorage
+    const other = rememberSessionState.current ? window.sessionStorage : window.localStorage
 
     other.removeItem(key)
 
@@ -719,7 +763,7 @@ const authStorage = {
 
 const supabase: SupabaseClient | null =
   supabaseUrl && supabaseApiKey
-    ? createClient(supabaseUrl, supabaseApiKey, {
+    ? authHotData?.supabaseClient ?? createClient(supabaseUrl, supabaseApiKey, {
         auth: {
           autoRefreshToken: true,
 
@@ -731,6 +775,7 @@ const supabase: SupabaseClient | null =
         },
       })
     : null
+if (authHotData && supabase) authHotData.supabaseClient = supabase
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
@@ -756,7 +801,7 @@ function getAuthErrorMessage(
     message.includes("redirect") &&
     (message.includes("not allowed") || message.includes("allowlist"))
   ) {
-    return "The sign-in return URL is not allowed in Supabase Auth. Add this app’s root URL to the Auth redirect URL allowlist."
+    return "The sign-in return URL is not allowed in Supabase Auth. Add this appâ€™s root URL to the Auth redirect URL allowlist."
   }
 
   if (
@@ -779,7 +824,7 @@ function getAuthErrorMessage(
     code.includes("invalid_credentials") ||
     message.includes("invalid login credentials")
   ) {
-    return "Those sign-in details don’t match. Check them and try again."
+    return "Those sign-in details donâ€™t match. Check them and try again."
   }
 
   if (
@@ -796,7 +841,7 @@ function getAuthErrorMessage(
     message.includes("invalid otp") ||
     message.includes("invalid token")
   ) {
-    return "That verification code doesn’t look right. Check it and try again."
+    return "That verification code doesnâ€™t look right. Check it and try again."
   }
 
   if (code.includes("weak_password") || message.includes("weak password")) {
@@ -844,7 +889,7 @@ async function postPolicyConsent(
       getApiErrorMessage(
         consentResponse.status,
 
-        "We couldn’t save your policy acceptance. Please try again.",
+        "We couldnâ€™t save your policy acceptance. Please try again.",
       ),
     )
   }
@@ -870,7 +915,7 @@ async function fetchProfile(
       getApiErrorMessage(
         response.status,
 
-        "We couldn’t load your profile. Please try again.",
+        "We couldnâ€™t load your profile. Please try again.",
       ),
     )
   }
@@ -943,7 +988,7 @@ function getAdminResponseError(status: number) {
       : getApiErrorMessage(
           status,
 
-          "We couldn’t load this admin data. Please try again.",
+          "We couldnâ€™t load this admin data. Please try again.",
         ),
   )
 }
@@ -999,32 +1044,63 @@ async function postAdminAction<T>(
   return (await response.json()) as T
 }
 
-async function marketplaceRequest<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
-  const response = await adminRequest(path, init)
-  if (!response.ok) {
-    const fallback =
-      response.status === 403
-        ? "Your account cannot access this marketplace data."
-        : response.status === 404
-          ? "This job or quote is no longer available."
-          : response.status === 409
-            ? "This job has changed. Refresh and try again."
-            : "We couldn’t complete that marketplace action. Please try again."
-    const payload = await response.clone().json().catch(() => null) as
-      | { error?: unknown; message?: unknown }
-      | null
-    const serverMessage =
-      typeof payload?.error === "string"
-        ? payload.error
-        : typeof payload?.message === "string"
-          ? payload.message
-          : fallback
-    throw new Error(getApiErrorMessage(response.status, serverMessage))
+const marketplaceReadCache = new Map<string, { expiresAt: number; value?: unknown; pending?: Promise<unknown> }>()
+const MARKETPLACE_READ_CACHE_MS = 8_000
+
+function invalidateMarketplaceReadCache() {
+  marketplaceReadCache.clear()
+}
+
+async function marketplaceRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase()
+  const userId = supabase
+    ? (await supabase.auth.getSession()).data.session?.user.id ?? "anonymous"
+    : "anonymous"
+  const cacheKey = `${userId}:${path}`
+  if (method === "GET") {
+    const cached = marketplaceReadCache.get(cacheKey)
+    if (cached?.value !== undefined && cached.expiresAt > Date.now()) return cached.value as T
+    if (cached?.pending) return cached.pending as Promise<T>
   }
-  return (await response.json()) as T
+
+  const request = (async () => {
+    const response = await adminRequest(path, init)
+    if (!response.ok) {
+      const fallback =
+        response.status === 403
+          ? "Your account cannot access this marketplace data."
+          : response.status === 404
+            ? "This job or quote is no longer available."
+            : response.status === 409
+              ? "This job has changed. Refresh and try again."
+              : "We could not complete that marketplace action. Please try again."
+      const payload = await response.clone().json().catch(() => null) as
+        | { error?: unknown; message?: unknown }
+        | null
+      const serverMessage =
+        typeof payload?.error === "string"
+          ? payload.error
+          : typeof payload?.message === "string"
+            ? payload.message
+            : fallback
+      throw new Error(getApiErrorMessage(response.status, serverMessage))
+    }
+    const value = (await response.json()) as T
+    if (method === "GET") {
+      marketplaceReadCache.set(cacheKey, { value, expiresAt: Date.now() + MARKETPLACE_READ_CACHE_MS })
+    } else invalidateMarketplaceReadCache()
+    return value
+  })()
+
+  if (method === "GET") marketplaceReadCache.set(cacheKey, { expiresAt: 0, pending: request })
+  try {
+    return await request
+  } catch (error) {
+    if (method === "GET" && marketplaceReadCache.get(cacheKey)?.pending === request) {
+      marketplaceReadCache.delete(cacheKey)
+    }
+    throw error
+  }
 }
 
 function marketplacePost<T>(path: string, body?: unknown): Promise<T> {
@@ -1131,7 +1207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           updateResult.error,
 
-          "We couldn’t save your policy acceptance. Please try again.",
+          "We couldnâ€™t save your policy acceptance. Please try again.",
         ),
       )
     }
@@ -1143,7 +1219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           sessionResult.error,
 
-          "We couldn’t confirm your sign-in. Please sign in again.",
+          "We couldnâ€™t confirm your sign-in. Please sign in again.",
         ),
       )
     }
@@ -1240,7 +1316,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldn’t send a verification code. Please try again shortly.",
+          "We couldnâ€™t send a verification code. Please try again shortly.",
         )
       : null
   }
@@ -1273,7 +1349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldn’t sign you in. Please check your details and try again.",
+          "We couldnâ€™t sign you in. Please check your details and try again.",
         )
       : null
   }
@@ -1336,7 +1412,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? getAuthErrorMessage(
             result.error,
 
-            "We couldn’t create your account right now. Please try again shortly.",
+            "We couldnâ€™t create your account right now. Please try again shortly.",
           )
         : null,
 
@@ -1359,7 +1435,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           error,
 
-          "We couldn’t start sign-in with that option. Please try again.",
+          "We couldnâ€™t start sign-in with that option. Please try again.",
         )
       : null
   }
@@ -1377,7 +1453,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           error,
 
-          "We couldn’t send a reset link. Please try again shortly.",
+          "We couldnâ€™t send a reset link. Please try again shortly.",
         )
       : null
   }
@@ -1393,7 +1469,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           error,
 
-          "We couldn’t update your password. Please try again.",
+          "We couldnâ€™t update your password. Please try again.",
         )
       : null
   }
@@ -1430,7 +1506,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldn’t verify that code. Please try again.",
+          "We couldnâ€™t verify that code. Please try again.",
         )
       : null
   }
@@ -1453,7 +1529,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldn’t send a new verification code. Please try again.",
+          "We couldnâ€™t send a new verification code. Please try again.",
         )
       : null
   }
@@ -1474,7 +1550,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           error,
 
-          "We couldn’t confirm your sign-in. Please sign in again.",
+          "We couldnâ€™t confirm your sign-in. Please sign in again.",
         ),
       )
     }
@@ -1524,7 +1600,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getApiErrorMessage(
           response.status,
 
-          "We couldn’t submit your supplier application. Please try again.",
+          "We couldnâ€™t submit your supplier application. Please try again.",
         ),
       )
     }
@@ -1540,7 +1616,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (metadataResult.error) {
       throw new Error(
-        "Your application was received, but we couldn’t finish updating your account. Please contact support if you need help.",
+        "Your application was received, but we couldnâ€™t finish updating your account. Please contact support if you need help.",
       )
     }
 
@@ -1635,7 +1711,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           error,
 
-          "We couldn’t sign you out. Please try again.",
+          "We couldnâ€™t sign you out. Please try again.",
         ),
       )
     }
@@ -1910,8 +1986,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const getServiceListingMediaUrl = useCallback((path: string) => {
-    if (!supabase) return ""
-    return supabase.storage.from("listing-media").getPublicUrl(path).data.publicUrl
+    if (!supabase || !supabaseUrl) return ""
+    const segments = path.replace(/^\/+/, "").split("/")
+    if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === "..")) return ""
+    const safePath = segments.map((segment) => encodeURIComponent(segment)).join("/")
+    const publicUrl = new URL(supabaseUrl)
+    publicUrl.pathname = `/storage/v1/object/public/listing-media/${safePath}`
+    return publicUrl.toString()
   }, [])
 
   const claimServiceListing = useCallback((listingId: string) => marketplacePost<ServiceListing>(`/v1/listings/${encodeURIComponent(listingId)}/claim`, {}), [])
@@ -1927,6 +2008,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const sendServiceListingMessage = useCallback((listingId: string, role: "consumer" | "provider", body: string) => marketplacePost<ServiceListingMessage>(`/v1/listings/${encodeURIComponent(listingId)}/messages?role=${role}`, { body }), [])
 
   const getAdminServiceListingMessages = useCallback((limit: number, offset: number, searchValue = "") => fetchAdminPage<AdminServiceListingMessage>("messages", limit, offset, undefined, searchValue), [])
+
+  const getAdminJobPayments = useCallback(async (search: string, status: JobPaymentStatus | "all", limit: number, offset: number) => {
+    const query = new URLSearchParams({ search, status, limit: String(limit), offset: String(offset) })
+    const response = await adminRequest(`/v1/admin/payments?${query}`)
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return await response.json() as AdminJobPaymentPage
+  }, [])
+  const resolveAdminJobPayment = useCallback((paymentId: string, resolution: "paid" | "refunded", reason: string) => postAdminAction<JobPaymentRecord>(`/v1/admin/payments/${encodeURIComponent(paymentId)}/resolve`, { resolution, reason }), [])
+  const recordAdminPlatformFeeReceipt = useCallback((paymentId: string, receiptReference: string) => postAdminAction<JobPaymentRecord>(`/v1/admin/payments/${encodeURIComponent(paymentId)}/platform-fee/confirm`, { receiptReference }), [])
+  const setAdminProviderPayoutHold = useCallback(async (providerId: string, held: boolean, reason: string) => {
+    const response = await adminRequest(`/v1/admin/providers/${encodeURIComponent(providerId)}/payout-hold`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ held, reason }) })
+    if (!response.ok) throw getAdminResponseError(response.status)
+  }, [])
 
   const getMarketplaceProviders = useCallback(
     (search: string, region: string, limit = 25, offset = 0) => {
@@ -2001,6 +2095,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getJobPayments = useCallback((role: "consumer" | "provider") => marketplaceRequest<JobPaymentRecord[]>(`/v1/me/payments?role=${role}`), [])
+  const getProviderWalletPayments = useCallback(() => marketplaceRequest<ProviderWalletPayment[]>("/v1/me/payments?role=provider"), [])
+  const reportJobPayment = useCallback((jobId: string, method: JobPaymentMethod) => marketplacePost<JobPaymentRecord>(`/v1/jobs/${encodeURIComponent(jobId)}/payment/report`, { method }), [])
+  const reportHirerPlatformFee = useCallback((jobId: string, paymentReference: string) => marketplacePost<JobPaymentRecord>(`/v1/jobs/${encodeURIComponent(jobId)}/platform-fee/report`, { paymentReference }), [])
+  const confirmJobPayment = useCallback((jobId: string) => marketplacePost<JobPaymentRecord>(`/v1/jobs/${encodeURIComponent(jobId)}/payment/confirm`, {}), [])
+  const disputeJobPayment = useCallback((jobId: string, reason: string) => marketplacePost<JobPaymentRecord>(`/v1/jobs/${encodeURIComponent(jobId)}/payment/dispute`, { reason }), [])
+
   const getMarketplaceQuotes = useCallback(
     (jobId: string, role: "consumer" | "provider") =>
       marketplaceRequest<MarketplaceQuote[]>(
@@ -2074,32 +2175,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error("Realtime services are not configured.")
     }
 
+    const refreshAfterChange = () => {
+      invalidateMarketplaceReadCache()
+      onChange()
+    }
     const channel = supabase
       .channel(`marketplace:${crypto.randomUUID()}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "jobs" },
-        () => onChange(),
+        refreshAfterChange,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "quotes" },
-        () => onChange(),
+        refreshAfterChange,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "service_listings" },
-        () => onChange(),
+        refreshAfterChange,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "saved_providers" },
-        () => onChange(),
+        refreshAfterChange,
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "provider_profiles" },
-        () => onChange(),
+        refreshAfterChange,
       )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
@@ -2123,13 +2228,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         recovery,
 
-        rememberMe: rememberSession,
+        rememberMe: rememberSessionState.current,
 
 
         policyConsentRequired,
 
         setRememberMe: (remember) => {
-          rememberSession = remember
+          rememberSessionState.current = remember
 
           window.localStorage.setItem(
             "oddjobs-auth-remember-session",
@@ -2228,6 +2333,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getServiceListingMessages,
         sendServiceListingMessage,
         getAdminServiceListingMessages,
+        getAdminJobPayments,
+        resolveAdminJobPayment,
+        recordAdminPlatformFeeReceipt,
+        setAdminProviderPayoutHold,
 
         getMarketplaceProviders,
 
@@ -2254,6 +2363,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         acceptMarketplaceQuote,
 
         transitionMarketplaceJob,
+        getJobPayments,
+        getProviderWalletPayments,
+        reportJobPayment,
+        reportHirerPlatformFee,
+        confirmJobPayment,
+        disputeJobPayment,
         getMarketplaceConversations,
         openMarketplaceConversation,
         getMarketplaceConversationMessages,

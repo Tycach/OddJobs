@@ -89,6 +89,8 @@ export type MarketplaceJob = {
   locationMode?: "onsite" | "remote" | "flexible"
   locationLatitude?: number | null
   locationLongitude?: number | null
+  shareExactLocationWithProvider?: boolean
+  distanceKm?: number | null
   completionNote?: string | null
   revisionNote?: string | null
   media?: ServiceListingMedia[]
@@ -188,12 +190,80 @@ export type MarketplaceProviderQuote = MarketplaceQuote & {
   jobStatus: string
 }
 
+export type JobPaymentMethod = "cash" | "manual_transfer"
+export type JobPaymentStatus = "awaiting_payment" | "reported" | "paid" | "disputed" | "refunded"
+export type PlatformFeeStatus = "due" | "reported" | "received" | "disputed"
+export type JobPaymentRecord = {
+  id: string
+  paymentReference: string
+  jobId: string
+  jobReference: string
+  jobTitle: string
+  jobStatus: string
+  quoteId: string
+  customerId: string
+  customerName: string
+  providerId: string
+  providerName: string
+  grossAmountMinor: number
+  commissionBasisPoints: number
+  commissionAmountMinor: number
+  providerAmountMinor: number
+  currency: string
+  method: JobPaymentMethod | null
+  status: JobPaymentStatus
+  reportedByUserId: string | null
+  reportedAt: string | null
+  confirmedByUserId: string | null
+  confirmedAt: string | null
+  platformFeeStatus: PlatformFeeStatus
+  platformFeeReportedByUserId: string | null
+  platformFeeReportedAt: string | null
+  platformFeePaymentReference: string | null
+  platformFeeReceivedAt: string | null
+  platformFeeReceiptReference: string | null
+  disputeReason: string | null
+  resolutionNote: string | null
+  resolvedAt: string | null
+  payoutHoldAt?: string | null
+  payoutHoldReason?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProviderWalletPayment = {
+  id: string
+  paymentReference: string
+  jobId: string
+  jobReference: string
+  jobTitle: string
+  customerName: string
+  earningsMinor: number
+  currency: string
+  method: JobPaymentMethod | null
+  status: JobPaymentStatus
+  reportedByUserId: string | null
+  reportedAt: string | null
+  confirmedAt: string | null
+  disputeReason: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AdminJobPaymentPage = AdminPage<JobPaymentRecord> & {
+  summary: { paidGrossMinor: number; commissionMinor: number; providerNetMinor: number; commissionDueMinor: number; disputedCount: number }
+  workers: Array<{ providerId: string; providerName: string; paidJobs: number; grossMinor: number; commissionMinor: number; netMinor: number; payoutHeld: boolean }>
+}
+
 export type MarketplaceProvider = {
   id: string
   userId: string
   publicName: string
   bio: string
   region: string
+  serviceLatitude?: number | null
+  serviceLongitude?: number | null
+  maxTravelDistanceKm?: number
   avatarPath?: string | null
 }
 
@@ -201,6 +271,9 @@ export type UpdateMarketplaceProviderProfileInput = {
   publicName: string
   bio: string
   region: string
+  serviceLatitude?: number | null
+  serviceLongitude?: number | null
+  maxTravelDistanceKm?: number
 }
 
 export type MarketplaceNotification = {
@@ -251,6 +324,7 @@ export type CreateMarketplaceJobInput = {
   locationMode?: "onsite" | "remote" | "flexible"
   locationLatitude?: number | null
   locationLongitude?: number | null
+  shareExactLocationWithProvider?: boolean
   media?: ServiceListingMedia[]
 }
 
@@ -297,6 +371,11 @@ export class MarketplaceConflictError extends Error {
 }
 
 export interface MarketplaceStore {
+  listMyJobPayments?(userId: string, role: "consumer" | "provider"): Promise<JobPaymentRecord[]>
+  reportJobPayment?(userId: string, jobId: string, method: JobPaymentMethod, requestId: string): Promise<JobPaymentRecord | null>
+  reportPlatformFee?(userId: string, jobId: string, paymentReference: string, requestId: string): Promise<JobPaymentRecord | null>
+  confirmJobPayment?(userId: string, jobId: string, requestId: string): Promise<JobPaymentRecord | null>
+  disputeJobPayment?(userId: string, jobId: string, reason: string, requestId: string): Promise<JobPaymentRecord | null>
   listJobConversations?(userId: string, role: "consumer" | "provider"): Promise<JobConversation[]>
   openJobConversation?(userId: string, role: "consumer" | "provider", jobId: string, providerId?: string): Promise<JobConversation | null>
   listJobConversationMessages?(userId: string, conversationId: string): Promise<JobConversationMessage[] | null>
@@ -554,6 +633,10 @@ export type AdminMonitoringSnapshot = {
 }
 
 export interface AdminStore {
+  listAdminJobPayments?(search: string, status: JobPaymentStatus | "all", limit: number, offset: number): Promise<AdminJobPaymentPage>
+  resolveAdminJobPayment?(input: { actorUserId: string; paymentId: string; resolution: "paid" | "refunded"; reason: string; requestId: string }): Promise<JobPaymentRecord | null>
+  setAdminProviderPayoutHold?(input: { actorUserId: string; providerId: string; held: boolean; reason: string; requestId: string }): Promise<boolean>
+  recordAdminPlatformFeeReceipt?(input: { actorUserId: string; paymentId: string; receiptReference: string; requestId: string }): Promise<JobPaymentRecord | null>
   getAdminOverview(): Promise<AdminOverview>
 
   listAdminUsers(

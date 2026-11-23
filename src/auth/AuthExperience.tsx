@@ -31,6 +31,8 @@ type AuthExperienceProps = {
   chooseWorkspace: (role: Role) => void
 
   changeWorkspace: () => void
+
+  goHome: () => void
 }
 
 function identify(
@@ -66,6 +68,7 @@ export default function AuthExperience({
   chooseWorkspace,
 
   changeWorkspace,
+  goHome,
 }: AuthExperienceProps) {
   const auth = useAuth()
 
@@ -673,6 +676,9 @@ export default function AuthExperience({
         >
           Staff sign-in
         </button>
+        <button type="button" className="mobile-auth-home" onClick={goHome}>
+          Back to OddJobs home
+        </button>
       </section>
       <section
         className={`auth-panel${showMobileWelcome ? " auth-panel-mobile-hidden" : ""}`}
@@ -703,6 +709,11 @@ export default function AuthExperience({
           )}
         </div>
         <div className="auth-form-card">
+          {["login", "role", "signup"].includes(stage) && (
+            <button type="button" className="auth-back auth-home-link" onClick={goHome}>
+              ← OddJobs home
+            </button>
+          )}
           {initialRole && (stage === "login" || stage === "signup") && (
             <button
               type="button"

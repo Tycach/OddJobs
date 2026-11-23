@@ -8,6 +8,8 @@ import {
   type AdminMonitoringSnapshot,
   type AdminModerationReport,
   type AdminModerationStatus,
+  type AdminJobPaymentPage,
+  type JobPaymentStatus,
   type AdminOverview as AdminOverviewData,
   type AdminSystemSettings,
   type AdminUserSummary,
@@ -881,6 +883,64 @@ function AuditLog() {
   )
 }
 
+function Payments() {
+  const auth = useAuth()
+  const [page, setPage] = useState<AdminJobPaymentPage | null>(null)
+  const [search, setSearch] = useState("")
+  const [status, setStatus] = useState<JobPaymentStatus | "all">("all")
+  const [offset, setOffset] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState("")
+  const [error, setError] = useState("")
+  const pageSize = 25
+  const load = () => {
+    setLoading(true); setError("")
+    void auth.getAdminJobPayments(search, status, pageSize, offset)
+      .then(setPage)
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load payment records."))
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [search, status, offset, auth.getAdminJobPayments])
+  const money = (minor: number) => `KES ${(minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const resolve = async (paymentId: string) => {
+    const decision = window.prompt("Resolve as paid or refunded? Enter paid or refunded.")?.trim().toLowerCase()
+    if (decision !== "paid" && decision !== "refunded") return
+    const reason = window.prompt("Enter the reason for this resolution (at least 10 characters).")?.trim() ?? ""
+    if (reason.length < 10) { setError("Enter a resolution reason of at least 10 characters."); return }
+    setBusyId(paymentId); setError("")
+    try { await auth.resolveAdminJobPayment(paymentId, decision, reason); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not resolve payment.") }
+    finally { setBusyId("") }
+  }
+  const markCommission = async (paymentId: string) => {
+    const receipt = window.prompt("Verify the OddJobs fee receipt reference reported by the hirer.")?.trim() ?? ""
+    if (receipt.length < 3) return
+    setBusyId(paymentId); setError("")
+    try { await auth.recordAdminPlatformFeeReceipt(paymentId, receipt); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not verify the platform fee receipt.") }
+    finally { setBusyId("") }
+  }
+  const toggleHold = async (providerId: string, held: boolean) => {
+    const reason = held ? (window.prompt("Why are you placing this worker's payout on hold? (minimum 10 characters)")?.trim() ?? "") : ""
+    if (held && reason.length < 10) return
+    setBusyId(providerId); setError("")
+    try { await auth.setAdminProviderPayoutHold(providerId, held, reason); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update payout hold.") }
+    finally { setBusyId("") }
+  }
+  return <div className="content console-content">
+    <PageHeader title="Payments and worker earnings" description="Search by job ID, worker, hirer, or payment reference. Financial figures include confirmed payments only." action={<Button variant="secondary" onClick={load}>Refresh</Button>} />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {page && <div className="metrics"><Metric label="Confirmed gross payments" value={money(page.summary.paidGrossMinor)} /><Metric label="OddJobs fees on paid jobs" value={money(page.summary.commissionMinor)} /><Metric label="Worker earnings" value={money(page.summary.providerNetMinor)} /><Metric label="Fees due from hirers" value={money(page.summary.commissionDueMinor)} /><Metric label="Disputed payments" value={String(page.summary.disputedCount)} /></div>}
+    <section className="card table-card"><div className="filters"><label>Search<input value={search} onChange={(event) => { setSearch(event.target.value); setOffset(0) }} placeholder="Job ID, payment ID, worker, hirer" /></label><label>Status<select value={status} onChange={(event) => { setStatus(event.target.value as JobPaymentStatus | "all"); setOffset(0) }}><option value="all">All statuses</option><option value="awaiting_payment">Awaiting payment</option><option value="reported">Reported</option><option value="paid">Paid</option><option value="disputed">Disputed</option><option value="refunded">Refunded</option></select></label></div>
+      {loading ? <p role="status">Loading payments…</p> : page?.items.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Job / payment</th><th>Worker</th><th>Hirer</th><th>Agreed</th><th>OddJobs fee</th><th>Worker share</th><th>Worker payment</th><th>Fee reconciliation</th></tr></thead><tbody>{page.items.map((payment, index) => <tr key={payment.id}><td>{offset + index + 1}</td><td><strong>{payment.jobReference}</strong><small className="caption">{payment.jobTitle}</small><small className="caption">{payment.paymentReference}</small></td><td>{payment.providerName}</td><td>{payment.customerName}</td><td>{money(payment.grossAmountMinor)}</td><td>{money(payment.commissionAmountMinor)} <small className="caption">({(payment.commissionBasisPoints / 100).toFixed(1)}%)</small></td><td>{money(payment.providerAmountMinor)}</td><td>{payment.method?.replace("_", " ") ?? "—"}<small className="caption">{payment.status.replaceAll("_", " ")}</small></td><td><Badge tone={payment.platformFeeStatus === "received" ? "green" : payment.platformFeeStatus === "disputed" ? "red" : "amber"}>{payment.platformFeeStatus.replaceAll("_", " ")}</Badge>{payment.platformFeeStatus === "reported" && <div className="card-actions"><Button variant="secondary" disabled={busyId === payment.id} onClick={() => void markCommission(payment.id)}>Verify fee receipt</Button></div>}{payment.platformFeePaymentReference && <small className="caption">Hirer reference: {payment.platformFeePaymentReference}</small>}{payment.platformFeeReceiptReference && <small className="caption">Verified receipt: {payment.platformFeeReceiptReference}</small>}</td></tr>)}</tbody></table></div> : !error && <EmptyState title="No payment records" detail="Accepted bids create payment agreements. Confirmed payments and disputes will appear here." />}
+      <div className="card-actions"><Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button><span>{page?.total ? `${offset + 1}–${Math.min(offset + page.items.length, page.total)} of ${page.total}` : "0 payments"}</span><Button variant="secondary" disabled={loading || !page || offset + pageSize >= page.total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button></div>
+    </section>
+    <section className="card table-card"><h2>Lifetime earnings by worker</h2>{page?.workers.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Worker</th><th>Paid jobs</th><th>Agreed job totals</th><th>OddJobs fee share</th><th>Worker earnings</th><th>Worker payout hold</th></tr></thead><tbody>{page.workers.map((worker, index) => <tr key={worker.providerId}><td>{index + 1}</td><td>{worker.providerName}</td><td>{worker.paidJobs}</td><td>{money(worker.grossMinor)}</td><td>{money(worker.commissionMinor)}</td><td>{money(worker.netMinor)}</td><td>{worker.payoutHeld ? <><Badge tone="amber">Held</Badge> <Button variant="secondary" disabled={busyId === worker.providerId} onClick={() => void toggleHold(worker.providerId, false)}>Release hold</Button></> : <Button variant="secondary" disabled={busyId === worker.providerId} onClick={() => void toggleHold(worker.providerId, true)}>Place hold</Button>}</td></tr>)}</tbody></table></div> : <p className="caption">Worker totals appear after the first confirmed payment.</p>}</section>
+    <p className="caption">Workers confirm their 90% share. Hirers report the separate 10% OddJobs fee and its receipt reference; admins verify that report here. Payment and payout rails are not integrated yet.</p>
+  </div>
+}
+
 function Config() {
   const { getAdminSettings, saveAdminSettings } = useAuth()
   const [settings, setSettings] = useState<AdminSystemSettings | null>(null)
@@ -1051,6 +1111,7 @@ function AdminMonitoring() {
 }
 
 export type AdminConsoleScreenKey =
+  | "payments"
   | "messages"
   | "monitoring"
   | "overview"
@@ -1064,6 +1125,7 @@ export type AdminConsoleScreenKey =
 
 export default function AdminConsoleScreen({ screen }: { screen: AdminConsoleScreenKey }) {
   switch (screen) {
+    case "payments": return <Payments />
     case "messages": return <AdminMessages />
     case "monitoring": return <AdminMonitoring />
     case "overview": return <Overview />

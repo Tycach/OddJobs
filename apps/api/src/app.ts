@@ -151,12 +151,21 @@ export async function buildApp({
         ? requestedId
         : randomUUID()
     },
+    bodyLimit: 1_048_576,
   })
 
   app.decorateRequest("authPrincipal", null)
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id)
+  })
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    const pathname = request.url.split("?", 1)[0] ?? request.url
+    if (pathname === "/v1" || pathname.startsWith("/v1/") || pathname.startsWith("/health/")) {
+      reply.header("Cache-Control", "no-store")
+    }
+    return payload
   })
 
   await app.register(helmet)
@@ -392,6 +401,7 @@ export async function buildApp({
         locationMode: { type: "string", enum: ["onsite", "remote", "flexible"] },
         locationLatitude: { anyOf: [{ type: "number", minimum: -90, maximum: 90 }, { type: "null" }] },
         locationLongitude: { anyOf: [{ type: "number", minimum: -180, maximum: 180 }, { type: "null" }] },
+        shareExactLocationWithProvider: { type: "boolean" },
         media: { type: "array", maxItems: 7, items: { type: "object", additionalProperties: false, required: ["path", "contentType", "size"], properties: { path: { type: "string", minLength: 1, maxLength: 256 }, contentType: { type: "string", enum: ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"] }, size: { type: "integer", minimum: 1, maximum: 6291456 } } } },
     },
   } as const
@@ -487,6 +497,8 @@ export async function buildApp({
       locationMode: { type: "string", enum: ["onsite", "remote", "flexible"] },
       locationLatitude: { type: "number", nullable: true },
       locationLongitude: { type: "number", nullable: true },
+      shareExactLocationWithProvider: { type: "boolean" },
+      distanceKm: { type: "number", nullable: true },
       completionNote: { type: "string", nullable: true },
       revisionNote: { type: "string", nullable: true },
       media: { type: "array", items: { type: "object", required: ["path", "contentType", "size"], properties: { path: { type: "string" }, contentType: { type: "string" }, size: { type: "integer" } } } },
@@ -595,6 +607,9 @@ export async function buildApp({
       bio: { type: "string" },
       region: { type: "string" },
       avatarPath: { type: "string", nullable: true },
+      serviceLatitude: { type: "number", nullable: true },
+      serviceLongitude: { type: "number", nullable: true },
+      maxTravelDistanceKm: { type: "integer", minimum: 1, maximum: 250 },
     },
   } as const
 
@@ -697,17 +712,26 @@ export async function buildApp({
           publicName: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
           bio: { type: "string", maxLength: 2000 },
           region: { type: "string", maxLength: 120 },
+          serviceLatitude: { anyOf: [{ type: "number", minimum: -90, maximum: 90 }, { type: "null" }] },
+          serviceLongitude: { anyOf: [{ type: "number", minimum: -180, maximum: 180 }, { type: "null" }] },
+          maxTravelDistanceKm: { type: "integer", minimum: 1, maximum: 250 },
         },
       },
-      response: { 200: providerResponseSchema, 403: marketplaceErrorSchema, 404: marketplaceErrorSchema, 503: marketplaceErrorSchema },
+      response: { 200: providerResponseSchema, 400: marketplaceErrorSchema, 403: marketplaceErrorSchema, 404: marketplaceErrorSchema, 503: marketplaceErrorSchema },
     },
   }, async (request, reply) => {
     if (!marketplaceStore?.updateProviderProfile || !request.authPrincipal) return reply.code(503).send({ error: "Worker profile updates are unavailable." })
     const input = request.body as import("./auth/types.js").UpdateMarketplaceProviderProfileInput
+    if (((input.serviceLatitude ?? null) === null) !== ((input.serviceLongitude ?? null) === null)) {
+      return reply.code(400).send({ error: "Provide both service-area coordinates together." })
+    }
     const provider = await marketplaceStore.updateProviderProfile(request.authPrincipal.id, {
       publicName: input.publicName.trim(),
       bio: input.bio.trim(),
       region: input.region.trim(),
+      ...(input.serviceLatitude !== undefined ? { serviceLatitude: input.serviceLatitude } : {}),
+      ...(input.serviceLongitude !== undefined ? { serviceLongitude: input.serviceLongitude } : {}),
+      ...(input.maxTravelDistanceKm !== undefined ? { maxTravelDistanceKm: input.maxTravelDistanceKm } : {}),
     })
     if (!provider) return reply.code(404).send({ error: "Your worker profile could not be found." })
     reply.header("Cache-Control", "no-store")
@@ -1419,6 +1443,99 @@ export async function buildApp({
     "request_revision",
   )
   addJobTransitionRoute("/v1/jobs/:jobId/cancel", "consumer", "cancel")
+
+  app.get("/v1/me/payments", { preHandler: requireMarketplaceRole("consumer", "provider") }, async (request, reply) => {
+    if (!marketplaceStore?.listMyJobPayments || !request.authPrincipal) return reply.code(503).send({ error: "Wallet data is unavailable." })
+    const role = (request.query as { role?: string }).role
+    if (role !== "consumer" && role !== "provider") return reply.code(400).send({ error: "Choose a valid wallet role." })
+    let payments: import("./auth/types.js").JobPaymentRecord[]
+    try {
+      payments = await marketplaceStore.listMyJobPayments(request.authPrincipal.id, role)
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "P2021") {
+        return reply.code(503).send({ error: "Wallet payment records are not set up in this database yet. Apply the job payment ledger migration to enable this page." })
+      }
+      throw error
+    }
+    reply.header("Cache-Control", "no-store")
+    if (role === "provider") return payments.map((payment) => ({
+      id: payment.id,
+      paymentReference: payment.paymentReference,
+      jobId: payment.jobId,
+      jobReference: payment.jobReference,
+      jobTitle: payment.jobTitle,
+      jobStatus: payment.jobStatus,
+      customerName: payment.customerName,
+      earningsMinor: payment.providerAmountMinor,
+      currency: payment.currency,
+      method: payment.method,
+      status: payment.status,
+      reportedByUserId: payment.reportedByUserId,
+      reportedAt: payment.reportedAt,
+      confirmedAt: payment.confirmedAt,
+      disputeReason: payment.disputeReason,
+      createdAt: payment.createdAt,
+      updatedAt: payment.updatedAt,
+    }))
+    return payments
+  })
+
+  app.post("/v1/jobs/:jobId/payment/report", { preHandler: requireMarketplaceRole("consumer"), schema: { params: marketplacePathParamsSchema, body: { type: "object", additionalProperties: false, required: ["method"], properties: { method: { type: "string", enum: ["cash", "manual_transfer"] } } } } }, async (request, reply) => {
+    if (!marketplaceStore?.reportJobPayment || !request.authPrincipal) return reply.code(503).send({ error: "Payment recording is unavailable." })
+    try {
+      const { jobId } = request.params as { jobId: string }
+      const { method } = request.body as { method: import("./auth/types.js").JobPaymentMethod }
+      const payment = await marketplaceStore.reportJobPayment(request.authPrincipal.id, jobId, method, request.id)
+      if (!payment) return reply.code(404).send({ error: "A completed job payment could not be found." })
+      reply.header("Cache-Control", "no-store")
+      return payment
+    } catch (error) {
+      if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post("/v1/jobs/:jobId/platform-fee/report", { preHandler: requireMarketplaceRole("consumer"), schema: { params: marketplacePathParamsSchema, body: { type: "object", additionalProperties: false, required: ["paymentReference"], properties: { paymentReference: { type: "string", minLength: 3, maxLength: 120, pattern: "\\S" } } } } }, async (request, reply) => {
+    if (!marketplaceStore?.reportPlatformFee || !request.authPrincipal) return reply.code(503).send({ error: "Platform fee reporting is unavailable." })
+    try {
+      const { jobId } = request.params as { jobId: string }
+      const { paymentReference } = request.body as { paymentReference: string }
+      const payment = await marketplaceStore.reportPlatformFee(request.authPrincipal.id, jobId, paymentReference, request.id)
+      if (!payment) return reply.code(404).send({ error: "A completed job and hirer fee record could not be found." })
+      reply.header("Cache-Control", "no-store")
+      return payment
+    } catch (error) {
+      if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post("/v1/jobs/:jobId/payment/confirm", { preHandler: requireMarketplaceRole("provider"), schema: { params: marketplacePathParamsSchema } }, async (request, reply) => {
+    if (!marketplaceStore?.confirmJobPayment || !request.authPrincipal) return reply.code(503).send({ error: "Payment confirmation is unavailable." })
+    try {
+      const payment = await marketplaceStore.confirmJobPayment(request.authPrincipal.id, (request.params as { jobId: string }).jobId, request.id)
+      if (!payment) return reply.code(404).send({ error: "A payment awaiting your confirmation could not be found." })
+      reply.header("Cache-Control", "no-store")
+      return payment
+    } catch (error) {
+      if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post("/v1/jobs/:jobId/payment/dispute", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { params: marketplacePathParamsSchema, body: { type: "object", additionalProperties: false, required: ["reason"], properties: { reason: { type: "string", minLength: 10, maxLength: 1000, pattern: "\\S" } } } } }, async (request, reply) => {
+    if (!marketplaceStore?.disputeJobPayment || !request.authPrincipal) return reply.code(503).send({ error: "Payment disputes are unavailable." })
+    try {
+      const { jobId } = request.params as { jobId: string }
+      const payment = await marketplaceStore.disputeJobPayment(request.authPrincipal.id, jobId, (request.body as { reason: string }).reason, request.id)
+      if (!payment) return reply.code(404).send({ error: "A reported payment for this job could not be found." })
+      reply.header("Cache-Control", "no-store")
+      return payment
+    } catch (error) {
+      if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+      throw error
+    }
+  })
 
   const adminPageQuerySchema = {
     type: "object",
@@ -2630,6 +2747,44 @@ export async function buildApp({
     }
   })
 
+  app.get("/v1/admin/payments", { preHandler: requireAdmin, schema: { querystring: { type: "object", additionalProperties: false, properties: { search: { type: "string", maxLength: 160, default: "" }, status: { type: "string", enum: ["all", "awaiting_payment", "reported", "paid", "disputed", "refunded"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 100, default: 25 }, offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 } } } } }, async (request, reply) => {
+    if (!adminStore?.listAdminJobPayments) return reply.code(503).send({ error: "Admin payment reporting is unavailable." })
+    const query = request.query as { search?: string; status?: import("./auth/types.js").JobPaymentStatus | "all"; limit?: number; offset?: number }
+    const page = await adminStore.listAdminJobPayments(query.search ?? "", query.status ?? "all", query.limit ?? 25, query.offset ?? 0)
+    reply.header("Cache-Control", "no-store")
+    return page
+  })
+
+  app.post("/v1/admin/payments/:paymentId/resolve", { preHandler: requireAdmin, schema: { params: { type: "object", required: ["paymentId"], additionalProperties: false, properties: { paymentId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["resolution", "reason"], additionalProperties: false, properties: { resolution: { type: "string", enum: ["paid", "refunded"] }, reason: { type: "string", minLength: 10, maxLength: 1000, pattern: "\\S" } } } } }, async (request, reply) => {
+    if (!adminStore?.resolveAdminJobPayment || !request.authPrincipal) return reply.code(503).send({ error: "Payment resolution is unavailable." })
+    const { paymentId } = request.params as { paymentId: string }
+    const body = request.body as { resolution: "paid" | "refunded"; reason: string }
+    const payment = await adminStore.resolveAdminJobPayment({ actorUserId: request.authPrincipal.id, paymentId, ...body, requestId: request.id })
+    if (!payment) return reply.code(404).send({ error: "A disputed payment could not be found." })
+    reply.header("Cache-Control", "no-store")
+    return payment
+  })
+
+  app.post("/v1/admin/payments/:paymentId/platform-fee/confirm", { preHandler: requireAdmin, schema: { params: { type: "object", required: ["paymentId"], additionalProperties: false, properties: { paymentId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["receiptReference"], additionalProperties: false, properties: { receiptReference: { type: "string", minLength: 3, maxLength: 120, pattern: "\\S" } } } } }, async (request, reply) => {
+    if (!adminStore?.recordAdminPlatformFeeReceipt || !request.authPrincipal) return reply.code(503).send({ error: "Platform fee reconciliation is unavailable." })
+    const { paymentId } = request.params as { paymentId: string }
+    const { receiptReference } = request.body as { receiptReference: string }
+    const payment = await adminStore.recordAdminPlatformFeeReceipt({ actorUserId: request.authPrincipal.id, paymentId, receiptReference, requestId: request.id })
+    if (!payment) return reply.code(404).send({ error: "A hirer-reported platform fee awaiting admin confirmation could not be found." })
+    reply.header("Cache-Control", "no-store")
+    return payment
+  })
+
+  app.patch("/v1/admin/providers/:providerId/payout-hold", { preHandler: requireAdmin, schema: { params: { type: "object", required: ["providerId"], additionalProperties: false, properties: { providerId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["held", "reason"], additionalProperties: false, properties: { held: { type: "boolean" }, reason: { type: "string", maxLength: 1000 } } } } }, async (request, reply) => {
+    if (!adminStore?.setAdminProviderPayoutHold || !request.authPrincipal) return reply.code(503).send({ error: "Provider payout holds are unavailable." })
+    const { providerId } = request.params as { providerId: string }
+    const body = request.body as { held: boolean; reason: string }
+    if (body.held && body.reason.trim().length < 10) return reply.code(400).send({ error: "Enter a reason of at least 10 characters to place a payout hold." })
+    const updated = await adminStore.setAdminProviderPayoutHold({ actorUserId: request.authPrincipal.id, providerId, ...body, requestId: request.id })
+    if (!updated) return reply.code(404).send({ error: "Worker profile not found." })
+    return { updated: true }
+  })
+
   app.get(
     "/v1/admin/marketplace/jobs",
     {
@@ -2837,11 +2992,6 @@ export async function buildApp({
     const currentProfile = await profileStore.getProfile(request.authPrincipal.id)
     if (avatarPath) {
       if (!avatarPath.startsWith(`${request.authPrincipal.id}/`)) return reply.code(400).send({ error: "Upload a profile photo for your account." })
-      if (!verificationStorage) return reply.code(503).send({ error: "Profile photo storage is unavailable." })
-      const [ownerFolder, ...fileParts] = avatarPath.split("/")
-      const fileName = fileParts.join("/")
-      const { data: storedFiles, error: storageError } = await verificationStorage.storage.from("account-avatars").list(ownerFolder, { search: fileName, limit: 10 })
-      if (storageError || !storedFiles?.some((file) => file.name === fileName)) return reply.code(400).send({ error: "The profile photo upload could not be verified." })
     }
     const profile = await profileStore.updateProfile(request.authPrincipal.id, displayName, avatarPath)
     if (!profile) return reply.code(404).send({ error: "Profile not found." })

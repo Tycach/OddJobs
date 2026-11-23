@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useRef, useState } from "react"
-import { useAuth, type ServiceListingMedia } from "../../auth/AuthProvider"
+import { useAuth, type MarketplaceProvider, type ServiceListingMedia } from "../../auth/AuthProvider"
 import { useDemoStore } from "../../demo/context"
 import type { Screen } from "../../demo/model"
 import { useMarketplaceJobData, useMarketplaceJobs } from "../marketplace/hooks"
@@ -118,63 +118,51 @@ function JobCard({ job, number, onClick }: JobCardProps) {
 
 function JobFeed({ go }: { go: (screen: Screen) => void }) {
   const { updateStore } = useDemoStore()
+  const auth = useAuth()
   const { jobs, loading, error, refresh } = useMarketplaceJobs("feed")
   const [searchDraft, setSearchDraft] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("open")
-  const [workerPin, setWorkerPin] = useState<{ latitude: number; longitude: number } | null>(null)
-  const [locationError, setLocationError] = useState("")
-  const distanceKm = (job: (typeof jobs)[number]) => {
-    if (!workerPin || job.locationLatitude == null || job.locationLongitude == null) return null
-    const radians = (degrees: number) => degrees * Math.PI / 180
-    const dLat = radians(job.locationLatitude - workerPin.latitude)
-    const dLon = radians(job.locationLongitude - workerPin.longitude)
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(workerPin.latitude)) * Math.cos(radians(job.locationLatitude)) * Math.sin(dLon / 2) ** 2
-    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  }
-  const nearbyJobs = [...jobs].sort((a, b) => {
-    const aDistance = distanceKm(a)
-    const bDistance = distanceKm(b)
-    if (aDistance === null) return bDistance === null ? 0 : 1
-    if (bDistance === null) return -1
-    return aDistance - bDistance
-  })
+  const [distanceFilter, setDistanceFilter] = useState("preferred")
+  const [workerProfile, setWorkerProfile] = useState<MarketplaceProvider | null>(null)
+  useEffect(() => {
+    if (!auth.profile?.id) return
+    let active = true
+    void auth.getMarketplaceProvider(auth.profile.id).then((profile) => { if (active) setWorkerProfile(profile) }).catch(() => { if (active) setWorkerProfile(null) })
+    return () => { active = false }
+  }, [auth.getMarketplaceProvider, auth.profile?.id])
+  const hasSavedLocation = workerProfile?.serviceLatitude != null && workerProfile.serviceLongitude != null
+  const activeDistanceLimit = distanceFilter === "preferred"
+    ? hasSavedLocation ? workerProfile.maxTravelDistanceKm ?? 25 : null
+    : distanceFilter === "all" ? null : Number(distanceFilter)
   const categories = [...new Set(jobs.map((job) => job.category).filter(Boolean))].sort((a, b) => a.localeCompare(b))
-  const filteredJobs = nearbyJobs.filter((job) => {
+  const filteredJobs = jobs.filter((job) => {
     const query = searchTerm.trim().toLocaleLowerCase()
     const matchesSearch = !query || [job.jobReference, job.title, job.description, job.category, job.locationLabel].some((value) => value.toLocaleLowerCase().includes(query))
     const matchesCategory = categoryFilter === "all" || job.category === categoryFilter
     const matchesStatus = statusFilter === "all" || (statusFilter === "open" ? job.status === "open" : job.status !== "open")
-    return matchesSearch && matchesCategory && matchesStatus
+    const matchesDistance = activeDistanceLimit === null || job.distanceKm === null || job.distanceKm === undefined || job.distanceKm <= activeDistanceLimit
+    return matchesSearch && matchesCategory && matchesStatus && matchesDistance
   })
-  const nearestPinnedJob = nearbyJobs.find((job) => job.locationLatitude != null && job.locationLongitude != null)
-  const requestLocation = () => {
-    if (!navigator.geolocation) { setLocationError("Location is not available in this browser."); return }
-    navigator.geolocation.getCurrentPosition(
-      (position) => { setWorkerPin({ latitude: position.coords.latitude, longitude: position.coords.longitude }); setLocationError("") },
-      () => setLocationError("We could not read your location. You can still browse jobs by area."),
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
-    )
-  }
   return (
     <div className="content">
       <PageHeader
         title="Jobs matched to you"
-        description="Browse open and taken customer jobs. Share your location to sort pinned jobs by distance."
+        description="Browse hirer-posted jobs. Nearby jobs are ranked using your saved service area."
       />
       <section className="card">
         <form className="job-feed-search" onSubmit={(event) => { event.preventDefault(); setSearchTerm(searchDraft) }}>
           <label className="job-feed-search-field"><span>Search jobs</span><input aria-label="Search jobs" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Job title, skill, description, or area" /></label>
           <label><span>Category</span><select aria-label="Filter jobs by category" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">All categories</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
           <label><span>Status</span><select aria-label="Filter jobs by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="open">Open for proposals</option><option value="taken">Taken jobs</option><option value="all">All jobs</option></select></label>
+          <label><span>Distance</span><select aria-label="Filter jobs by distance" value={distanceFilter} onChange={(event) => setDistanceFilter(event.target.value)}><option value="preferred">My travel range{hasSavedLocation ? ` (${workerProfile.maxTravelDistanceKm ?? 25} km)` : " (set in profile)"}</option><option value="5">Within 5 km</option><option value="10">Within 10 km</option><option value="25">Within 25 km</option><option value="50">Within 50 km</option><option value="100">Within 100 km</option><option value="all">Any distance</option></select></label>
           <Button icon="search" type="submit">Search jobs</Button>
-          {(searchDraft || searchTerm || categoryFilter !== "all" || statusFilter !== "open") && <Button variant="ghost" type="button" onClick={() => { setSearchDraft(""); setSearchTerm(""); setCategoryFilter("all"); setStatusFilter("open") }}>Clear</Button>}
+          {(searchDraft || searchTerm || categoryFilter !== "all" || statusFilter !== "open" || distanceFilter !== "preferred") && <Button variant="ghost" type="button" onClick={() => { setSearchDraft(""); setSearchTerm(""); setCategoryFilter("all"); setStatusFilter("open"); setDistanceFilter("preferred") }}>Clear</Button>}
         </form>
         <p className="caption job-feed-count">{filteredJobs.length} {filteredJobs.length === 1 ? "job" : "jobs"} found</p>
-        <div className="card-actions"><Button variant="secondary" onClick={requestLocation}>{workerPin ? "Refresh nearby matches" : "Find jobs near me"}</Button>{workerPin && <span className="caption">Location is used for this view only.</span>}</div>
-        {locationError && <p className="form-error" role="alert">{locationError}</p>}
-        {nearestPinnedJob && <div className="map-preview"><h2>Nearby job locations</h2><iframe title={`Map showing ${nearestPinnedJob.title}`} loading="lazy" src={`https://www.openstreetmap.org/export/embed.html?bbox=${nearestPinnedJob.locationLongitude! - 0.025}%2C${nearestPinnedJob.locationLatitude! - 0.025}%2C${nearestPinnedJob.locationLongitude! + 0.025}%2C${nearestPinnedJob.locationLatitude! + 0.025}&layer=mapnik&marker=${nearestPinnedJob.locationLatitude}%2C${nearestPinnedJob.locationLongitude}`} /><a href={`https://www.openstreetmap.org/?mlat=${nearestPinnedJob.locationLatitude}&mlon=${nearestPinnedJob.locationLongitude}#map=14/${nearestPinnedJob.locationLatitude}/${nearestPinnedJob.locationLongitude}`} target="_blank" rel="noreferrer">Open map</a></div>}
+        {!hasSavedLocation && <div className="safe-note"><Icon name="location" /><span>Save an approximate service location in My profile to see distance estimates and nearby matches. Jobs without map pins remain visible by area.</span><Button variant="secondary" onClick={() => go("settings")}>Set my service area</Button></div>}
+        {hasSavedLocation && <p className="caption">Distance estimates use your saved service area. Exact job pins stay private unless the hirer chooses to share one after selecting a worker.</p>}
       </section>
       {error && (
         <p className="form-error" role="alert">
@@ -191,7 +179,7 @@ function JobFeed({ go }: { go: (screen: Screen) => void }) {
             number={index + 1}
             job={[
               job.title,
-              `${job.locationLabel}${distanceKm(job) === null ? "" : ` Â· ${distanceKm(job)!.toFixed(1)} km`}`,
+              `${job.locationLabel}${job.distanceKm == null ? " · Distance unavailable" : ` · ${job.distanceKm.toFixed(1)} km from your area`}`,
               job.budgetMinor === null
                 ? "Open budget"
                 : `KES ${(job.budgetMinor / 100).toLocaleString()}`,
@@ -207,7 +195,7 @@ function JobFeed({ go }: { go: (screen: Screen) => void }) {
         ))}
       </div>
       {loading && <p className="center-note">Loading open jobsâ€¦</p>}
-      {!loading && !error && jobs.length > 0 && filteredJobs.length === 0 && <EmptyState title="No matching jobs" detail="Try another search term or change the category and status filters." />}
+      {!loading && !error && jobs.length > 0 && filteredJobs.length === 0 && <EmptyState title="No matching jobs" detail="Try another search term, category, or distance range." />}
       {!loading && !error && !jobs.length && (
         <EmptyState
           title="No customer jobs available right now"
@@ -535,6 +523,8 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
         }`}
       />
       <section className="card">
+        {job.distanceKm != null && <p className="safe-note"><Icon name="location" /><span>About {job.distanceKm.toFixed(1)} km from your saved service area.</span></p>}
+        {job.locationLatitude == null && job.locationMode !== "remote" && <p className="caption">The hirer has shared an area label. The exact pin is available only if they choose to share it after selecting a worker.</p>}
         <p>{job.description}</p>
         <ListingMediaGallery media={job.media ?? []} />
         {job.locationLatitude != null && job.locationLongitude != null && <div className="map-preview"><h2>Approximate job location</h2><iframe title={`Map showing ${job.title}`} loading="lazy" src={`https://www.openstreetmap.org/export/embed.html?bbox=${job.locationLongitude - 0.025}%2C${job.locationLatitude - 0.025}%2C${job.locationLongitude + 0.025}%2C${job.locationLatitude + 0.025}&layer=mapnik&marker=${job.locationLatitude}%2C${job.locationLongitude}`} /><a href={`https://www.openstreetmap.org/?mlat=${job.locationLatitude}&mlon=${job.locationLongitude}#map=14/${job.locationLatitude}/${job.locationLongitude}`} target="_blank" rel="noreferrer">Open map</a></div>}
@@ -872,69 +862,53 @@ function ProviderListings({ go }: { go: (screen: Screen) => void }) {
 }
 
 function Wallet() {
-  const { store, updateStore } = useDemoStore()
-  const [message, setMessage] = useState("")
-  const transactions = [
-    ...store.transactions,
-    "Cleaning Â· #OJ-2819 Â· Completed Â· + KES 2,300",
-    "Plumbing Â· #OJ-2798 Â· Completed Â· + KES 3,800",
-  ]
+  const auth = useAuth()
+  const [payments, setPayments] = useState<import("../../auth/AuthProvider").ProviderWalletPayment[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [workingId, setWorkingId] = useState("")
+  const refresh = useCallback(async () => {
+    try { setPayments(await auth.getProviderWalletPayments()); setError("") }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load your wallet.") }
+    finally { setLoading(false) }
+  }, [auth.getProviderWalletPayments])
+  useEffect(() => { void refresh() }, [refresh])
+  const paid = payments.filter((payment) => payment.status === "paid")
+  const earnings = paid.reduce((sum, payment) => sum + payment.earningsMinor, 0)
+  const awaiting = payments.filter((payment) => payment.status === "awaiting_payment" || payment.status === "reported").reduce((sum, payment) => sum + payment.earningsMinor, 0)
+  const format = (minor: number, currency = "KES") => `${currency} ${(minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const confirm = async (jobId: string) => {
+    setWorkingId(jobId); setError("")
+    try { await auth.confirmJobPayment(jobId); await refresh() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not confirm payment.") }
+    finally { setWorkingId("") }
+  }
+  const dispute = async (jobId: string) => {
+    const reason = window.prompt("Tell us what is wrong with this reported payment (at least 10 characters).")
+    if (!reason?.trim()) return
+    setWorkingId(jobId); setError("")
+    try { await auth.disputeJobPayment(jobId, reason.trim()); await refresh() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not open a payment dispute.") }
+    finally { setWorkingId("") }
+  }
   return (
     <div className="content console-content">
       <PageHeader
         title="Wallet"
-        description="Track demo earnings and simulated M-Pesa payouts"
-        action={
-          <Button
-            onClick={() => {
-              updateStore({
-                transactions: [
-                  `Demo withdrawal requested Â· ${new Date().toLocaleString()}`,
-                  ...store.transactions,
-                ],
-              })
-              setMessage(
-                "Demo withdrawal recorded locally; no M-Pesa payout was made.",
-              )
-            }}
-          >
-            Simulate withdrawal
-          </Button>
-        }
+        description="Track your own earnings from completed jobs."
+        action={<Button variant="secondary" onClick={() => void refresh()}>Refresh wallet</Button>}
       />
-      {message && <DemoNotice>{message}</DemoNotice>}
-      <DemoNotice>
-        All balances and transactions are sample data; no funds move.
-      </DemoNotice>
-      <div className="wallet-hero">
-        <span>Available balance</span>
-        <strong>KES 18,450</strong>
-        <small>Pending in escrow: KES 6,200</small>
-      </div>
+      {!error && <div className="dashboard-grid">
+        <Metric label="Confirmed worker earnings" value={format(earnings)} />
+        <Metric label="Your earnings awaiting confirmation" value={format(awaiting)} />
+      </div>}
       <section className="card">
         <div className="section-title">
-          <h2>Recent transactions</h2>
-          <Button
-            variant="secondary"
-            onClick={() =>
-              setMessage(
-                "PDF export is unavailable in this browser-only prototype.",
-              )
-            }
-          >
-            Export statement
-          </Button>
+          <h2>Job payment history</h2>
         </div>
-        <DataTable
-          headers={["Transaction", "Date", "Status", "Amount"]}
-          rows={transactions.map((item) => [
-            item.split(" Â· ")[0],
-            new Date().toLocaleDateString(),
-            "Demo",
-            "+ KES 2,300",
-          ])}
-        />
+        {loading ? <p role="status">Loading wallet…</p> : error ? <p className="form-error" role="alert">{error}</p> : payments.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Job</th><th>Hirer</th><th>Your earnings</th><th>Payment method</th><th>Status</th><th>Action</th></tr></thead><tbody>{payments.map((payment, index) => <tr key={payment.id}><td>{index + 1}</td><td><strong>{payment.jobReference}</strong><small className="caption">{payment.jobTitle}</small><small className="caption">{payment.paymentReference}</small></td><td>{payment.customerName}</td><td><strong>{format(payment.earningsMinor, payment.currency)}</strong></td><td>{payment.method?.replace("_", " ") ?? "—"}</td><td><Badge tone={payment.status === "paid" ? "green" : payment.status === "disputed" ? "red" : "amber"}>{payment.status.replaceAll("_", " ")}</Badge><small className="caption">{payment.confirmedAt ? new Date(payment.confirmedAt).toLocaleDateString() : payment.reportedAt ? `Reported ${new Date(payment.reportedAt).toLocaleDateString()}` : ""}</small></td><td>{payment.status === "reported" && payment.reportedByUserId !== auth.profile?.id ? <div className="card-actions"><Button disabled={workingId === payment.jobId} onClick={() => void confirm(payment.jobId)}>Confirm received</Button><Button variant="secondary" disabled={workingId === payment.jobId} onClick={() => void dispute(payment.jobId)}>Dispute</Button></div> : payment.status === "disputed" ? <Badge tone="amber">Under review</Badge> : payment.status === "paid" ? <Badge>Confirmed</Badge> : <span>Waiting for hirer</span>}</td></tr>)}</tbody></table></div> : <EmptyState title="No job payments yet" detail="After payment for a completed job is reported and you confirm receiving your share, earnings will appear here." />}
       </section>
+      <p className="caption">This page only shows payments made to you. Cash and manual transfers require your confirmation. Withdrawals are not yet connected to a payment provider.</p>
     </div>
   )
 }

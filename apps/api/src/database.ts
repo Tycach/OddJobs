@@ -30,6 +30,7 @@ import type {
   AdminSystemSettings,
   AdminOverview,
   AdminPage,
+  AdminJobPaymentPage,
   AdminStore,
   AdminVerificationDecision,
   AdminVerificationSummary,
@@ -48,6 +49,9 @@ import type {
   MarketplaceStore,
   JobConversation as JobConversationDto,
   JobConversationMessage,
+  JobPaymentRecord,
+  JobPaymentMethod,
+  JobPaymentStatus,
   SubmitMarketplaceQuoteInput,
   UserProfile,
   UserProfileStore,
@@ -57,6 +61,15 @@ export interface ReadinessDatabase {
   check(): Promise<void>
 
   close(): Promise<void>
+}
+
+function calculateDistanceKm(origin: { latitude: number; longitude: number }, destination: { latitude: number; longitude: number }): number {
+  const radians = (degrees: number) => degrees * Math.PI / 180
+  const latitudeDelta = radians(destination.latitude - origin.latitude)
+  const longitudeDelta = radians(destination.longitude - origin.longitude)
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(radians(origin.latitude)) * Math.cos(radians(destination.latitude)) * Math.sin(longitudeDelta / 2) ** 2
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 const verificationStatusToDatabase = {
@@ -93,17 +106,65 @@ const defaultAdminSettings: AdminSystemSettings = {
   adsEnabled: true,
 }
 
+const jobPaymentRelations = {
+  job: { select: { id: true, publicReference: true, title: true, status: true } },
+  customer: { select: { id: true, displayName: true } },
+  provider: { select: { id: true, displayName: true, providerProfile: { select: { payoutHoldAt: true, payoutHoldReason: true } } } },
+} satisfies Prisma.JobPaymentInclude
+
+type HydratedJobPayment = Prisma.JobPaymentGetPayload<{ include: typeof jobPaymentRelations }>
+
+function mapJobPayment(row: HydratedJobPayment): JobPaymentRecord {
+  return {
+    id: row.id,
+    paymentReference: row.paymentReference,
+    jobId: row.jobId,
+    jobReference: row.job.publicReference,
+    jobTitle: row.job.title,
+    jobStatus: row.job.status.toLowerCase() as JobPaymentRecord["jobStatus"],
+    quoteId: row.quoteId,
+    customerId: row.customerId,
+    customerName: row.customer.displayName,
+    providerId: row.providerId,
+    providerName: row.provider.displayName,
+    grossAmountMinor: Number(row.grossAmountMinor),
+    commissionBasisPoints: row.commissionBasisPoints,
+    commissionAmountMinor: Number(row.commissionAmountMinor),
+    providerAmountMinor: Number(row.providerAmountMinor),
+    currency: row.currency.trim(),
+    method: row.method?.toLowerCase() as JobPaymentRecord["method"] ?? null,
+    status: row.status.toLowerCase() as JobPaymentRecord["status"],
+    reportedByUserId: row.reportedByUserId,
+    reportedAt: row.reportedAt?.toISOString() ?? null,
+    confirmedByUserId: row.confirmedByUserId,
+    confirmedAt: row.confirmedAt?.toISOString() ?? null,
+    platformFeeStatus: row.platformFeeStatus.toLowerCase() as JobPaymentRecord["platformFeeStatus"],
+    platformFeeReportedByUserId: row.platformFeeReportedByUserId,
+    platformFeeReportedAt: row.platformFeeReportedAt?.toISOString() ?? null,
+    platformFeePaymentReference: row.platformFeePaymentReference,
+    platformFeeReceivedAt: row.platformFeeReceivedAt?.toISOString() ?? null,
+    platformFeeReceiptReference: row.platformFeeReceiptReference,
+    disputeReason: row.disputeReason,
+    resolutionNote: row.resolutionNote,
+    resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    payoutHoldAt: row.provider.providerProfile?.payoutHoldAt?.toISOString() ?? null,
+    payoutHoldReason: row.provider.providerProfile?.payoutHoldReason ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }
+}
+
 export class PrismaDatabase
   implements ReadinessDatabase, UserProfileStore, AdminStore, MarketplaceStore
 {
   readonly client: PrismaClient
   private avatarPathColumnAvailable: Promise<boolean> | null = null
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, poolMax = 5) {
     const adapter = new PrismaPg({
       connectionString,
 
-      max: 10,
+      max: poolMax,
 
       connectionTimeoutMillis: 3000,
 
@@ -2086,6 +2147,7 @@ export class PrismaDatabase
       locationMode: string
       locationLatitude: number | null
       locationLongitude: number | null
+      shareExactLocationWithProvider: boolean
       completionNote: string | null
       revisionNote: string | null
       media: Prisma.JsonValue
@@ -2093,6 +2155,7 @@ export class PrismaDatabase
       updatedAt: Date
       _count: { quotes: number }
     },
+    options: { includePreciseLocation?: boolean; distanceKm?: number | null } = {},
   ): MarketplaceJob {
     const budgetMinor =
       job.budgetMinor === null ? null : Number(job.budgetMinor)
@@ -2115,8 +2178,10 @@ export class PrismaDatabase
       applicationDeadlineAt: job.applicationDeadlineAt?.toISOString() ?? null,
       dueAt: job.dueAt?.toISOString() ?? null,
       locationMode: job.locationMode.toLowerCase() as NonNullable<MarketplaceJob["locationMode"]>,
-      locationLatitude: job.locationLatitude,
-      locationLongitude: job.locationLongitude,
+      locationLatitude: options.includePreciseLocation === false ? null : job.locationLatitude,
+      locationLongitude: options.includePreciseLocation === false ? null : job.locationLongitude,
+      shareExactLocationWithProvider: job.shareExactLocationWithProvider,
+      distanceKm: options.distanceKm ?? null,
       completionNote: job.completionNote,
       revisionNote: job.revisionNote,
       media: Array.isArray(job.media) ? job.media as ServiceListingMedia[] : [],
@@ -2256,7 +2321,7 @@ export class PrismaDatabase
             : []),
         ],
       },
-      select: { id: true, userId: true, publicName: true, bio: true, region: true },
+      select: { id: true, userId: true, publicName: true, bio: true, region: true, serviceLatitude: true, serviceLongitude: true, maxTravelDistanceKm: true },
     })
     const account = provider && avatarColumnAvailable ? await this.client.user.findUnique({ where: { id: provider.userId }, select: { avatarPath: true } }) : null
     return provider
@@ -2266,6 +2331,11 @@ export class PrismaDatabase
           publicName: provider.publicName,
           bio: provider.bio ?? "",
           region: provider.region ?? "",
+          ...(requesterUserId === provider.userId ? {
+            serviceLatitude: provider.serviceLatitude,
+            serviceLongitude: provider.serviceLongitude,
+            maxTravelDistanceKm: provider.maxTravelDistanceKm,
+          } : {}),
           avatarPath: account?.avatarPath ?? null,
         }
       : null
@@ -2284,6 +2354,9 @@ export class PrismaDatabase
         publicName: input.publicName,
         bio: input.bio,
         region: input.region,
+        ...(input.serviceLatitude !== undefined ? { serviceLatitude: input.serviceLatitude } : {}),
+        ...(input.serviceLongitude !== undefined ? { serviceLongitude: input.serviceLongitude } : {}),
+        ...(input.maxTravelDistanceKm !== undefined ? { maxTravelDistanceKm: input.maxTravelDistanceKm } : {}),
       },
     })
     if (updated.count !== 1) return null
@@ -2431,14 +2504,35 @@ export class PrismaDatabase
               },
             }
 
-    const jobs = await this.client.job.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: 100,
-      include: { _count: { select: { quotes: true } } },
-    })
+    const [jobs, providerLocation] = await Promise.all([
+      this.client.job.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 100,
+        include: { _count: { select: { quotes: true } } },
+      }),
+      role === "provider" ? this.client.providerProfile.findUnique({
+        where: { userId },
+        select: { serviceLatitude: true, serviceLongitude: true },
+      }) : Promise.resolve(null),
+    ])
 
-    return jobs.map((job) => this.mapMarketplaceJob(job))
+    const origin = providerLocation?.serviceLatitude == null || providerLocation.serviceLongitude == null
+      ? null
+      : { latitude: providerLocation.serviceLatitude, longitude: providerLocation.serviceLongitude }
+    const mapped = jobs.map((job) => {
+      const distanceKm = origin && job.locationLatitude != null && job.locationLongitude != null
+        ? calculateDistanceKm(origin, { latitude: job.locationLatitude, longitude: job.locationLongitude })
+        : null
+      const includePreciseLocation = role === "consumer"
+        || (role === "provider" && view === "mine" && job.shareExactLocationWithProvider)
+      return this.mapMarketplaceJob(job, { includePreciseLocation, distanceKm })
+    })
+    if (role === "provider" && view === "feed") {
+      return mapped.sort((a, b) => (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY)
+        || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    }
+    return mapped
   }
 
   async getJob(
@@ -2465,7 +2559,16 @@ export class PrismaDatabase
       include: { _count: { select: { quotes: true } } },
     })
 
-    return job ? this.mapMarketplaceJob(job) : null
+    if (!job) return null
+    if (role === "consumer") return this.mapMarketplaceJob(job)
+    const [accepted, providerLocation] = await Promise.all([
+      this.client.quote.findFirst({ where: { jobId, providerId: userId, status: "ACCEPTED" }, select: { id: true } }),
+      this.client.providerProfile.findUnique({ where: { userId }, select: { serviceLatitude: true, serviceLongitude: true } }),
+    ])
+    const distanceKm = providerLocation?.serviceLatitude != null && providerLocation.serviceLongitude != null && job.locationLatitude != null && job.locationLongitude != null
+      ? calculateDistanceKm({ latitude: providerLocation.serviceLatitude, longitude: providerLocation.serviceLongitude }, { latitude: job.locationLatitude, longitude: job.locationLongitude })
+      : null
+    return this.mapMarketplaceJob(job, { includePreciseLocation: Boolean(accepted && job.shareExactLocationWithProvider), distanceKm })
   }
 
   async listQuotes(
@@ -2541,7 +2644,8 @@ export class PrismaDatabase
       applicationDeadlineAt.getTime() <= now ||
       (dueAt && (Number.isNaN(dueAt.getTime()) || dueAt <= applicationDeadlineAt)) ||
       (requestedFor && Number.isNaN(requestedFor.getTime())) ||
-      ((input.locationLatitude ?? null) === null) !== ((input.locationLongitude ?? null) === null)
+      ((input.locationLatitude ?? null) === null) !== ((input.locationLongitude ?? null) === null) ||
+      (input.shareExactLocationWithProvider && input.locationLatitude == null)
     ) {
       throw new MarketplaceConflictError("Use a future application deadline and a work due date after it. Provide both map coordinates together.")
     }
@@ -2564,6 +2668,7 @@ export class PrismaDatabase
           locationMode: (input.locationMode ?? "onsite").toUpperCase() as "ONSITE" | "REMOTE" | "FLEXIBLE",
           locationLatitude: input.locationLatitude ?? null,
           locationLongitude: input.locationLongitude ?? null,
+          shareExactLocationWithProvider: input.shareExactLocationWithProvider ?? false,
           media: input.media ?? [],
         },
         include: { _count: { select: { quotes: true } } },
@@ -2760,13 +2865,33 @@ export class PrismaDatabase
       })
       const acceptedQuote = await transaction.quote.findUnique({
         where: { id: quoteId },
-        select: { providerId: true },
+        select: { id: true, providerId: true, amountMinor: true, currency: true },
       })
       if (!acceptedQuote) {
         throw new MarketplaceConflictError(
           "The accepted quote could not be found. Refresh the job and try again.",
         )
       }
+      const settingsRow = await transaction.adminSetting.findUnique({ where: { key: "marketplace" }, select: { value: true } })
+      const settings = { ...defaultAdminSettings, ...(settingsRow?.value as Partial<AdminSystemSettings> | undefined) }
+      const commissionBasisPoints = Math.round(settings.marketplaceCommissionPercent * 100)
+      const commissionAmountMinor = (acceptedQuote.amountMinor * BigInt(commissionBasisPoints) + 5000n) / 10000n
+      const payment = await transaction.jobPayment.create({
+        data: {
+          jobId,
+          quoteId: acceptedQuote.id,
+          customerId: userId,
+          providerId: acceptedQuote.providerId,
+          grossAmountMinor: acceptedQuote.amountMinor,
+          commissionBasisPoints,
+          commissionAmountMinor,
+          providerAmountMinor: acceptedQuote.amountMinor - commissionAmountMinor,
+          currency: acceptedQuote.currency,
+        },
+      })
+      await transaction.jobPaymentEvent.create({
+        data: { paymentId: payment.id, actorId: userId, action: "payment.agreed", metadata: { grossAmountMinor: Number(acceptedQuote.amountMinor), commissionBasisPoints }, requestId },
+      })
       await transaction.quote.updateMany({
         where: { jobId, id: { not: quoteId }, status: "SUBMITTED" },
         data: { status: "DECLINED" },
@@ -2972,7 +3097,172 @@ export class PrismaDatabase
         include: { _count: { select: { quotes: true } } },
       })
     })
-    return updatedJob ? this.mapMarketplaceJob(updatedJob) : null
+    return updatedJob
+      ? this.mapMarketplaceJob(updatedJob, { includePreciseLocation: updatedJob.customerId === userId || updatedJob.shareExactLocationWithProvider })
+      : null
+  }
+
+  async listMyJobPayments(userId: string, role: "consumer" | "provider"): Promise<JobPaymentRecord[]> {
+    const rows = await this.client.jobPayment.findMany({
+      where: role === "consumer" ? { customerId: userId } : { providerId: userId },
+      include: jobPaymentRelations,
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    })
+    return rows.map(mapJobPayment)
+  }
+
+  async reportJobPayment(userId: string, jobId: string, method: JobPaymentMethod, requestId: string): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const job = await transaction.job.findFirst({ where: { id: jobId, customerId: userId, status: "COMPLETED" }, select: { id: true } })
+      if (!job) return null
+      const payment = await transaction.jobPayment.findUnique({ where: { jobId } })
+      if (!payment) return null
+      if (payment.status !== "AWAITING_PAYMENT") {
+        if (payment.status === "REPORTED" && payment.reportedByUserId === userId && payment.method?.toLowerCase() === method) {
+          const current = await transaction.jobPayment.findUnique({ where: { id: payment.id }, include: jobPaymentRelations })
+          return current ? mapJobPayment(current) : null
+        }
+        throw new MarketplaceConflictError("This job already has a reported or settled payment.")
+      }
+      const updated = await transaction.jobPayment.update({
+        where: { id: payment.id },
+        data: { status: "REPORTED", method: method.toUpperCase() as "CASH" | "MANUAL_TRANSFER", reportedByUserId: userId, reportedAt: new Date() },
+      })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: userId, action: "payment.reported", metadata: { method }, requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async reportPlatformFee(userId: string, jobId: string, paymentReference: string, requestId: string): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findFirst({ where: { jobId, customerId: userId, status: "PAID", job: { status: "COMPLETED" } } })
+      if (!payment) return null
+      if (payment.platformFeeStatus !== "DUE") {
+        if (payment.platformFeeReportedByUserId === userId && payment.platformFeePaymentReference === paymentReference.trim()) {
+          const current = await transaction.jobPayment.findUnique({ where: { id: payment.id }, include: jobPaymentRelations })
+          return current ? mapJobPayment(current) : null
+        }
+        throw new MarketplaceConflictError("The platform fee has already been reported or received.")
+      }
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: {
+        platformFeeStatus: "REPORTED", platformFeeReportedByUserId: userId,
+        platformFeeReportedAt: new Date(), platformFeePaymentReference: paymentReference.trim(),
+      } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: userId, action: "platform_fee.reported", metadata: { paymentReference: paymentReference.trim(), amountMinor: Number(payment.commissionAmountMinor) }, requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async confirmJobPayment(userId: string, jobId: string, requestId: string): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findUnique({ where: { jobId } })
+      if (!payment || payment.providerId !== userId) return null
+      if (payment.status === "PAID" && payment.confirmedByUserId === userId) {
+        const current = await transaction.jobPayment.findUnique({ where: { id: payment.id }, include: jobPaymentRelations })
+        return current ? mapJobPayment(current) : null
+      }
+      if (payment.status !== "REPORTED" || payment.reportedByUserId === userId) {
+        throw new MarketplaceConflictError("Only the worker can confirm a payment reported by the hirer.")
+      }
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: { status: "PAID", confirmedByUserId: userId, confirmedAt: new Date() } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: userId, action: "payment.confirmed", metadata: { providerAmountMinor: Number(payment.providerAmountMinor) }, requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async disputeJobPayment(userId: string, jobId: string, reason: string, requestId: string): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findUnique({ where: { jobId } })
+      if (!payment || ![payment.customerId, payment.providerId].includes(userId)) return null
+      if (payment.status !== "REPORTED") throw new MarketplaceConflictError("Only a reported payment can be disputed.")
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: { status: "DISPUTED", disputeReason: reason.trim() } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: userId, action: "payment.disputed", metadata: { reason: reason.trim() }, requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async listAdminJobPayments(search: string, status: JobPaymentStatus | "all", limit: number, offset: number): Promise<AdminJobPaymentPage> {
+    const needle = search.trim()
+    const where = {
+      ...(status === "all" ? {} : { status: status.toUpperCase() as "AWAITING_PAYMENT" | "REPORTED" | "PAID" | "DISPUTED" | "REFUNDED" }),
+      ...(needle ? { OR: [
+        { id: { contains: needle, mode: "insensitive" as const } },
+        { paymentReference: { contains: needle, mode: "insensitive" as const } },
+        { jobId: { contains: needle, mode: "insensitive" as const } },
+        { job: { publicReference: { contains: needle, mode: "insensitive" as const } } },
+        { provider: { displayName: { contains: needle, mode: "insensitive" as const } } },
+        { customer: { displayName: { contains: needle, mode: "insensitive" as const } } },
+      ] } : {}),
+    }
+    const [rows, total, paid, commissionOutstanding, disputedCount, groups] = await Promise.all([
+      this.client.jobPayment.findMany({ where, include: jobPaymentRelations, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: offset, take: limit }),
+      this.client.jobPayment.count({ where }),
+      this.client.jobPayment.aggregate({ where: { status: "PAID" }, _sum: { grossAmountMinor: true, commissionAmountMinor: true, providerAmountMinor: true } }),
+      this.client.jobPayment.aggregate({ where: { status: "PAID", job: { status: "COMPLETED" }, platformFeeStatus: { not: "RECEIVED" } }, _sum: { commissionAmountMinor: true } }),
+      this.client.jobPayment.count({ where: { status: "DISPUTED" } }),
+      this.client.jobPayment.groupBy({ by: ["providerId"], where: { status: "PAID" }, _count: { _all: true }, _sum: { grossAmountMinor: true, commissionAmountMinor: true, providerAmountMinor: true } }),
+    ])
+    const providerIds = groups.map((item) => item.providerId)
+    const [users, profiles] = providerIds.length ? await Promise.all([
+      this.client.user.findMany({ where: { id: { in: providerIds } }, select: { id: true, displayName: true } }),
+      this.client.providerProfile.findMany({ where: { userId: { in: providerIds } }, select: { userId: true, payoutHoldAt: true } }),
+    ]) : [[], []]
+    const userNames = new Map(users.map((item) => [item.id, item.displayName]))
+    const heldProviders = new Set(profiles.filter((item) => item.payoutHoldAt).map((item) => item.userId))
+    return {
+      items: rows.map(mapJobPayment), total, limit, offset,
+      summary: {
+        paidGrossMinor: Number(paid._sum.grossAmountMinor ?? 0n),
+        commissionMinor: Number(paid._sum.commissionAmountMinor ?? 0n),
+        providerNetMinor: Number(paid._sum.providerAmountMinor ?? 0n),
+        commissionDueMinor: Number(commissionOutstanding._sum.commissionAmountMinor ?? 0n),
+        disputedCount,
+      },
+      workers: groups.map((item) => ({ providerId: item.providerId, providerName: userNames.get(item.providerId) ?? "Worker", paidJobs: item._count._all, grossMinor: Number(item._sum.grossAmountMinor ?? 0n), commissionMinor: Number(item._sum.commissionAmountMinor ?? 0n), netMinor: Number(item._sum.providerAmountMinor ?? 0n), payoutHeld: heldProviders.has(item.providerId) })),
+    }
+  }
+
+  async resolveAdminJobPayment(input: { actorUserId: string; paymentId: string; resolution: "paid" | "refunded"; reason: string; requestId: string }): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findFirst({ where: { id: input.paymentId, status: "DISPUTED" } })
+      if (!payment) return null
+      const now = new Date()
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: {
+        status: input.resolution.toUpperCase() as "PAID" | "REFUNDED",
+        ...(input.resolution === "paid" ? { confirmedAt: now, confirmedByUserId: input.actorUserId } : {}),
+        resolutionNote: input.reason.trim(), resolvedAt: now, resolvedByUserId: input.actorUserId,
+      } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: input.actorUserId, action: `payment.${input.resolution}`, metadata: { reason: input.reason.trim() }, requestId: input.requestId } })
+      await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: `admin.payment.${input.resolution}`, targetType: "job_payment", targetId: payment.id, metadata: { jobId: payment.jobId, reason: input.reason.trim() }, requestId: input.requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async recordAdminPlatformFeeReceipt(input: { actorUserId: string; paymentId: string; receiptReference: string; requestId: string }): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findFirst({ where: { id: input.paymentId, platformFeeStatus: "REPORTED" } })
+      if (!payment) return null
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: { platformFeeStatus: "RECEIVED", platformFeeReceivedAt: new Date(), platformFeeReceiptReference: input.receiptReference.trim() } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: input.actorUserId, action: "platform_fee.received", metadata: { receiptReference: input.receiptReference.trim(), amountMinor: Number(payment.commissionAmountMinor) }, requestId: input.requestId } })
+      await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: "admin.platform_fee.received", targetType: "job_payment", targetId: payment.id, metadata: { receiptReference: input.receiptReference.trim(), amountMinor: Number(payment.commissionAmountMinor) }, requestId: input.requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async setAdminProviderPayoutHold(input: { actorUserId: string; providerId: string; held: boolean; reason: string; requestId: string }): Promise<boolean> {
+    return this.client.$transaction(async (transaction) => {
+      const provider = await transaction.providerProfile.findFirst({ where: { OR: [{ id: input.providerId }, { userId: input.providerId }] }, select: { id: true, userId: true } })
+      if (!provider) return false
+      await transaction.providerProfile.update({ where: { id: provider.id }, data: input.held ? { payoutHoldAt: new Date(), payoutHoldReason: input.reason.trim(), payoutHoldByUserId: input.actorUserId } : { payoutHoldAt: null, payoutHoldReason: null, payoutHoldByUserId: null } })
+      await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: input.held ? "admin.provider.payout_hold" : "admin.provider.payout_hold_removed", targetType: "provider", targetId: provider.userId, metadata: { reason: input.held ? input.reason.trim() : "" }, requestId: input.requestId } })
+      return true
+    })
   }
 
   async close(): Promise<void> {
