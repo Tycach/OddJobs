@@ -706,11 +706,11 @@ tbody tr:last-child td { border-bottom: 0; }
   body { font-size: 14px; }
   .auth-experience { display: block; min-height: 100vh; min-height: 100svh; }
   .auth-art { display: none; }
-  .mobile-auth-welcome { min-height: 100vh; min-height: 100svh; display: grid; align-content: start; gap: 16px; padding: 20px 20px max(28px, env(safe-area-inset-bottom)); background: linear-gradient(145deg, #fff8eb 0%, #fff 58%, #fff1df 100%); }
+  .mobile-auth-welcome { min-height: 100vh; min-height: 100svh; display: grid; align-content: center; gap: 18px; padding: 24px 20px max(28px, env(safe-area-inset-bottom)); background: linear-gradient(145deg, #fff8eb 0%, #fff 58%, #fff1df 100%); }
   .mobile-auth-welcome-hidden { display: none; }
   .mobile-auth-brand { display: grid; justify-items: center; min-height: 54px; }
   .mobile-auth-brand img { display: block; width: min(70vw, 240px); height: auto; }
-  .mobile-auth-art { height: clamp(190px, 38svh, 320px); min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); place-items: center; overflow: hidden; border-radius: 18px; background: #fff3e0; box-shadow: 0 12px 30px rgba(112,43,0,.14); }
+  .mobile-auth-art { display: none; }
   .mobile-auth-art img { display: block; min-width: 0; min-height: 0; width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
   .mobile-auth-intro { display: grid; gap: 6px; text-align: center; }
   .mobile-auth-intro h1 { margin: 0; color: var(--slate-950); font-size: clamp(24px, 7vw, 30px); line-height: 1.12; letter-spacing: -.04em; }
