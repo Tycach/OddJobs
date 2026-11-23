@@ -69,7 +69,6 @@ export const navigation: Record<Role, { label: string; icon: string; screen: Scr
   provider: [
     { label: "Find jobs", icon: "search", screen: "feed" },
     { label: "Dashboard", icon: "grid", screen: "providerHome" },
-    { label: "Worker profile", icon: "users", screen: "profile" },
     { label: "ID verification", icon: "shield", screen: "providerVerification" },
     { label: "My proposals", icon: "briefcase", screen: "providerBids" },
     { label: "My work", icon: "briefcase", screen: "management" },

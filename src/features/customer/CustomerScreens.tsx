@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useAuth, type ServiceListingMedia } from "../../auth/AuthProvider"
+import { useAuth, type MarketplaceProvider, type ServiceListingMedia } from "../../auth/AuthProvider"
 import { useDemoStore } from "../../demo/context"
 import type { Screen } from "../../demo/model"
 import { useMarketplaceJobData, useMarketplaceJobs, useMarketplaceProviders } from "../marketplace/hooks"
@@ -477,7 +477,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
 function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider: (providerId: string) => void }) {
   const { store, updateStore } = useDemoStore()
   const auth = useAuth()
-  const [providerSummaries, setProviderSummaries] = useState<Record<string, { bio: string; region: string; rating: number; reviewCount: number; avatarPath?: string | null }>>({})
+  const [providerSummaries, setProviderSummaries] = useState<Record<string, { publicName: string; bio: string; region: string; rating: number; reviewCount: number; avatarPath?: string | null }>>({})
   const {
     jobs,
     loading: jobsLoading,
@@ -497,6 +497,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
   const [selectedQuoteId, setSelectedQuoteId] = useState("")
   const [actionError, setActionError] = useState("")
   const [accepting, setAccepting] = useState(false)
+  const [openingConversation, setOpeningConversation] = useState(false)
   useEffect(() => {
     const timer = window.setInterval(() => {
       void refreshJobs()
@@ -515,19 +516,19 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
     void Promise.all(quotes.map(async (quote) => {
       try {
         const [provider, reviews] = await Promise.all([
-          auth.getMarketplaceProvider(quote.providerId),
+          auth.getMarketplaceProvider(quote.providerId, job.id),
           auth.getPublicProviderReviews(quote.providerId),
         ])
         const rating = reviews.length ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length : 0
-        return [quote.providerId, { bio: provider.bio, region: provider.region, rating, reviewCount: reviews.length, avatarPath: provider.avatarPath }] as const
+        return [quote.providerId, { publicName: provider.publicName, bio: provider.bio, region: provider.region, rating, reviewCount: reviews.length, avatarPath: provider.avatarPath }] as const
       } catch {
-        return [quote.providerId, { bio: "", region: "", rating: 0, reviewCount: 0, avatarPath: null }] as const
+        return [quote.providerId, { publicName: quote.providerName, bio: "", region: "", rating: 0, reviewCount: 0, avatarPath: null }] as const
       }
     })).then((entries) => {
       if (!cancelled) setProviderSummaries(Object.fromEntries(entries))
     })
     return () => { cancelled = true }
-  }, [auth.getMarketplaceProvider, auth.getPublicProviderReviews, quotes])
+  }, [auth.getMarketplaceProvider, auth.getPublicProviderReviews, quotes, job?.id])
 
   useEffect(() => {
     if (quotes.length && !quotes.some((quote) => quote.id === selectedQuoteId)) {
@@ -552,6 +553,26 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
     } finally {
       setAccepting(false)
     }
+  }
+
+  const messageWorker = async (providerId: string) => {
+    if (!job) return
+    setOpeningConversation(true)
+    setActionError("")
+    try {
+      const conversation = await auth.openMarketplaceConversation(job.id, "consumer", providerId)
+      updateStore({ selectedJobId: job.id, selectedMarketplaceConversationId: conversation.id })
+      go("chat")
+    } catch (requestError) {
+      setActionError(requestError instanceof Error ? requestError.message : "Could not open this worker conversation.")
+    } finally {
+      setOpeningConversation(false)
+    }
+  }
+
+  const openBidderProfile = (providerId: string) => {
+    updateStore({ selectedJobId: job.id })
+    onOpenProvider(providerId)
   }
 
   if (jobsLoading || (selectedJob && loading)) {
@@ -593,7 +614,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
   return (
     <div className="content">
       <PageHeader
-        eyebrow={`${quotes.length} proposals · Job ${job.id.slice(0, 8)}`}
+        eyebrow={`${quotes.length} proposals · Job ID ${job.jobReference}`}
         title="Review worker proposals"
         description={job.title}
       />
@@ -609,12 +630,12 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
           <thead><tr><th>#</th><th>Worker</th><th>Rating</th><th>Proposal</th><th>Bid</th><th>Availability</th><th>Status</th><th></th></tr></thead>
           <tbody>{quotes.map((quote, index) => <tr key={quote.id} className={selectedQuote?.id === quote.id ? "selected-proposal-row" : undefined}>
             <td>{index + 1}</td>
-            <td><button className="table-link" onClick={() => onOpenProvider(quote.providerId)}>{quote.providerName}</button><br /><small>{providerSummaries[quote.providerId]?.region || "Area not provided"}</small></td>
+            <td><button className="table-link" onClick={() => openBidderProfile(quote.providerId)}>{providerSummaries[quote.providerId]?.publicName || quote.providerName}</button><br /><small>{providerSummaries[quote.providerId]?.region || "Area not provided"}</small>{providerSummaries[quote.providerId]?.bio && <p className="bidder-profile-bio">{providerSummaries[quote.providerId].bio}</p>}</td>
             <td>{providerSummaries[quote.providerId]?.reviewCount ? providerSummaries[quote.providerId].rating.toFixed(1) + " ? (" + providerSummaries[quote.providerId].reviewCount + ")" : "No reviews"}</td>
             <td className="proposal-message-cell">{quote.message}</td>
             <td>KES {(quote.amountMinor / 100).toLocaleString()}</td><td>{quote.availability}</td>
             <td><Badge tone={quote.status === "accepted" ? "green" : quote.status === "submitted" ? "amber" : undefined}>{quote.status}</Badge></td>
-            <td><Button variant={selectedQuote?.id === quote.id ? "primary" : "secondary"} disabled={quote.status !== "submitted" && quote.status !== "accepted"} onClick={() => setSelectedQuoteId(quote.id)}>{selectedQuote?.id === quote.id ? "Selected" : "Review"}</Button></td>
+            <td><div className="card-actions"><Button variant="secondary" icon="message" disabled={(quote.status !== "submitted" && quote.status !== "accepted") || openingConversation} onClick={() => void messageWorker(quote.providerId)}>Message</Button><Button variant={selectedQuote?.id === quote.id ? "primary" : "secondary"} disabled={quote.status !== "submitted" && quote.status !== "accepted"} onClick={() => setSelectedQuoteId(quote.id)}>{selectedQuote?.id === quote.id ? "Selected" : "Review"}</Button></div></td>
           </tr>)}
           {!quotes.length && <tr><td colSpan={8}>No worker proposals have been submitted for this job yet.</td></tr>}
           </tbody>
@@ -624,14 +645,14 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
           {selectedQuote ? (
             <>
               <div className="selected-person">
-                <Avatar src="" name={selectedQuote.providerName} />
+                <Avatar src={auth.getProfileAvatarUrl(providerSummaries[selectedQuote.providerId]?.avatarPath)} name={providerSummaries[selectedQuote.providerId]?.publicName || selectedQuote.providerName} />
                 <span>
-                  <strong>{selectedQuote.providerName}</strong>
+                  <strong>{providerSummaries[selectedQuote.providerId]?.publicName || selectedQuote.providerName}</strong>
                   <small>{selectedQuote.availability}</small>
                 </span>
               </div>
-              <Button variant="secondary" onClick={() => onOpenProvider(selectedQuote.providerId)}>
-                View worker profile
+              <Button variant="secondary" onClick={() => openBidderProfile(selectedQuote.providerId)}>
+                View profile
               </Button>
               <div className="summary-line">
                 <span>Worker bid</span>
@@ -694,7 +715,7 @@ function Tracking({ go }: { go: (s: Screen) => void }) {
   return (
     <div className="content">
       <PageHeader
-        eyebrow={`Job #${job.id}`}
+        eyebrow={`Job ID ${job.id}`}
         title={`${store.selectedBid.provider.split(" ")[0]} is on the way`}
         description="Illustrative status Â· live location is not connected"
       />
@@ -926,7 +947,7 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
               {job.budgetMinor !== null &&
                 ` Â· KES ${(job.budgetMinor / 100).toLocaleString()}`}
             </p>
-            <p>{job.quoteCount} proposals Â· Job {job.id.slice(0, 8)}</p>
+            <p>{job.quoteCount} proposals · Job ID {job.jobReference}</p>
             {job.applicationDeadlineAt && job.status === "open" && <p className="caption">Applications close {new Date(job.applicationDeadlineAt).toLocaleString()}</p>}
             {job.dueAt && <p className="caption">Work due {new Date(job.dueAt).toLocaleString()}</p>}
             {job.completionNote && job.status === "completion_pending" && <div className="safe-note"><span><strong>Provider submission</strong><br />{job.completionNote}</span></div>}
@@ -1161,7 +1182,7 @@ function History({ go }: { go: (screen: Screen) => void }) {
           <tbody>
             {historyJobs.map((job, index) => <tr key={job.id}>
               <td>{index + 1}</td>
-              <td><strong>{job.title}</strong><br /><small>{job.category} · {job.id.slice(0, 8)}</small></td>
+              <td><strong>{job.title}</strong><br /><small>{job.category} · {job.jobReference}</small></td>
               <td>{workerNames[job.id] ?? "Loading…"}</td>
               <td><Badge tone={job.status === "completed" ? "green" : job.status === "revision_requested" ? "red" : "amber"}>{job.status === "awarded" ? "worker selected" : job.status.replace(/_/g, " ")}</Badge></td>
               <td>{job.locationLabel}</td>
@@ -1217,6 +1238,8 @@ function SavedProviders({ go, onOpenProvider }: { go: (screen: Screen) => void; 
 function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBack: () => void }) {
   const auth = useAuth()
   const [listings, setListings] = useState<import("../../auth/AuthProvider").ServiceListing[]>([])
+  const { jobs: marketplaceJobs, loading: marketplaceJobsLoading, error: marketplaceJobsError } = useMarketplaceJobs("consumer")
+  const [jobSearch, setJobSearch] = useState("")
   const [selectedId, setSelectedId] = useState(listingId ?? "")
   const [reason, setReason] = useState<"other" | "unsafe" | "fraud" | "harassment" | "off_platform_payment">("other")
   const [details, setDetails] = useState("")
@@ -1230,7 +1253,13 @@ function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBa
     return () => { active = false }
   }, [auth.getServiceListings])
   useEffect(() => { if (listingId) setSelectedId(listingId) }, [listingId])
-  const selected = listings.find((item) => item.id === selectedId)
+  const reportableJobs = [
+    ...listings.map((item) => ({ id: item.id, jobReference: item.jobReference, title: item.title, counterpart: item.providerName, status: item.status })),
+    ...marketplaceJobs.map((item) => ({ id: item.id, jobReference: item.jobReference, title: item.title, counterpart: "Marketplace worker", status: item.status })),
+  ]
+  const search = jobSearch.trim().toLocaleLowerCase()
+  const filteredJobs = reportableJobs.filter((item) => !search || [item.jobReference, item.title, item.counterpart].some((value) => value.toLocaleLowerCase().includes(search)))
+  const selected = reportableJobs.find((item) => item.id === selectedId)
   const submit = async () => {
     if (!selected) { setError("Choose one of your jobs."); return }
     setBusy(true)
@@ -1244,10 +1273,13 @@ function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBa
     }
   }
   return <div className="content narrow">
-    <PageHeader title={report ? "Report submitted" : "Get help with your job"} description={selected ? selected.title + " · " + selected.providerName : "Choose a job from your history to contact support about it."} />
-    {error && <p className="form-error" role="alert">{error}</p>}
-    {report ? <section className="card"><Badge tone="green">Received</Badge><h2>Your report is in the support queue</h2><p>Reference: {report.id}</p><p>Status: {report.status.replace(/_/g, " ")}</p><Button onClick={onBack}>Back to job history</Button></section> : <section className="form-card">
-      {loading ? <p role="status">Loading your jobs…</p> : <label>Job<select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}><option value="">Choose a job</option>{listings.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.status.replace(/_/g, " ")}</option>)}</select></label>}
+    <PageHeader title={report ? "Report submitted" : "Get help with your job"} description={selected ? `Job ID ${selected.jobReference} · ${selected.title} · ${selected.counterpart}` : "Choose a job from your history to contact support about it."} />
+    {(error || marketplaceJobsError) && <p className="form-error" role="alert">{error || marketplaceJobsError}</p>}
+    {report ? <section className="card"><Badge tone="green">Received</Badge><h2>Your report is in the support queue</h2><p>Job ID: {selected?.jobReference ?? "Unavailable"}</p><p>Report reference: {report.id}</p><p>Status: {report.status.replace(/_/g, " ")}</p><Button onClick={onBack}>Back to job history</Button></section> : <section className="form-card">
+      {loading || marketplaceJobsLoading ? <p role="status">Loading your jobs…</p> : <>
+        <label>Search jobs by ID or title<input value={jobSearch} onChange={(event) => setJobSearch(event.target.value)} placeholder="For example, OJ-0000000042" /></label>
+        <label>Job<select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}><option value="">Choose a job</option>{filteredJobs.map((item) => <option key={item.id} value={item.id}>{item.jobReference} · {item.title} · {item.status.replace(/_/g, " ")}</option>)}</select></label>
+      </>}
       <label>Issue<select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)}><option value="other">Work quality, missed visit, or other issue</option><option value="unsafe">Safety concern</option><option value="harassment">Harassment</option><option value="fraud">Fraud</option><option value="off_platform_payment">Asked to pay outside OddJobs</option></select></label>
       <label>Details<textarea rows={5} maxLength={2000} value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Describe what happened and what help you need." /></label>
       <div className="card-actions"><Button variant="secondary" onClick={onBack}>Cancel</Button><Button disabled={busy || loading || !selected || details.trim().length < 10} onClick={() => void submit()}>{busy ? "Submitting…" : "Submit report"}</Button></div>
@@ -1256,12 +1288,37 @@ function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBa
 }
 function Settings({ go }: { go: (s: Screen) => void }) {
   const auth = useAuth()
+  const hasProviderRole = auth.profile?.roles.includes("provider") ?? false
+  const [workerProfile, setWorkerProfile] = useState<MarketplaceProvider | null>(null)
+  const [workerName, setWorkerName] = useState("")
+  const [workerRegion, setWorkerRegion] = useState("")
+  const [workerBio, setWorkerBio] = useState("")
+  const [workerProfileLoading, setWorkerProfileLoading] = useState(false)
+  const [workerProfileSaving, setWorkerProfileSaving] = useState(false)
+  const [workerProfileNotice, setWorkerProfileNotice] = useState("")
+  const [workerProfileError, setWorkerProfileError] = useState("")
   const [displayName, setDisplayName] = useState(auth.profile?.displayName ?? "")
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState("")
   const [profileBusy, setProfileBusy] = useState(false)
   const [profileMessage, setProfileMessage] = useState("")
   useEffect(() => { setDisplayName(auth.profile?.displayName ?? "") }, [auth.profile?.displayName])
+  useEffect(() => {
+    if (!hasProviderRole || !auth.profile?.id) return
+    let current = true
+    setWorkerProfileLoading(true)
+    setWorkerProfileError("")
+    void auth.getMarketplaceProvider(auth.profile.id).then((profile) => {
+      if (!current) return
+      setWorkerProfile(profile)
+      setWorkerName(profile.publicName)
+      setWorkerRegion(profile.region)
+      setWorkerBio(profile.bio)
+    }).catch((caught: unknown) => {
+      if (current) setWorkerProfileError(caught instanceof Error ? caught.message : "Could not load your profile.")
+    }).finally(() => { if (current) setWorkerProfileLoading(false) })
+    return () => { current = false }
+  }, [auth.getMarketplaceProvider, auth.profile?.id, hasProviderRole])
   useEffect(() => {
     if (!avatarFile) { setAvatarPreview(""); return }
     const previewUrl = URL.createObjectURL(avatarFile)
@@ -1275,12 +1332,41 @@ function Settings({ go }: { go: (s: Screen) => void }) {
     catch (caught) { setProfileMessage(caught instanceof Error ? caught.message : "Could not update your profile.") }
     finally { setProfileBusy(false) }
   }
+  const saveWorkerProfile = async () => {
+    setWorkerProfileSaving(true)
+    setWorkerProfileError("")
+    setWorkerProfileNotice("")
+    try {
+      const saved = await auth.updateMarketplaceProviderProfile({ publicName: workerName, region: workerRegion, bio: workerBio })
+      setWorkerProfile(saved)
+      setWorkerName(saved.publicName)
+      setWorkerRegion(saved.region)
+      setWorkerBio(saved.bio)
+      setWorkerProfileNotice("Your profile is saved and will appear to hirers reviewing your bids.")
+    } catch (caught) {
+      setWorkerProfileError(caught instanceof Error ? caught.message : "Could not save your profile.")
+    } finally {
+      setWorkerProfileSaving(false)
+    }
+  }
   return (
     <div className="content narrow">
       <PageHeader
         title="Settings"
-        description="Manage your account and identity details."
+        description={hasProviderRole ? "Manage your account and the profile hirers see with your bids." : "Manage your account and identity details."}
       />
+      {hasProviderRole && <section className="card setting-card account-settings-card">
+        <h2>My profile</h2>
+        <p className="caption">This information is shown to hirers when they review your proposal. Your private contact details are not included.</p>
+        {workerProfileLoading ? <p role="status">Loading your profile…</p> : <>
+          <label>Public name<input value={workerName} maxLength={120} onChange={(event) => setWorkerName(event.target.value)} placeholder="Name shown to hirers" /></label>
+          <label>Service area<input value={workerRegion} maxLength={120} onChange={(event) => setWorkerRegion(event.target.value)} placeholder="For example, Westlands, Nairobi" /></label>
+          <label>About me and my experience<textarea rows={5} value={workerBio} maxLength={2000} onChange={(event) => setWorkerBio(event.target.value)} placeholder="Describe your skills, experience, and how you work." /></label>
+          {workerProfileError && <p className="form-error" role="alert">{workerProfileError}</p>}
+          {workerProfileNotice && <p className="form-success" role="status">{workerProfileNotice}</p>}
+          <Button disabled={workerProfileSaving || !workerName.trim() || !workerProfile || (workerName.trim() === workerProfile.publicName && workerRegion.trim() === workerProfile.region && workerBio.trim() === workerProfile.bio)} onClick={() => void saveWorkerProfile()}>{workerProfileSaving ? "Saving…" : "Save my profile"}</Button>
+        </>}
+      </section>}
       <section className="card setting-card account-settings-card">
         <h2>Account profile</h2>
         <label>Profile photo<div className="account-avatar-edit"><Avatar src={avatarPreview || auth.getProfileAvatarUrl(auth.profile?.avatarPath)} name={displayName || "Your profile"} /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} /></div><small>JPG, PNG, or WebP; up to 2 MB.</small></label>

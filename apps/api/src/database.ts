@@ -46,6 +46,8 @@ import type {
   MarketplaceQuote,
   MarketplaceProviderQuote,
   MarketplaceStore,
+  JobConversation as JobConversationDto,
+  JobConversationMessage,
   SubmitMarketplaceQuoteInput,
   UserProfile,
   UserProfileStore,
@@ -128,14 +130,14 @@ export class PrismaDatabase
   }
 
   private mapServiceListing(listing: {
-    id: string; providerId: string; claimedByCustomerId: string | null; title: string; description: string; media: Prisma.JsonValue;
+    id: string; publicReference: string; providerId: string; claimedByCustomerId: string | null; title: string; description: string; media: Prisma.JsonValue;
     category: string; locationLabel: string; budgetMinor: bigint | null; currency: string; status: string;
     claimExpiresAt: Date | null; createdAt: Date; updatedAt: Date;
     provider: { displayName: string }; claimedByCustomer?: { displayName: string } | null;
     activity?: { action: string; requestId: string; createdAt: Date; actor: { displayName: string } | null }[];
   }): ServiceListing {
     return {
-      id: listing.id, providerId: listing.providerId, providerName: listing.provider.displayName,
+      id: listing.id, jobReference: listing.publicReference, providerId: listing.providerId, providerName: listing.provider.displayName,
       customerId: listing.claimedByCustomerId, customerName: listing.claimedByCustomer?.displayName ?? null,
       title: listing.title, description: listing.description, category: listing.category,
       locationLabel: listing.locationLabel, budgetMinor: listing.budgetMinor === null ? null : Number(listing.budgetMinor),
@@ -189,6 +191,192 @@ export class PrismaDatabase
     return { id: message.id, listingId: message.listingId, senderId: message.senderId, senderName: message.sender.displayName, body: message.body, createdAt: message.createdAt.toISOString() }
   }
 
+  private mapJobConversation(conversation: {
+    id: string; jobId: string; quoteId: string | null; updatedAt: Date;
+    job: { publicReference: string; title: string; status: string };
+    customer: { id: string; displayName: string };
+    provider: { id: string; displayName: string };
+    messages: { body: string; createdAt: Date }[];
+    unreadCount: number;
+  }): JobConversationDto {
+    const latest = conversation.messages[0]
+    return {
+      id: conversation.id,
+      jobId: conversation.jobId,
+      jobReference: conversation.job.publicReference,
+      jobTitle: conversation.job.title,
+      jobStatus: conversation.job.status.toLowerCase() as JobConversationDto["jobStatus"],
+      customerId: conversation.customer.id,
+      customerName: conversation.customer.displayName,
+      providerId: conversation.provider.id,
+      providerName: conversation.provider.displayName,
+      quoteId: conversation.quoteId,
+      latestMessage: latest?.body ?? null,
+      latestMessageAt: latest?.createdAt.toISOString() ?? null,
+      unreadCount: conversation.unreadCount,
+      updatedAt: conversation.updatedAt.toISOString(),
+    }
+  }
+
+  private async getJobConversationDto(conversationId: string, userId: string): Promise<JobConversationDto | null> {
+    const conversation = await this.client.jobConversation.findFirst({
+      where: { id: conversationId, OR: [{ customerId: userId }, { providerId: userId }] },
+      include: {
+        job: { select: { publicReference: true, title: true, status: true } },
+        customer: { select: { id: true, displayName: true } },
+        provider: { select: { id: true, displayName: true } },
+        messages: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
+      },
+    })
+    if (!conversation) return null
+    const unreadCount = await this.client.message.count({
+      where: { conversationId, senderId: { not: userId }, readAt: null },
+    })
+    return this.mapJobConversation({ ...conversation, unreadCount })
+  }
+
+  async listJobConversations(userId: string, role: "consumer" | "provider"): Promise<JobConversationDto[]> {
+    const conversations = await this.client.jobConversation.findMany({
+      where: role === "consumer" ? { customerId: userId } : { providerId: userId },
+      include: {
+        job: { select: { publicReference: true, title: true, status: true } },
+        customer: { select: { id: true, displayName: true } },
+        provider: { select: { id: true, displayName: true } },
+        messages: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    })
+    return Promise.all(conversations.map(async (conversation) => {
+      const unreadCount = await this.client.message.count({
+        where: { conversationId: conversation.id, senderId: { not: userId }, readAt: null },
+      })
+      return this.mapJobConversation({ ...conversation, unreadCount })
+    }))
+  }
+
+  async openJobConversation(userId: string, role: "consumer" | "provider", jobId: string, requestedProviderId?: string): Promise<JobConversationDto | null> {
+    const job = await this.client.job.findUnique({
+      where: { id: jobId },
+      select: { id: true, customerId: true, status: true, title: true },
+    })
+    if (!job) return null
+    const providerId = role === "provider" ? userId : requestedProviderId
+    if (!providerId || job.customerId === providerId) return null
+    const existing = await this.client.jobConversation.findUnique({
+      where: { jobId_providerId: { jobId, providerId } },
+      select: { id: true, customerId: true },
+    })
+    if (existing && existing.customerId !== job.customerId) return null
+
+    const eligibleQuote = await this.client.quote.findFirst({
+      where: {
+        jobId,
+        providerId,
+        status: { in: ["SUBMITTED", "ACCEPTED"] },
+      },
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+      select: { id: true },
+    })
+    if (role === "consumer" && !eligibleQuote && !existing) return null
+    if (!existing && job.status !== "OPEN" && !eligibleQuote) return null
+
+    let conversationId = existing?.id
+    if (!conversationId) {
+      try {
+        const created = await this.client.jobConversation.create({
+          data: {
+            jobId,
+            customerId: job.customerId,
+            providerId,
+            quoteId: eligibleQuote?.id ?? null,
+          },
+          select: { id: true },
+        })
+        conversationId = created.id
+      } catch (error) {
+        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "P2002")) throw error
+        const concurrent = await this.client.jobConversation.findUnique({
+          where: { jobId_providerId: { jobId, providerId } },
+          select: { id: true },
+        })
+        conversationId = concurrent?.id
+      }
+    } else if (eligibleQuote) {
+      await this.client.jobConversation.update({
+        where: { id: conversationId },
+        data: { quoteId: eligibleQuote.id },
+      })
+    }
+    return conversationId ? this.getJobConversationDto(conversationId, userId) : null
+  }
+
+  async listJobConversationMessages(userId: string, conversationId: string): Promise<JobConversationMessage[] | null> {
+    return this.client.$transaction(async (transaction) => {
+      const conversation = await transaction.jobConversation.findFirst({
+        where: { id: conversationId, OR: [{ customerId: userId }, { providerId: userId }] },
+        select: { id: true, jobId: true, customerId: true },
+      })
+      if (!conversation) return null
+      await transaction.message.updateMany({
+        where: { conversationId, senderId: { not: userId }, readAt: null },
+        data: { readAt: new Date() },
+      })
+      const messages = await transaction.message.findMany({
+        where: { conversationId },
+        include: { sender: { select: { displayName: true } } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      })
+      return messages.map((message) => ({
+        id: message.id,
+        conversationId,
+        jobId: message.jobId,
+        senderId: message.senderId,
+        senderName: message.sender.displayName,
+        senderRole: message.senderId === conversation.customerId ? "consumer" : "provider",
+        body: message.body,
+        readAt: message.readAt?.toISOString() ?? null,
+        createdAt: message.createdAt.toISOString(),
+      }))
+    })
+  }
+
+  async createJobConversationMessage(userId: string, conversationId: string, body: string, requestId: string): Promise<JobConversationMessage | null> {
+    return this.client.$transaction(async (transaction) => {
+      const conversation = await transaction.jobConversation.findFirst({
+        where: { id: conversationId, OR: [{ customerId: userId }, { providerId: userId }] },
+        include: { job: { select: { title: true } } },
+      })
+      if (!conversation) return null
+      const recipientUserId = conversation.customerId === userId ? conversation.providerId : conversation.customerId
+      const message = await transaction.message.create({
+        data: { jobId: conversation.jobId, conversationId, senderId: userId, body: body.trim() },
+        include: { sender: { select: { displayName: true } } },
+      })
+      await transaction.jobConversation.update({ where: { id: conversationId }, data: { updatedAt: message.createdAt } })
+      await this.enqueueMarketplaceEvent(transaction, {
+        requestId,
+        eventType: "message.received",
+        jobId: conversation.jobId,
+        quoteId: conversation.quoteId,
+        recipientUserId,
+        title: "New message about your job",
+        body: `${message.sender.displayName} sent a message about ${conversation.job.title}.`,
+        payload: { conversationId },
+      })
+      return {
+        id: message.id,
+        conversationId,
+        jobId: message.jobId,
+        senderId: message.senderId,
+        senderName: message.sender.displayName,
+        senderRole: message.senderId === conversation.customerId ? "consumer" : "provider",
+        body: message.body,
+        readAt: null,
+        createdAt: message.createdAt.toISOString(),
+      }
+    })
+  }
+
   async listServiceListingMessages(userId: string, role: "consumer" | "provider", listingId: string): Promise<ServiceListingMessage[] | null> {
     const listing = await this.client.serviceListing.findUnique({ where: { id: listingId }, select: { providerId: true, claimedByCustomerId: true } })
     if (!listing || (role === "provider" ? listing.providerId !== userId : listing.claimedByCustomerId !== userId)) return null
@@ -216,13 +404,16 @@ export class PrismaDatabase
     })
   }
 
-  async listAdminServiceListingMessages(limit: number, offset: number): Promise<AdminPage<AdminServiceListingMessage>> {
+  async listAdminServiceListingMessages(limit: number, offset: number, search = ""): Promise<AdminPage<AdminServiceListingMessage>> {
+    const normalized = search.trim().toUpperCase().replace(/\s+/g, "")
+    const listing = normalized ? await this.client.serviceListing.findUnique({ where: { publicReference: normalized }, select: { id: true } }) : null
+    const where = normalized ? { listingId: { in: listing ? [listing.id] : [] } } : {}
     const [messages, total] = await this.client.$transaction([
-      this.client.serviceListingMessage.findMany({ include: { sender: { select: { displayName: true } }, listing: { include: { provider: { select: { displayName: true } }, claimedByCustomer: { select: { displayName: true } } } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: offset, take: limit }),
-      this.client.serviceListingMessage.count(),
+      this.client.serviceListingMessage.findMany({ where, include: { sender: { select: { displayName: true } }, listing: { include: { provider: { select: { displayName: true } }, claimedByCustomer: { select: { displayName: true } } } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: offset, take: limit }),
+      this.client.serviceListingMessage.count({ where }),
     ])
     return {
-      items: messages.map((message) => ({ ...this.mapServiceListingMessage(message), listingTitle: message.listing.title, providerName: message.listing.provider.displayName, customerName: message.listing.claimedByCustomer?.displayName ?? "Customer" })),
+      items: messages.map((message) => ({ ...this.mapServiceListingMessage(message), jobReference: message.listing.publicReference, listingTitle: message.listing.title, providerName: message.listing.provider.displayName, customerName: message.listing.claimedByCustomer?.displayName ?? "Customer" })),
       total,
       limit,
       offset,
@@ -460,9 +651,11 @@ export class PrismaDatabase
 
   async listAdminServiceListings(query: string, limit: number, offset: number): Promise<AdminPage<ServiceListing>> {
     const search = query.trim()
+    const referenceSearch = search.toUpperCase().replace(/\s+/g, "")
     const where = search
       ? {
           OR: [
+            { publicReference: referenceSearch },
             { title: { contains: search, mode: "insensitive" as const } },
             { category: { contains: search, mode: "insensitive" as const } },
             { provider: { displayName: { contains: search, mode: "insensitive" as const } } },
@@ -1112,9 +1305,22 @@ export class PrismaDatabase
     limit: number,
 
     offset: number,
+    search = "",
   ): Promise<AdminPage<AdminModerationReport>> {
-    const where =
-      status === "all" ? {} : { status: moderationStatusToDatabase[status] }
+    const normalized = search.trim().toUpperCase().replace(/\s+/g, "")
+    let matchingJobIds: string[] | null = null
+    if (normalized) {
+      const [job, listing] = await Promise.all([
+        this.client.job.findUnique({ where: { publicReference: normalized }, select: { id: true } }),
+        this.client.serviceListing.findUnique({ where: { publicReference: normalized }, select: { id: true } }),
+      ])
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(search.trim())
+      matchingJobIds = [job?.id, listing?.id, ...(isUuid ? [search.trim()] : [])].filter((id): id is string => Boolean(id))
+    }
+    const where = {
+      ...(status === "all" ? {} : { status: moderationStatusToDatabase[status] }),
+      ...(matchingJobIds === null ? {} : { subjectType: "job", subjectId: { in: matchingJobIds } }),
+    }
 
     const [reports, total] = await this.client.$transaction([
       this.client.moderationReport.findMany({
@@ -1130,8 +1336,14 @@ export class PrismaDatabase
       this.client.moderationReport.count({ where }),
     ])
 
+    const jobIds = reports.filter((report) => report.subjectType === "job").map((report) => report.subjectId)
+    const [marketplaceJobs, legacyListings] = await Promise.all([
+      jobIds.length ? this.client.job.findMany({ where: { id: { in: jobIds } }, select: { id: true, publicReference: true } }) : [],
+      jobIds.length ? this.client.serviceListing.findMany({ where: { id: { in: jobIds } }, select: { id: true, publicReference: true } }) : [],
+    ])
+    const references = new Map([...marketplaceJobs, ...legacyListings].map((item) => [item.id, item.publicReference]))
     return {
-      items: reports.map((report) => this.mapModerationReport(report)),
+      items: reports.map((report) => ({ ...this.mapModerationReport(report), jobReference: report.subjectType === "job" ? references.get(report.subjectId) ?? null : null })),
 
       total,
 
@@ -1505,6 +1717,8 @@ export class PrismaDatabase
 
       subjectId: report.subjectId,
 
+      jobReference: null,
+
       reason: report.reason,
 
       details: report.details,
@@ -1601,6 +1815,7 @@ export class PrismaDatabase
   }): Promise<AdminPage<AdminMarketplaceJob>> {
     const { filters, limit, offset } = input
     const search = filters.search.trim()
+    const referenceSearch = search.toUpperCase().replace(/\s+/g, "")
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(search)
     const where = {
       ...(filters.status === "all" ? {} : {
@@ -1625,6 +1840,7 @@ export class PrismaDatabase
         ? {
             OR: [
               ...(isUuid ? [{ id: search }] : []),
+              { publicReference: referenceSearch },
               { title: { contains: search, mode: "insensitive" as const } },
               { category: { contains: search, mode: "insensitive" as const } },
               { locationLabel: { contains: search, mode: "insensitive" as const } },
@@ -1855,6 +2071,7 @@ export class PrismaDatabase
   private mapMarketplaceJob(
     job: {
       id: string
+      publicReference: string
       customerId: string
       title: string
       description: string
@@ -1885,6 +2102,7 @@ export class PrismaDatabase
 
     return {
       id: job.id,
+      jobReference: job.publicReference,
       customerId: job.customerId,
       title: job.title,
       description: job.description,
@@ -1997,8 +2215,16 @@ export class PrismaDatabase
     }
   }
 
-  async getProvider(providerId: string, requesterUserId?: string): Promise<MarketplaceProvider | null> {
+  async getProvider(providerId: string, requesterUserId?: string, quoteJobId?: string): Promise<MarketplaceProvider | null> {
     const avatarColumnAvailable = await this.hasAvatarPathColumn()
+    const hasBidContext = Boolean(requesterUserId && quoteJobId && await this.client.job.findFirst({
+      where: {
+        id: quoteJobId,
+        customerId: requesterUserId,
+        quotes: { some: { providerId, status: { in: ["SUBMITTED", "ACCEPTED"] } } },
+      },
+      select: { id: true },
+    }))
     const provider = await this.client.providerProfile.findFirst({
       where: {
         OR: [
@@ -2013,6 +2239,15 @@ export class PrismaDatabase
           ...(requesterUserId && providerId === requesterUserId
             ? [{
                 userId: requesterUserId,
+                user: {
+                  status: "ACTIVE" as const,
+                  roleAssignments: { some: { role: "PROVIDER" as const } },
+                },
+              }]
+            : []),
+          ...(hasBidContext
+            ? [{
+                OR: [{ id: providerId }, { userId: providerId }],
                 user: {
                   status: "ACTIVE" as const,
                   roleAssignments: { some: { role: "PROVIDER" as const } },
@@ -2034,6 +2269,25 @@ export class PrismaDatabase
           avatarPath: account?.avatarPath ?? null,
         }
       : null
+  }
+
+  async updateProviderProfile(userId: string, input: import("./auth/types.js").UpdateMarketplaceProviderProfileInput): Promise<MarketplaceProvider | null> {
+    const updated = await this.client.providerProfile.updateMany({
+      where: {
+        userId,
+        user: {
+          status: "ACTIVE",
+          roleAssignments: { some: { role: "PROVIDER" } },
+        },
+      },
+      data: {
+        publicName: input.publicName,
+        bio: input.bio,
+        region: input.region,
+      },
+    })
+    if (updated.count !== 1) return null
+    return this.getProvider(userId, userId)
   }
 
   async listSavedProviders(customerId: string): Promise<MarketplaceProvider[]> {
@@ -2256,13 +2510,14 @@ export class PrismaDatabase
       where: { providerId: userId },
       include: {
         provider: { select: { displayName: true } },
-        job: { select: { title: true, category: true, locationLabel: true, status: true } },
+        job: { select: { publicReference: true, title: true, category: true, locationLabel: true, status: true } },
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       distinct: ["jobId", "providerId"],
     })
     return quotes.map((quote) => ({
       ...this.mapMarketplaceQuote(quote),
+      jobReference: quote.job.publicReference,
       jobTitle: quote.job.title,
       jobCategory: quote.job.category,
       jobLocationLabel: quote.job.locationLabel,

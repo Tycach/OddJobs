@@ -119,6 +119,8 @@ model User {
   reviewsReceived   ServiceListingReview[] @relation("ReviewsReceived")
   quotes            Quote[]
   messages          Message[]
+  customerConversations JobConversation[] @relation("JobConversationCustomer")
+  providerConversations JobConversation[] @relation("JobConversationProvider")
   serviceListingMessages ServiceListingMessage[] @relation("ServiceListingMessageSender")
   moderationReports ModerationReport[]
   enforcementActions AdminUserEnforcement[]
@@ -145,6 +147,7 @@ enum ListingStatus {
 
 model ServiceListing {
   id                   String        @id @default(uuid()) @db.Uuid
+  publicReference      String        @unique(map: "service_listings_job_reference_key") @default(dbgenerated("('OJ-'::text || lpad(nextval('job_reference_seq'::regclass)::text, 10, '0'::text))")) @map("job_reference") @db.VarChar(13)
   providerId           String        @map("provider_id") @db.Uuid
   claimedByCustomerId  String?       @map("claimed_by_customer_id") @db.Uuid
   title                String        @db.VarChar(160)
@@ -443,6 +446,7 @@ model AdminMonitoringSnapshot {
 
 model Job {
   id            String    @id @default(uuid()) @db.Uuid
+  publicReference String  @unique(map: "jobs_job_reference_key") @default(dbgenerated("('OJ-'::text || lpad(nextval('job_reference_seq'::regclass)::text, 10, '0'::text))")) @map("job_reference") @db.VarChar(13)
   customerId    String    @map("customer_id") @db.Uuid
   title         String    @db.VarChar(160)
   description   String    @db.VarChar(5000)
@@ -466,6 +470,7 @@ model Job {
   customer      User      @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Restrict)
   quotes        Quote[]
   messages      Message[]
+  conversations JobConversation[]
 
   @@index([customerId, createdAt])
   @@index([status, category, createdAt])
@@ -488,6 +493,7 @@ model Quote {
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   job         Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
   provider    User        @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  conversation JobConversation?
 
   @@unique([jobId, providerId, revision])
   @@unique([jobId, providerId], where: { status: "SUBMITTED" }, map: "quotes_one_active_per_provider_per_job_key")
@@ -500,16 +506,39 @@ model Quote {
 model Message {
   id        String    @id @default(uuid()) @db.Uuid
   jobId     String    @map("job_id") @db.Uuid
+  conversationId String? @map("conversation_id") @db.Uuid
   senderId  String    @map("sender_id") @db.Uuid
   body      String    @db.VarChar(5000)
   readAt    DateTime? @map("read_at") @db.Timestamptz(3)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   job       Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  conversation JobConversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender    User      @relation(fields: [senderId], references: [id], onDelete: Restrict)
 
   @@index([jobId, createdAt])
+  @@index([conversationId, createdAt])
   @@index([senderId, createdAt])
   @@map("messages")
+}
+
+model JobConversation {
+  id         String   @id @default(uuid()) @db.Uuid
+  jobId      String   @map("job_id") @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  providerId String   @map("provider_id") @db.Uuid
+  quoteId    String?  @unique @map("quote_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  customer   User     @relation("JobConversationCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  provider   User     @relation("JobConversationProvider", fields: [providerId], references: [id], onDelete: Restrict)
+  quote      Quote?   @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  messages   Message[]
+
+  @@unique([jobId, providerId])
+  @@index([customerId, updatedAt])
+  @@index([providerId, updatedAt])
+  @@map("job_conversations")
 }
 
 model MarketplaceActivityEvent {

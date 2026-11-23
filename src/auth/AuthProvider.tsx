@@ -79,6 +79,7 @@ export type MarketplaceQuoteStatus =
 
 export type MarketplaceJob = {
   id: string
+  jobReference: string
   customerId: string
   title: string
   description: string
@@ -109,6 +110,7 @@ export type ServiceListingMedia = {
 }
 export type ServiceListing = {
   id: string
+  jobReference: string
   providerId: string
   providerName: string
   customerId: string | null
@@ -127,7 +129,7 @@ export type ServiceListing = {
   activity?: { actorName: string; action: string; requestId: string; createdAt: string }[]
 }
 export type ServiceListingMessage = { id: string; listingId: string; senderId: string; senderName: string; body: string; createdAt: string }
-export type AdminServiceListingMessage = ServiceListingMessage & { listingTitle: string; providerName: string; customerName: string }
+export type AdminServiceListingMessage = ServiceListingMessage & { jobReference: string; listingTitle: string; providerName: string; customerName: string }
 export type ServiceListingReview = {
   id: string
   listingId: string
@@ -156,7 +158,37 @@ export type MarketplaceQuote = {
   updatedAt: string
 }
 
+export type MarketplaceConversation = {
+  id: string
+  jobId: string
+  jobReference: string
+  jobTitle: string
+  jobStatus: MarketplaceJobStatus
+  customerId: string
+  customerName: string
+  providerId: string
+  providerName: string
+  quoteId: string | null
+  latestMessage: string | null
+  latestMessageAt: string | null
+  unreadCount: number
+  updatedAt: string
+}
+
+export type MarketplaceConversationMessage = {
+  id: string
+  conversationId: string
+  jobId: string
+  senderId: string
+  senderName: string
+  senderRole: "consumer" | "provider"
+  body: string
+  readAt: string | null
+  createdAt: string
+}
+
 export type MarketplaceProviderQuote = MarketplaceQuote & {
+  jobReference: string
   jobTitle: string
   jobCategory: string
   jobLocationLabel: string
@@ -171,6 +203,8 @@ export type MarketplaceProvider = {
   region: string
   avatarPath?: string | null
 }
+
+export type MarketplaceProviderProfileInput = Pick<MarketplaceProvider, "publicName" | "bio" | "region">
 
 export type MarketplaceNotification = {
   id: string
@@ -331,6 +365,8 @@ export type AdminModerationReport = {
   subjectType: string
 
   subjectId: string
+
+  jobReference: string | null
 
   reason: string
 
@@ -539,6 +575,7 @@ type AuthContextValue = {
     limit: number,
 
     offset: number,
+    search?: string,
   ) => Promise<AdminPage<AdminModerationReport>>
 
   decideAdminModerationReport: (
@@ -582,7 +619,8 @@ type AuthContextValue = {
     offset: number,
   ) => Promise<AdminPage<MarketplaceProvider>>
 
-  getMarketplaceProvider: (providerId: string) => Promise<MarketplaceProvider>
+  getMarketplaceProvider: (providerId: string, jobId?: string) => Promise<MarketplaceProvider>
+  updateMarketplaceProviderProfile: (input: MarketplaceProviderProfileInput) => Promise<MarketplaceProvider>
   getSavedProviders: () => Promise<MarketplaceProvider[]>
   saveProvider: (providerId: string) => Promise<void>
   removeSavedProvider: (providerId: string) => Promise<void>
@@ -622,6 +660,11 @@ type AuthContextValue = {
     details?: { note: string },
   ) => Promise<MarketplaceJob>
 
+  getMarketplaceConversations: (role: "consumer" | "provider") => Promise<MarketplaceConversation[]>
+  openMarketplaceConversation: (jobId: string, role: "consumer" | "provider", providerId?: string) => Promise<MarketplaceConversation>
+  getMarketplaceConversationMessages: (conversationId: string) => Promise<MarketplaceConversationMessage[]>
+  sendMarketplaceConversationMessage: (conversationId: string, body: string) => Promise<MarketplaceConversationMessage>
+
   getServiceListings: (role: "consumer" | "provider", view: "feed" | "mine") => Promise<ServiceListing[]>
   createServiceListing: (input: ServiceListingInput) => Promise<ServiceListing>
   uploadServiceListingMedia: (file: File) => Promise<ServiceListingMedia>
@@ -633,7 +676,7 @@ type AuthContextValue = {
   createServiceListingReview: (listingId: string, rating: number, comment: string) => Promise<ServiceListingReview>
   getServiceListingMessages: (listingId: string, role: "consumer" | "provider") => Promise<ServiceListingMessage[]>
   sendServiceListingMessage: (listingId: string, role: "consumer" | "provider", body: string) => Promise<ServiceListingMessage>
-  getAdminServiceListingMessages: (limit: number, offset: number) => Promise<AdminPage<AdminServiceListingMessage>>
+  getAdminServiceListingMessages: (limit: number, offset: number, search?: string) => Promise<AdminPage<AdminServiceListingMessage>>
 
   subscribeMarketplaceChanges: (onChange: () => void) => () => void
 
@@ -913,6 +956,7 @@ async function fetchAdminPage<T>(
   offset: number,
 
   status?: AdminVerificationStatus | AdminModerationStatus,
+  searchValue?: string,
 ): Promise<AdminPage<T>> {
   const search = new URLSearchParams({
     limit: String(limit),
@@ -920,6 +964,7 @@ async function fetchAdminPage<T>(
   })
 
   if (status) search.set("status", status)
+  if (searchValue?.trim()) search.set("search", searchValue.trim())
 
   const response = await adminRequest(`/v1/admin/${resource}?${search}`)
 
@@ -1718,7 +1763,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const getAdminModerationReports = useCallback(
-    (status: AdminModerationStatus, limit: number, offset: number) =>
+    (status: AdminModerationStatus, limit: number, offset: number, searchValue = "") =>
       fetchAdminPage<AdminModerationReport>(
         "moderation",
 
@@ -1727,6 +1772,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         offset,
 
         status,
+        searchValue,
       ),
 
     [],
@@ -1880,7 +1926,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const sendServiceListingMessage = useCallback((listingId: string, role: "consumer" | "provider", body: string) => marketplacePost<ServiceListingMessage>(`/v1/listings/${encodeURIComponent(listingId)}/messages?role=${role}`, { body }), [])
 
-  const getAdminServiceListingMessages = useCallback((limit: number, offset: number) => fetchAdminPage<AdminServiceListingMessage>("messages", limit, offset), [])
+  const getAdminServiceListingMessages = useCallback((limit: number, offset: number, searchValue = "") => fetchAdminPage<AdminServiceListingMessage>("messages", limit, offset, undefined, searchValue), [])
 
   const getMarketplaceProviders = useCallback(
     (search: string, region: string, limit = 25, offset = 0) => {
@@ -1898,10 +1944,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const getMarketplaceProvider = useCallback(
-    (providerId: string) =>
+    (providerId: string, jobId?: string) =>
       marketplaceRequest<MarketplaceProvider>(
-        `/v1/providers/${encodeURIComponent(providerId)}`,
+        `/v1/providers/${encodeURIComponent(providerId)}${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ""}`,
       ),
+    [],
+  )
+
+  const updateMarketplaceProviderProfile = useCallback(
+    (input: MarketplaceProviderProfileInput) => marketplaceRequest<MarketplaceProvider>("/v1/me/provider-profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
     [],
   )
 
@@ -1988,6 +2043,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         `/v1/jobs/${encodeURIComponent(jobId)}/${transition}`,
         details ?? {},
       ),
+    [],
+  )
+
+  const getMarketplaceConversations = useCallback(
+    (role: "consumer" | "provider") => marketplaceRequest<MarketplaceConversation[]>(`/v1/job-conversations?role=${role}`),
+    [],
+  )
+
+  const openMarketplaceConversation = useCallback(
+    (jobId: string, role: "consumer" | "provider", providerId?: string) => marketplacePost<MarketplaceConversation>(
+      `/v1/jobs/${encodeURIComponent(jobId)}/conversations?role=${role}`,
+      providerId ? { providerId } : {},
+    ),
+    [],
+  )
+
+  const getMarketplaceConversationMessages = useCallback(
+    (conversationId: string) => marketplaceRequest<MarketplaceConversationMessage[]>(`/v1/job-conversations/${encodeURIComponent(conversationId)}/messages`),
+    [],
+  )
+
+  const sendMarketplaceConversationMessage = useCallback(
+    (conversationId: string, body: string) => marketplacePost<MarketplaceConversationMessage>(`/v1/job-conversations/${encodeURIComponent(conversationId)}/messages`, { body }),
     [],
   )
 
@@ -2154,6 +2232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getMarketplaceProviders,
 
         getMarketplaceProvider,
+        updateMarketplaceProviderProfile,
         getSavedProviders,
         saveProvider,
         removeSavedProvider,
@@ -2175,6 +2254,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         acceptMarketplaceQuote,
 
         transitionMarketplaceJob,
+        getMarketplaceConversations,
+        openMarketplaceConversation,
+        getMarketplaceConversationMessages,
+        sendMarketplaceConversationMessage,
 
         subscribeMarketplaceChanges,
 

@@ -269,6 +269,20 @@ textarea { resize: vertical; line-height: 1.5; }
 .job-card > span { color: var(--slate-500); font-size: 11px; }
 .feed-layout { display: grid; grid-template-columns: 1fr 420px; gap: 18px; margin-top: 18px; align-items: start; }
 .job-feed { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.job-feed-search { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(145px, 1fr) minmax(145px, 1fr) auto auto; gap: 10px; align-items: end; }
+.job-feed-search label { display: grid; gap: 6px; color: var(--slate-700); font-size: 12px; font-weight: 650; }
+.job-feed-search input, .job-feed-search select { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid var(--slate-300); border-radius: 9px; background: white; color: var(--slate-900); font: inherit; }
+.job-feed-count { margin: 12px 0 0; }
+.proposal-summary-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.proposal-summary-cards .card { display: grid; gap: 8px; padding: 16px; }
+.proposal-summary-cards span { color: var(--slate-600); font-size: 13px; }
+.proposal-summary-cards strong { font-size: 25px; }
+.provider-proposal-table-card { min-width: 0; }
+.provider-proposal-toolbar { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; }
+.provider-proposal-search { display: grid; gap: 6px; min-width: min(100%, 300px); color: var(--slate-700); font-size: 12px; font-weight: 650; }
+.provider-proposal-search input { min-height: 40px; padding: 0 11px; border: 1px solid var(--slate-300); border-radius: 9px; background: white; font: inherit; }
+.provider-proposal-table { min-width: 1050px; }
+.provider-proposal-message { min-width: 220px; max-width: 360px; white-space: normal; }
 .bid-form { display: grid; gap: 15px; position: sticky; top: 92px; }
 .bid-form > p { color: var(--slate-500); }
 .wallet-hero { padding: 28px; color: white; background: var(--brand); border-radius: var(--radius); display: grid; margin-bottom: 18px; }
@@ -369,6 +383,19 @@ tbody tr:last-child td { border-bottom: 0; }
 .service-message-list article small { font-size: 10px; opacity: .75; }
 .service-message-empty { color: var(--slate-600); text-align: center; margin: auto; }
 .service-message-panel .reply-box { padding: 12px; border-top: 1px solid var(--slate-200); }
+.marketplace-message-inbox { margin-bottom: 16px; }
+.marketplace-message-inbox .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; }
+.marketplace-message-inbox .section-heading h2 { margin: 0 0 4px; font-size: 17px; }
+.marketplace-message-inbox .section-heading p { margin: 0; color: var(--slate-600); font-size: 13px; }
+.marketplace-job-chat { padding: 0; display: flex; flex-direction: column; min-height: 500px; margin-bottom: 16px; }
+.legacy-message-heading { margin: 24px 0 12px; font-size: 17px; }
+.conversation-modal-backdrop { z-index: 1100; }
+.conversation-modal { width: min(100%, 760px); height: min(78vh, 760px); padding: 0; display: flex; flex-direction: column; }
+.conversation-modal-header { padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--slate-200); }
+.conversation-modal-header h2 { margin: 0 0 4px; font-size: 18px; }
+.conversation-modal-header p { margin: 0; color: var(--slate-600); font-size: 13px; }
+.conversation-modal-messages { min-height: 220px; max-height: none; }
+.conversation-modal .reply-box { border-top: 1px solid var(--slate-200); }
 .admin-message-body { min-width: 240px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .account-avatar-edit { display: flex; align-items: center; gap: 14px; }
 @media (max-width: 720px) { .service-message-layout { grid-template-columns: 1fr; } .service-message-threads { max-height: 220px; overflow: auto; } }
@@ -604,8 +631,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .table-link small { color: var(--slate-500); font-size: 11px; font-weight: 400; }
 .proposal-message-cell { min-width: 220px; max-width: 360px; white-space: normal; line-height: 1.45; }
 .selected-proposal-row { background: #fff7ed; }
+.bidder-profile-bio { margin: 5px 0 0; max-width: 260px; color: var(--slate-600); font-size: 12px; white-space: normal; }
 .bid-list.table-card { min-width: 0; padding: 0; overflow: hidden; }
 @media (max-width: 640px) { .provider-directory-filters { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .job-feed-search { grid-template-columns: repeat(2, minmax(0, 1fr)); } .job-feed-search-field { grid-column: 1 / -1; } }
+@media (max-width: 640px) { .proposal-summary-cards { grid-template-columns: 1fr; } .provider-proposal-toolbar { align-items: stretch; flex-direction: column; } }
 @media (max-width: 850px) { .admin-marketplace-layout { grid-template-columns: 1fr; } .admin-marketplace-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .route-access-notice, .prototype-boundary-notice { margin: 12px 16px 0; align-items: flex-start; } }
 .provider-application { display: grid; gap: 18px; }

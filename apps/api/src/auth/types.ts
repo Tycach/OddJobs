@@ -74,6 +74,7 @@ export type MarketplaceQuoteStatus =
 
 export type MarketplaceJob = {
   id: string
+  jobReference: string
   customerId: string
   title: string
   description: string
@@ -106,6 +107,7 @@ export type ServiceListingMedia = {
 
 export type ServiceListing = {
   id: string
+  jobReference: string
   providerId: string
   providerName: string
   customerId: string | null
@@ -156,12 +158,13 @@ export type ServiceListingMessage = {
 }
 
 export type AdminServiceListingMessage = ServiceListingMessage & {
+  jobReference: string
   listingTitle: string
   providerName: string
   customerName: string
 }
 
-export type CreateServiceListingInput = Omit<ServiceListing, "id" | "providerId" | "providerName" | "customerId" | "customerName" | "status" | "claimExpiresAt" | "createdAt" | "updatedAt" | "currency" | "activity" | "media"> & { media?: ServiceListingMedia[] }
+export type CreateServiceListingInput = Omit<ServiceListing, "id" | "jobReference" | "providerId" | "providerName" | "customerId" | "customerName" | "status" | "claimExpiresAt" | "createdAt" | "updatedAt" | "currency" | "activity" | "media"> & { media?: ServiceListingMedia[] }
 
 export type MarketplaceQuote = {
   id: string
@@ -178,6 +181,7 @@ export type MarketplaceQuote = {
 }
 
 export type MarketplaceProviderQuote = MarketplaceQuote & {
+  jobReference: string
   jobTitle: string
   jobCategory: string
   jobLocationLabel: string
@@ -191,6 +195,12 @@ export type MarketplaceProvider = {
   bio: string
   region: string
   avatarPath?: string | null
+}
+
+export type UpdateMarketplaceProviderProfileInput = {
+  publicName: string
+  bio: string
+  region: string
 }
 
 export type MarketplaceNotification = {
@@ -250,6 +260,35 @@ export type SubmitMarketplaceQuoteInput = {
   availability: string
 }
 
+export type JobConversation = {
+  id: string
+  jobId: string
+  jobReference: string
+  jobTitle: string
+  jobStatus: MarketplaceJob["status"]
+  customerId: string
+  customerName: string
+  providerId: string
+  providerName: string
+  quoteId: string | null
+  latestMessage: string | null
+  latestMessageAt: string | null
+  unreadCount: number
+  updatedAt: string
+}
+
+export type JobConversationMessage = {
+  id: string
+  conversationId: string
+  jobId: string
+  senderId: string
+  senderName: string
+  senderRole: "consumer" | "provider"
+  body: string
+  readAt: string | null
+  createdAt: string
+}
+
 export class MarketplaceConflictError extends Error {
   constructor(message: string) {
     super(message)
@@ -258,6 +297,10 @@ export class MarketplaceConflictError extends Error {
 }
 
 export interface MarketplaceStore {
+  listJobConversations?(userId: string, role: "consumer" | "provider"): Promise<JobConversation[]>
+  openJobConversation?(userId: string, role: "consumer" | "provider", jobId: string, providerId?: string): Promise<JobConversation | null>
+  listJobConversationMessages?(userId: string, conversationId: string): Promise<JobConversationMessage[] | null>
+  createJobConversationMessage?(userId: string, conversationId: string, body: string, requestId: string): Promise<JobConversationMessage | null>
   listServiceListings?(userId: string, role: "consumer" | "provider", view: "feed" | "mine"): Promise<ServiceListing[]>
   createServiceListing?(userId: string, input: CreateServiceListingInput, requestId: string): Promise<ServiceListing>
   claimServiceListing?(userId: string, listingId: string, requestId: string): Promise<ServiceListing | null>
@@ -277,7 +320,9 @@ export interface MarketplaceStore {
     offset: number
   }): Promise<AdminPage<MarketplaceProvider>>
 
-  getProvider?(providerId: string, requesterUserId?: string): Promise<MarketplaceProvider | null>
+  getProvider?(providerId: string, requesterUserId?: string, quoteJobId?: string): Promise<MarketplaceProvider | null>
+
+  updateProviderProfile?(userId: string, input: UpdateMarketplaceProviderProfileInput): Promise<MarketplaceProvider | null>
 
   listSavedProviders?(customerId: string): Promise<MarketplaceProvider[]>
 
@@ -471,6 +516,8 @@ export type AdminModerationReport = {
 
   subjectId: string
 
+  jobReference: string | null
+
   reason: string
 
   details: string
@@ -560,6 +607,7 @@ export interface AdminStore {
     limit: number,
 
     offset: number,
+    search?: string,
   ): Promise<AdminPage<AdminModerationReport>>
 
   decideAdminModerationReport(input: {
@@ -645,7 +693,7 @@ export interface AdminStore {
     offset: number,
   ): Promise<AdminPage<AdminMarketplaceActivity>>
 
-  listAdminServiceListingMessages?(limit: number, offset: number): Promise<AdminPage<AdminServiceListingMessage>>
+  listAdminServiceListingMessages?(limit: number, offset: number, search?: string): Promise<AdminPage<AdminServiceListingMessage>>
 
   listAdminMarketplaceJobs?(input: {
     filters: AdminMarketplaceJobFilters

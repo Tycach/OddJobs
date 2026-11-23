@@ -84,6 +84,8 @@ export type DemoJob = {
 export type DemoStore = {
   jobs: DemoJob[]
   selectedJobId: string
+  selectedJobNumber: number
+  selectedMarketplaceConversationId: string
   selectedBid: DemoBid
   savedProviders: string[]
   messages: string[]
@@ -107,6 +109,8 @@ export const demoSessionKey = "oddjobs-demo-session-v1"
 
 export const initialDemoStore: DemoStore = {
   selectedJobId: "OJ-2841",
+  selectedJobNumber: 0,
+  selectedMarketplaceConversationId: "",
   selectedBid: {
     provider: "Amina Hassan",
     price: 2300,

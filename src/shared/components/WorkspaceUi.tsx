@@ -8,6 +8,7 @@ export function Icon({ name, size = 20 }: { name: string; size?: number }) {
     location: <><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2" /></>,
     check: <path d="m5 12 4 4L19 6" />,
     message: <path d="M21 12a8 8 0 0 1-8 8H5l-3 2 1-5a9 9 0 1 1 18-5Z" />,
+    play: <><path d="m8 5 12 7-12 7Z" /></>,
     arrow: <path d="m5 12 14 0m-5-5 5 5-5 5" />,
     chevron: <path d="m9 18 6-6-6-6" />,
     star: <path d="m12 2 3 6 7 .9-5 4.8 1.3 6.8L12 17.3l-6.3 3.2L7 13.7 2 8.9 9 8Z" />,
@@ -24,14 +25,16 @@ export function Button({
   onClick,
   icon,
   disabled = false,
+  type,
 }: {
   children: ReactNode
   variant?: "primary" | "secondary" | "ghost" | "danger"
   onClick?: () => void
   icon?: string
   disabled?: boolean
+  type?: "button" | "submit" | "reset"
 }) {
-  return <button className={`btn btn-${variant}`} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} size={18} />}<span>{children}</span></button>
+  return <button type={type} className={`btn btn-${variant}`} onClick={onClick} disabled={disabled}>{icon && <Icon name={icon} size={18} />}<span>{children}</span></button>
 }
 
 export function Badge({ children, tone = "green" }: { children: ReactNode; tone?: "green" | "amber" | "slate" | "red" }) {

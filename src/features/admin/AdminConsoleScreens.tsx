@@ -434,6 +434,7 @@ function CustomerIdentityQueue({ onBack }: { onBack: () => void }) {
 function Moderation() {
   const { getAdminModerationReports, decideAdminModerationReport } = useAuth()
   const [status, setStatus] = useState<AdminModerationStatus>("open")
+  const [jobSearch, setJobSearch] = useState("")
   const [offset, setOffset] = useState(0)
   const [reports, setReports] = useState<AdminModerationReport[]>([])
   const [total, setTotal] = useState(0)
@@ -447,7 +448,7 @@ function Moderation() {
   const load = () => {
     setLoading(true)
     setError("")
-    void getAdminModerationReports(status, pageSize, offset)
+    void getAdminModerationReports(status, pageSize, offset, jobSearch)
       .then((page) => {
         setReports(page.items)
         setTotal(page.total)
@@ -462,7 +463,7 @@ function Moderation() {
       )
       .finally(() => setLoading(false))
   }
-  useEffect(() => load(), [getAdminModerationReports, status, offset])
+  useEffect(() => load(), [getAdminModerationReports, status, offset, jobSearch])
 
   const decide = async (decision: "reviewing" | "resolved" | "dismissed") => {
     if (!selected) return
@@ -504,6 +505,10 @@ function Moderation() {
       />
       {error && <p className="form-error" role="alert">{error}</p>}
       <label>
+        Search reports by Job ID
+        <input value={jobSearch} onChange={(event) => { setJobSearch(event.target.value); setOffset(0) }} placeholder="For example, OJ-0000000042" />
+      </label>
+      <label>
         Report status
         <select value={status} onChange={(event) => {
           setStatus(event.target.value as AdminModerationStatus)
@@ -524,7 +529,7 @@ function Moderation() {
               <tbody>{reports.map((report) => (
                 <tr key={report.id}>
                   <td>{report.reason.replace(/_/g, " ")}</td>
-                  <td>{report.subjectType} · {report.subjectId}</td>
+                  <td>{report.subjectType === "job" ? `Job ID ${report.jobReference ?? report.subjectId}` : `${report.subjectType} · ${report.subjectId}`}</td>
                   <td>{report.details}</td>
                   <td>{report.status}</td>
                   <td>{new Date(report.createdAt).toLocaleString()}</td>

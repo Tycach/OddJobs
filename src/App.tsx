@@ -289,6 +289,12 @@ function AppShell() {
   const [offlineBannerDismissed, setOfflineBannerDismissed] = useState(false)
   const { role, screen } = route
   const workspaceNavigation = navigation[role]
+  useEffect(() => {
+    if (role !== "provider" || screen !== "profile") return
+    const nextRoute: WorkspaceRoute = { role: "provider", screen: "settings" }
+    window.history.replaceState(null, "", workspacePath(nextRoute))
+    setRoute(nextRoute)
+  }, [role, screen])
   const updateStore = (
     update: Partial<DemoStore> | ((current: DemoStore) => DemoStore),
   ) => {
@@ -573,7 +579,7 @@ function AppShell() {
       case "map":
         return <CustomerScreens screen="map" go={go} onOpenProvider={openProvider} />
       case "profile":
-        return <ProviderProfile providerId={role === "provider" ? auth.profile?.id ?? null : selectedProviderId} isOwnProfile={role === "provider"} onPostJob={() => go(role === "provider" ? "providerHome" : "post")} />
+        return role === "provider" ? <CustomerScreens screen="settings" go={go} onOpenProvider={openProvider} /> : <ProviderProfile providerId={selectedProviderId} onPostJob={() => go("post")} />
       case "post":
         return <CustomerScreens screen="post" go={go} onOpenProvider={openProvider} />
       case "jobs":
@@ -831,7 +837,7 @@ function AppShell() {
             {workspaceNavigation.map((n) => (
               <button
                 key={n.screen}
-                className={screen === n.screen ? "active" : ""}
+                className={screen === n.screen || (role === "provider" && screen === "profile" && n.screen === "settings") ? "active" : ""}
                 onClick={() => go(n.screen)}
               >
                 <Icon name={n.icon} />

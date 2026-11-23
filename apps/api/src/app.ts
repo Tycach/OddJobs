@@ -172,7 +172,7 @@ export async function buildApp({
       callback(null, origin === config.webOrigin ? origin : false)
     },
 
-    methods: ["GET", "HEAD", "POST", "OPTIONS"],
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   })
 
   await app.register(swagger, {
@@ -441,6 +441,7 @@ export async function buildApp({
     type: "object",
     required: [
       "id",
+      "jobReference",
       "customerId",
       "title",
       "description",
@@ -456,6 +457,7 @@ export async function buildApp({
     ],
     properties: {
       id: { type: "string", format: "uuid" },
+      jobReference: { type: "string", pattern: "^OJ-[0-9]{10}$" },
       customerId: { type: "string", format: "uuid" },
       title: { type: "string" },
       description: { type: "string" },
@@ -543,6 +545,26 @@ export async function buildApp({
       jobId: { type: "string", format: "uuid" },
       quoteId: { type: "string", format: "uuid" },
     },
+  } as const
+
+  const conversationPathParamsSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["conversationId"],
+    properties: { conversationId: { type: "string", format: "uuid" } },
+  } as const
+
+  const conversationInputSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: { providerId: { type: "string", format: "uuid" } },
+  } as const
+
+  const conversationMessageInputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["body"],
+    properties: { body: { type: "string", minLength: 1, maxLength: 5000 } },
   } as const
 
   const providerPathParamsSchema = {
@@ -634,6 +656,11 @@ export async function buildApp({
         summary: "Read an approved provider's public profile or your own profile.",
         security: [{ bearerAuth: [] }],
         params: providerPathParamsSchema,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { jobId: { type: "string", format: "uuid" } },
+        },
         response: {
           200: providerResponseSchema,
           401: marketplaceErrorSchema,
@@ -648,12 +675,44 @@ export async function buildApp({
         return reply.code(503).send({ error: "Marketplace data storage is unavailable." })
       }
       const { providerId } = request.params as { providerId: string }
-      const provider = await marketplaceStore.getProvider(providerId, request.authPrincipal?.id)
+      const { jobId } = request.query as { jobId?: string }
+      const provider = await marketplaceStore.getProvider(providerId, request.authPrincipal?.id, jobId)
       if (!provider) return reply.code(404).send({ error: "Provider not found." })
       reply.header("Cache-Control", "no-store")
       return provider
     },
   )
+
+  app.patch("/v1/me/provider-profile", {
+    preHandler: requireMarketplaceRole("provider"),
+    schema: {
+      tags: ["marketplace"],
+      summary: "Update the signed-in worker's public profile.",
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["publicName", "bio", "region"],
+        properties: {
+          publicName: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
+          bio: { type: "string", maxLength: 2000 },
+          region: { type: "string", maxLength: 120 },
+        },
+      },
+      response: { 200: providerResponseSchema, 403: marketplaceErrorSchema, 404: marketplaceErrorSchema, 503: marketplaceErrorSchema },
+    },
+  }, async (request, reply) => {
+    if (!marketplaceStore?.updateProviderProfile || !request.authPrincipal) return reply.code(503).send({ error: "Worker profile updates are unavailable." })
+    const input = request.body as import("./auth/types.js").UpdateMarketplaceProviderProfileInput
+    const provider = await marketplaceStore.updateProviderProfile(request.authPrincipal.id, {
+      publicName: input.publicName.trim(),
+      bio: input.bio.trim(),
+      region: input.region.trim(),
+    })
+    if (!provider) return reply.code(404).send({ error: "Your worker profile could not be found." })
+    reply.header("Cache-Control", "no-store")
+    return provider
+  })
 
   app.get("/v1/providers/:providerId/reviews", {
     preHandler: requireMarketplaceRole("consumer", "provider"),
@@ -889,13 +948,13 @@ export async function buildApp({
 
   app.get("/v1/admin/messages", {
     preHandler: requireAdmin,
-    schema: { querystring: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 50 }, offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 } } } },
+    schema: { querystring: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 50 }, offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 }, search: { type: "string", maxLength: 80, default: "" } } } },
   }, async (request, reply) => {
     if (!adminStore?.listAdminServiceListingMessages || !request.authPrincipal) return reply.code(503).send({ error: "Admin message inbox is unavailable." })
-    const { limit = 50, offset = 0 } = request.query as { limit?: number; offset?: number }
-    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.messages.read", targetType: "service_listing_message", targetId: null, metadata: { limit, offset }, requestId: request.id })
+    const { limit = 50, offset = 0, search = "" } = request.query as { limit?: number; offset?: number; search?: string }
+    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.messages.read", targetType: "service_listing_message", targetId: null, metadata: { limit, offset, search }, requestId: request.id })
     reply.header("Cache-Control", "no-store")
-    return adminStore.listAdminServiceListingMessages(limit, offset)
+    return adminStore.listAdminServiceListingMessages(limit, offset, search)
   })
 
   app.get("/v1/reviews", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { querystring: { type: "object", additionalProperties: false, required: ["role"], properties: { role: { type: "string", enum: ["consumer", "provider"] } } } } }, async (request, reply) => {
@@ -949,11 +1008,11 @@ export async function buildApp({
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["id", "jobId", "providerId", "providerName", "amountMinor", "currency", "message", "availability", "status", "createdAt", "updatedAt", "jobTitle", "jobCategory", "jobLocationLabel", "jobStatus"],
+              required: ["id", "jobId", "jobReference", "providerId", "providerName", "amountMinor", "currency", "message", "availability", "status", "createdAt", "updatedAt", "jobTitle", "jobCategory", "jobLocationLabel", "jobStatus"],
               properties: {
                 id: { type: "string" }, jobId: { type: "string" }, providerId: { type: "string" }, providerName: { type: "string" },
                 amountMinor: { type: "integer" }, currency: { type: "string" }, message: { type: "string" }, availability: { type: "string" },
-                status: { type: "string" }, createdAt: { type: "string" }, updatedAt: { type: "string" }, jobTitle: { type: "string" },
+                jobReference: { type: "string", pattern: "^OJ-[0-9]{10}$" }, status: { type: "string" }, createdAt: { type: "string" }, updatedAt: { type: "string" }, jobTitle: { type: "string" },
                 jobCategory: { type: "string" }, jobLocationLabel: { type: "string" }, jobStatus: { type: "string" },
               },
             },
@@ -1179,6 +1238,82 @@ export async function buildApp({
       }
     },
   )
+
+  app.get("/v1/job-conversations", {
+    preHandler: requireMarketplaceRole("consumer", "provider"),
+    schema: {
+      tags: ["marketplace"],
+      summary: "List job conversations for the selected workspace.",
+      security: [{ bearerAuth: [] }],
+      querystring: marketplaceRoleQuerySchema,
+    },
+  }, async (request, reply) => {
+    if (!marketplaceStore?.listJobConversations || !request.authPrincipal || !profileStore) return reply.code(503).send({ error: "Job conversations are unavailable." })
+    const { role } = request.query as { role: "consumer" | "provider" }
+    const profile = await profileStore.getProfile(request.authPrincipal.id)
+    if (!profile?.roles.includes(role)) return reply.code(403).send({ error: `An active ${role} role is required.` })
+    reply.header("Cache-Control", "no-store")
+    return marketplaceStore.listJobConversations(request.authPrincipal.id, role)
+  })
+
+  app.post("/v1/jobs/:jobId/conversations", {
+    preHandler: requireMarketplaceRole("consumer", "provider"),
+    schema: {
+      tags: ["marketplace"],
+      summary: "Open or create a private conversation for a job and worker.",
+      security: [{ bearerAuth: [] }],
+      params: marketplacePathParamsSchema,
+      querystring: marketplaceRoleQuerySchema,
+      body: conversationInputSchema,
+    },
+  }, async (request, reply) => {
+    if (!marketplaceStore?.openJobConversation || !request.authPrincipal || !profileStore) return reply.code(503).send({ error: "Job conversations are unavailable." })
+    const { role } = request.query as { role: "consumer" | "provider" }
+    const profile = await profileStore.getProfile(request.authPrincipal.id)
+    if (!profile?.roles.includes(role)) return reply.code(403).send({ error: `An active ${role} role is required.` })
+    const { jobId } = request.params as { jobId: string }
+    const { providerId } = request.body as { providerId?: string }
+    const conversation = await marketplaceStore.openJobConversation(request.authPrincipal.id, role, jobId, providerId)
+    if (!conversation) return reply.code(404).send({ error: "This job conversation is not available to your account." })
+    reply.header("Cache-Control", "no-store")
+    return reply.code(200).send(conversation)
+  })
+
+  app.get("/v1/job-conversations/:conversationId/messages", {
+    preHandler: requireMarketplaceRole("consumer", "provider"),
+    schema: {
+      tags: ["marketplace"],
+      summary: "Read and mark a job conversation's messages as read.",
+      security: [{ bearerAuth: [] }],
+      params: conversationPathParamsSchema,
+    },
+  }, async (request, reply) => {
+    if (!marketplaceStore?.listJobConversationMessages || !request.authPrincipal) return reply.code(503).send({ error: "Job messages are unavailable." })
+    const { conversationId } = request.params as { conversationId: string }
+    const messages = await marketplaceStore.listJobConversationMessages(request.authPrincipal.id, conversationId)
+    if (!messages) return reply.code(404).send({ error: "This job conversation is not available to your account." })
+    reply.header("Cache-Control", "no-store")
+    return messages
+  })
+
+  app.post("/v1/job-conversations/:conversationId/messages", {
+    preHandler: requireMarketplaceRole("consumer", "provider"),
+    schema: {
+      tags: ["marketplace"],
+      summary: "Send a message in a job conversation.",
+      security: [{ bearerAuth: [] }],
+      params: conversationPathParamsSchema,
+      body: conversationMessageInputSchema,
+    },
+  }, async (request, reply) => {
+    if (!marketplaceStore?.createJobConversationMessage || !request.authPrincipal) return reply.code(503).send({ error: "Job messages are unavailable." })
+    const { conversationId } = request.params as { conversationId: string }
+    const { body } = request.body as { body: string }
+    const message = await marketplaceStore.createJobConversationMessage(request.authPrincipal.id, conversationId, body, request.id)
+    if (!message) return reply.code(404).send({ error: "This job conversation is not available to your account." })
+    reply.header("Cache-Control", "no-store")
+    return reply.code(201).send(message)
+  })
 
   app.post(
     "/v1/jobs/:jobId/quotes/:quoteId/accept",
@@ -1952,6 +2087,7 @@ export async function buildApp({
               maximum: 100000,
               default: 0,
             },
+            search: { type: "string", maxLength: 80, default: "" },
           },
         },
 
@@ -1967,6 +2103,8 @@ export async function buildApp({
               "subjectType",
 
               "subjectId",
+
+              "jobReference",
 
               "reason",
 
@@ -1987,6 +2125,8 @@ export async function buildApp({
               subjectType: { type: "string" },
 
               subjectId: { type: "string" },
+
+              jobReference: { type: "string", nullable: true },
 
               reason: { type: "string" },
 
@@ -2017,6 +2157,7 @@ export async function buildApp({
           limit: number
 
           offset: number
+          search: string
         }
       }>,
 
@@ -2028,7 +2169,7 @@ export async function buildApp({
           .send({ error: "Admin data storage is unavailable." })
       }
 
-      const { status, limit, offset } = request.query
+      const { status, limit, offset, search } = request.query
 
       await adminStore.recordAdminAuditEvent({
         actorUserId: request.authPrincipal.id,
@@ -2039,14 +2180,14 @@ export async function buildApp({
 
         targetId: null,
 
-        metadata: { status, limit, offset },
+        metadata: { status, limit, offset, search },
 
         requestId: request.id,
       })
 
       reply.header("Cache-Control", "no-store")
 
-      return adminStore.listAdminModerationReports(status, limit, offset)
+      return adminStore.listAdminModerationReports(status, limit, offset, search)
     },
   )
 

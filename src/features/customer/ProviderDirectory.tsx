@@ -3,6 +3,7 @@ import { useAuth, type MarketplaceProvider, type ServiceListing, type ServiceLis
 import { useMarketplaceProviders } from "../marketplace/hooks"
 import { Avatar, Badge } from "../../shared/components/WorkspaceUi"
 import ListingMediaGallery from "../marketplace/ListingMediaGallery"
+import { useDemoStore } from "../../demo/context"
 
 export default function ProviderDirectory({
   onOpenProvider,
@@ -110,6 +111,7 @@ export function ProviderProfile({
   onPostJob: () => void
   isOwnProfile?: boolean
 }) {
+  const { store } = useDemoStore()
   const { getMarketplaceProvider, getPublicProviderReviews, getProfileAvatarUrl, getServiceListings, getSavedProviders, saveProvider, removeSavedProvider } = useAuth()
   const [provider, setProvider] = useState<MarketplaceProvider | null>(null)
   const [reviews, setReviews] = useState<ServiceListingReview[]>([])
@@ -158,7 +160,7 @@ export function ProviderProfile({
     setLoading(true)
     const role = isOwnProfile ? "provider" : "consumer"
     void Promise.allSettled([
-      getMarketplaceProvider(providerId),
+      getMarketplaceProvider(providerId, !isOwnProfile && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(store.selectedJobId) ? store.selectedJobId : undefined),
       getPublicProviderReviews(providerId),
       getServiceListings(role, isOwnProfile ? "mine" : "feed"),
     ]).then(([profileResult, reviewsResult, listingsResult]) => {
@@ -172,7 +174,7 @@ export function ProviderProfile({
       }
     }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [getMarketplaceProvider, getPublicProviderReviews, getServiceListings, isOwnProfile, providerId])
+  }, [getMarketplaceProvider, getPublicProviderReviews, getServiceListings, isOwnProfile, providerId, store.selectedJobId])
 
   if (loading) return <p className="center-note" role="status">Loading provider profile…</p>
   if (error || !provider) {
@@ -188,7 +190,7 @@ export function ProviderProfile({
   return (
     <div className="content narrow">
       <section className="card provider-profile-card">
-        <span className={isOwnProfile ? "badge" : "badge badge-green"}>{isOwnProfile ? "Your worker profile" : "Approved provider"}</span>
+        <span className={isOwnProfile ? "badge" : "badge badge-green"}>{isOwnProfile ? "My profile" : "Worker profile"}</span>
         <Avatar large src={getProfileAvatarUrl(provider.avatarPath)} name={provider.publicName} />
         <h1>{provider.publicName}</h1>
         {!isOwnProfile && <Button variant={isSaved ? "secondary" : "primary"} disabled={saveLoading} onClick={() => void toggleSaved()}>{saveLoading ? "Saving…" : isSaved ? "Remove from saved" : "Save worker"}</Button>}
@@ -203,7 +205,7 @@ export function ProviderProfile({
           <h2>Customer reviews</h2>
           {reviews.length === 0 ? <p>No completed-job reviews yet.</p> : <><p className="rating">{(reviews.reduce((sum, item) => sum + item.rating, 0) / reviews.length).toFixed(1)} / 5 · {reviews.length} verified {reviews.length === 1 ? "review" : "reviews"}</p>{reviews.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} · {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}</>}
         </section>
-        <p className="caption">Contact details are not listed here. Messaging and contact sharing are not available yet.</p>
+        <p className="caption">Private contact details stay hidden. Message this worker through the conversation attached to your job.</p>
         <button className="btn btn-primary" onClick={onPostJob}>{isOwnProfile ? "Back to worker dashboard" : "Post a job"}</button>
       </section>
     </div>

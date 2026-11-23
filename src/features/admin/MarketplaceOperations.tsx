@@ -120,9 +120,9 @@ export default function MarketplaceOperations() {
 
       <section className="card table-card">
         <div className="section-title"><h2>Provider listings and customer claims</h2><span className="caption">Platform-wide view</span></div>
-        <label className="search-box"><span>Search listings, providers, or customers</span><input value={listingSearch} onChange={(event) => { setListingOffset(0); setListingSearch(event.target.value) }} /></label>
+        <label className="search-box"><span>Search Job ID, listings, providers, or customers</span><input value={listingSearch} onChange={(event) => { setListingOffset(0); setListingSearch(event.target.value) }} placeholder="For example, OJ-0000000042" /></label>
         {listingError && <p className="form-error" role="alert">{listingError}</p>}
-        <div className="table-wrap"><table><thead><tr><th>Listing</th><th>Provider</th><th>Customer</th><th>Status</th><th>Claim expiry</th><th>Actions</th></tr></thead><tbody>{listings.map((listing) => <tr key={listing.id}><td>{listing.title}<small className="caption">{listing.category} · {listing.locationLabel}</small><details><summary>Media ({listing.media?.length ?? 0})</summary><ListingMediaGallery media={listing.media ?? []} /></details><details><summary>Activity ({listing.activity?.length ?? 0})</summary><ol>{listing.activity?.map((event, index) => <li key={`${event.requestId}-${index}`}>{event.actorName}: {event.action} · {new Date(event.createdAt).toLocaleString()}</li>)}</ol></details></td><td>{listing.providerName}</td><td>{listing.customerName ?? "—"}</td><td>{listing.status.replace(/_/g, " ")}</td><td>{listing.claimExpiresAt ? new Date(listing.claimExpiresAt).toLocaleString() : "—"}</td><td>{listing.status === "claimed" && <button className="btn btn-secondary" onClick={() => void releaseClaim(listing.id)}>Release claim</button>}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Listing</th><th>Provider</th><th>Customer</th><th>Status</th><th>Claim expiry</th><th>Actions</th></tr></thead><tbody>{listings.map((listing) => <tr key={listing.id}><td><strong>{listing.title}</strong><small className="caption">Job ID {listing.jobReference} · {listing.category} · {listing.locationLabel}</small><details><summary>Media ({listing.media?.length ?? 0})</summary><ListingMediaGallery media={listing.media ?? []} /></details><details><summary>Activity ({listing.activity?.length ?? 0})</summary><ol>{listing.activity?.map((event, index) => <li key={`${event.requestId}-${index}`}>{event.actorName}: {event.action} · {new Date(event.createdAt).toLocaleString()}</li>)}</ol></details></td><td>{listing.providerName}</td><td>{listing.customerName ?? "—"}</td><td>{listing.status.replace(/_/g, " ")}</td><td>{listing.claimExpiresAt ? new Date(listing.claimExpiresAt).toLocaleString() : "—"}</td><td>{listing.status === "claimed" && <button className="btn btn-secondary" onClick={() => void releaseClaim(listing.id)}>Release claim</button>}</td></tr>)}</tbody></table></div>
         {!listingError && listings.length === 0 && <p className="caption">No provider listings match this search.</p>}
         <div className="card-actions"><button className="btn btn-secondary" disabled={listingOffset === 0} onClick={() => setListingOffset((value) => Math.max(0, value - pageSize))}>Previous listings</button><button className="btn btn-secondary" disabled={listingOffset + pageSize >= listingTotal} onClick={() => setListingOffset((value) => value + pageSize)}>Next listings</button></div>
       </section>
@@ -152,7 +152,7 @@ export default function MarketplaceOperations() {
                 <thead><tr><th>Job</th><th>Customer</th><th>Status</th><th>Quotes</th></tr></thead>
                 <tbody>{jobs.map((job) => (
                   <tr key={job.id} className={selected?.id === job.id ? "selected-row" : ""}>
-                    <td><button className="table-link" onClick={() => void openJob(job.id)}>{job.title}<small>{job.id}</small></button></td>
+                    <td><button className="table-link" onClick={() => void openJob(job.id)}>{job.title}<small>Job ID {job.jobReference}</small></button></td>
                     <td>{job.customerDisplayName}</td>
                     <td>{job.status.replace(/_/g, " ")}</td>
                     <td>{job.quoteCount}</td>
@@ -174,7 +174,7 @@ export default function MarketplaceOperations() {
           {detailLoading ? <p role="status">Loading case…</p> : selected ? (
             <>
               <div className="admin-case-heading">
-                <div><h3>{selected.title}</h3><span className="caption">Job {selected.id}</span></div>
+                <div><h3>{selected.title}</h3><span className="caption">Job ID {selected.jobReference}</span></div>
                 <span className="badge badge-amber">{selected.status.replace(/_/g, " ")}</span>
               </div>
               <p>{selected.description}</p>
