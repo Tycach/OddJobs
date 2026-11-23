@@ -865,6 +865,43 @@ function getApiErrorMessage(status: number, fallback: string) {
   return fallback
 }
 
+async function fetchAccountRequest(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 15000)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Your connection is taking longer than expected. Please try again.")
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, durationMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(
+      () => reject(new Error("Account verification timed out. Please sign in again.")),
+      durationMs,
+    )
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeout)
+        resolve(value)
+      },
+      (error: unknown) => {
+        window.clearTimeout(timeout)
+        reject(error)
+      },
+    )
+  })
+}
+
 async function postPolicyConsent(
   accessToken: string,
 
@@ -872,7 +909,7 @@ async function postPolicyConsent(
 
   privacyVersion: string,
 ) {
-  const consentResponse = await fetch(`${apiUrl}/v1/me/policy-consents`, {
+  const consentResponse = await fetchAccountRequest(`${apiUrl}/v1/me/policy-consents`, {
     method: "POST",
 
     headers: {
@@ -900,10 +937,10 @@ async function fetchProfile(
 ): Promise<{ profile: AuthProfile; policyConsentRequired: boolean }> {
   const headers = { Authorization: `Bearer ${session.access_token}` }
 
-  let response = await fetch(`${apiUrl}/v1/me`, { headers })
+  let response = await fetchAccountRequest(`${apiUrl}/v1/me`, { headers })
 
   if (response.status === 404) {
-    response = await fetch(`${apiUrl}/v1/me/bootstrap`, {
+    response = await fetchAccountRequest(`${apiUrl}/v1/me/bootstrap`, {
       method: "POST",
 
       headers,
@@ -1148,7 +1185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(true)
 
       try {
-        const result = await fetchProfile(session)
+        const result = await withTimeout(fetchProfile(session), 20000)
 
         if (active && loadingToken === session.access_token) {
           setProfile(result.profile)
@@ -1162,17 +1199,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           error,
         )
 
-        if (active && loadingToken === session.access_token) setProfile(null)
+        if (active && loadingToken === session.access_token) {
+          loadingToken = null
+          setProfile(null)
+          setLoading(false)
+        }
       } finally {
         if (active && loadingToken === session.access_token) setLoading(false)
       }
     }
 
-    void supabase.auth.getSession().then(({ data, error }) => {
-      if (error) console.error("Unable to restore the Supabase session.", error)
+    void withTimeout(supabase.auth.getSession(), 15000)
+      .then(({ data, error }) => {
+        if (error) console.error("Unable to restore the Supabase session.", error)
 
-      if (active) void loadProfile(data.session)
-    })
+        if (active) void loadProfile(data.session)
+      })
+      .catch((error: unknown) => {
+        console.error("Unable to verify the saved account session.", error)
+        if (active) {
+          setProfile(null)
+          setLoading(false)
+        }
+      })
 
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY") setRecovery(true)
@@ -1246,7 +1295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       )
     }
 
-    const { data, error } = await supabase.auth.getSession()
+    const { data, error } = await withTimeout(supabase.auth.getSession(), 15000)
     if (error) {
       throw new Error(
         getAuthErrorMessage(error, "Please sign in again and retry."),
@@ -1261,7 +1310,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setLoading(true)
     try {
-      const result = await fetchProfile(data.session)
+      const result = await withTimeout(fetchProfile(data.session), 20000)
       setProfile(result.profile)
       setPolicyConsentRequired(result.policyConsentRequired)
       return result.profile
