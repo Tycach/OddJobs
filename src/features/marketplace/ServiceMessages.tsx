@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useAuth, type AdminServiceListingMessage, type MarketplaceConversation, type MarketplaceConversationMessage, type ServiceListing, type ServiceListingMessage } from "../../auth/AuthProvider"
 import { useDemoStore } from "../../demo/context"
 import { Badge, Button, EmptyState, PageHeader } from "../../shared/components/WorkspaceUi"
+import { AdminSupportInbox, UserSupportInbox } from "./SupportInbox"
 
 type MessageRole = "consumer" | "provider"
 type MessageModalTarget = { kind: "marketplace" | "legacy"; id: string } | null
@@ -188,6 +189,7 @@ export function ServiceMessages({ role }: { role: MessageRole }) {
         <form className="reply-box" onSubmit={(event) => { event.preventDefault(); void (modalTarget.kind === "marketplace" ? sendJobMessage() : send()) }}><input aria-label="Message text" maxLength={5000} value={modalTarget.kind === "marketplace" ? jobDraft : draft} onChange={(event) => modalTarget.kind === "marketplace" ? setJobDraft(event.target.value) : setDraft(event.target.value)} placeholder="Write a message…" /><Button disabled={modalTarget.kind === "marketplace" ? !jobDraft.trim() || jobSending : !draft.trim() || sending}>{modalTarget.kind === "marketplace" ? jobSending ? "Sending…" : "Send" : sending ? "Sending…" : "Send"}</Button></form>
       </section>
     </div>}
+    <UserSupportInbox role={role} />
   </div>
 }
 
@@ -220,6 +222,7 @@ export function AdminMessages() {
   }, [refresh])
   return <div className="content console-content">
     <PageHeader title="Marketplace messages" description="Review messages exchanged on claimed marketplace jobs." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
+    <AdminSupportInbox />
     {error && <p className="form-error" role="alert">{error}</p>}
     <section className="card admin-message-inbox">
       <label className="provider-proposal-search"><span>Search messages by Job ID</span><input value={search} onChange={(event) => { setOffset(0); setSearch(event.target.value) }} placeholder="For example, OJ-0000000042" /></label>

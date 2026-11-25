@@ -21,8 +21,6 @@ type AuthStage =
 
 type SignupIntent = "customer" | "supplier"
 
-const defaultAdminEmail = import.meta.env.VITE_ADMIN_EMAIL?.trim() || "admin@oddjobs.com"
-
 type AuthExperienceProps = {
   initialRole?: Role | null
 
@@ -78,9 +76,7 @@ export default function AuthExperience({
 
   const [name, setName] = useState("")
 
-  const [identifier, setIdentifier] = useState(
-    initialRole === "admin" ? defaultAdminEmail : "",
-  )
+  const [identifier, setIdentifier] = useState("")
 
   const [activeIdentifier, setActiveIdentifier] = useState("")
 
@@ -190,7 +186,7 @@ export default function AuthExperience({
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    const contact = identify(initialRole === "admin" ? defaultAdminEmail : identifier)
+    const contact = identify(identifier)
 
     if (!contact) {
       setError("Enter a valid email address or Kenyan mobile number.")
@@ -887,7 +883,14 @@ export default function AuthExperience({
                 {initialRole === "admin" ? (
                   <label className="auth-field">
                     <span>Admin email</span>
-                    <input type="email" value={defaultAdminEmail} readOnly autoComplete="username" />
+                    <input
+                      type="email"
+                      value={identifier}
+                      onChange={(event) => setIdentifier(event.target.value)}
+                      autoComplete="username"
+                      placeholder="Enter your staff email"
+                      required
+                    />
                   </label>
                 ) : (
                   <label className="auth-field">

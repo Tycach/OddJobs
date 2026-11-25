@@ -45,7 +45,7 @@ export default function ProviderApplicationScreen({
       setSubmitted(true)
     } catch (caught) {
       console.error("Unable to submit the provider application.", caught)
-      setError("We couldn’t submit your application. Please try again shortly.")
+      setError(caught instanceof Error ? caught.message : "Your application could not be submitted. Please try again shortly.")
     } finally {
       setBusy(false)
     }

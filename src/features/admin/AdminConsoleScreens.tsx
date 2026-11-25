@@ -4,20 +4,24 @@ import {
   type AdminAdCampaign,
   type AdminAuditEvent,
   type AdminCategory,
-  type AdminCustomerVerificationSummary,
   type AdminMonitoringSnapshot,
   type AdminModerationReport,
   type AdminModerationStatus,
   type AdminJobPaymentPage,
   type JobPaymentStatus,
+  type JobPaymentRecord,
   type AdminOverview as AdminOverviewData,
+  type AdminAnalyticsFilters,
+  type AdminAnalyticsReport,
   type AdminSystemSettings,
   type AdminUserSummary,
-  type AdminVerificationStatus,
-  type AdminVerificationSummary,
+  type AdminMemberRole,
+  type AdminTeamSummary,
+  type AdminAlertSummary,
 } from "../../auth/AuthProvider"
 import { Badge, Button, DemoNotice, EmptyState, Icon, Metric, PageHeader } from "../../shared/components/WorkspaceUi"
 import { AdminMessages } from "../marketplace/ServiceMessages"
+import { IdentityVerification } from "./IdentityVerification"
 
 type DataTableProps = {
   headers: string[]
@@ -123,7 +127,7 @@ function Overview() {
 }
 
 function Users() {
-  const { getAdminUsers, reinstateAdminUser } = useAuth()
+  const { getAdminUsers, reinstateAdminUser, setAdminCommissionRestriction } = useAuth()
   const [query, setQuery] = useState("")
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState<{ items: AdminUserSummary[]; total: number }>({
@@ -169,6 +173,22 @@ function Users() {
     }
   }
 
+  const toggleCommissionRestriction = async (user: AdminUserSummary) => {
+    const restricted = !user.commissionRestricted
+    const prompt = restricted
+      ? "Reason for temporarily restricting new hirings (at least 10 characters):"
+      : "Reason for releasing the hiring restriction (at least 10 characters):"
+    const reason = window.prompt(prompt)?.trim() ?? ""
+    if (reason.length < 10) { setError("Enter a reason of at least 10 characters."); return }
+    setSavingUserId(user.id); setError("")
+    try {
+      await setAdminCommissionRestriction(user.id, restricted, reason)
+      loadUsers()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update the hiring restriction.")
+    } finally { setSavingUserId("") }
+  }
+
   return (
     <div className="content console-content">
       <PageHeader
@@ -198,13 +218,13 @@ function Users() {
                   <td>{user.displayName}</td>
                   <td>{user.id}</td>
                   <td>{user.roles.join(", ") || "—"}</td>
-                  <td>{user.status}</td>
+                  <td><span>{user.status}</span>{user.commissionRestricted && <small className="caption"><Badge tone="amber">New hiring restricted</Badge></small>}{user.overdueCommissionCount > 0 && <small className="caption">{user.overdueCommissionCount} overdue commission{user.overdueCommissionCount === 1 ? "" : "s"} | KES {(user.overdueCommissionMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</small>}</td>
                   <td>{new Date(user.createdAt).toLocaleDateString()}</td>
-                  <td>{user.status === "suspended" && !user.roles.includes("admin") ? (
+                  <td><div className="card-actions">{user.status === "suspended" && !user.roles.includes("admin") ? (
                     <Button variant="secondary" disabled={savingUserId === user.id} onClick={() => void reinstate(user.id)}>
                       {savingUserId === user.id ? "Restoring…" : "Reinstate"}
                     </Button>
-                  ) : "—"}</td>
+                  ) : null}{!user.roles.includes("admin") && user.roles.includes("consumer") && (user.commissionRestricted || user.overdueCommissionCount > 0) && <Button variant="secondary" disabled={savingUserId === user.id} onClick={() => void toggleCommissionRestriction(user)}>{savingUserId === user.id ? "Saving…" : user.commissionRestricted ? "Release restriction" : "Restrict new hiring"}</Button>}</div></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -232,205 +252,6 @@ function Users() {
       </DemoNotice>
     </div>
   )
-}
-
-function Verification() {
-  const { getAdminVerifications, getAdminVerificationDocument, decideAdminVerification } = useAuth()
-  const [status, setStatus] = useState<AdminVerificationStatus>("in_review")
-  const [offset, setOffset] = useState(0)
-  const [page, setPage] = useState<{
-    items: AdminVerificationSummary[]
-    total: number
-  }>({ items: [], total: 0 })
-  const [selected, setSelected] = useState<AdminVerificationSummary | null>(null)
-  const [reason, setReason] = useState("")
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState("")
-  const [documentLink, setDocumentLink] = useState("")
-  const [documentLoading, setDocumentLoading] = useState(false)
-  const [queue, setQueue] = useState<"provider" | "customer">("provider")
-  const pageSize = 25
-  const load = () => {
-    setLoading(true)
-    setError("")
-    void getAdminVerifications(status, pageSize, offset)
-      .then((result) => {
-        setPage(result)
-        setSelected((current) =>
-          result.items.find((item) => item.id === current?.id) ??
-          result.items[0] ??
-          null,
-        )
-      })
-      .catch((caught: unknown) =>
-        setError(caught instanceof Error ? caught.message : "Could not load verification queue."),
-      )
-      .finally(() => setLoading(false))
-  }
-  useEffect(() => load(), [getAdminVerifications, status, offset])
-
-  if (queue === "customer") return <CustomerIdentityQueue onBack={() => setQueue("provider")} />
-
-  const decide = async (decision: "verified" | "rejected") => {
-    if (!selected) return
-    if (decision === "rejected" && !reason.trim()) {
-      setError("Enter a reason before rejecting verification.")
-      return
-    }
-    setSaving(true)
-    setError("")
-    try {
-      const updated = await decideAdminVerification(selected.id, decision, reason.trim())
-      setPage((current) => ({
-        ...current,
-        items: current.items.map((item) => item.id === updated.id ? updated : item),
-      }))
-      setSelected(updated)
-      setReason("")
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not save verification decision.")
-    } finally {
-      setSaving(false)
-    }
-  }
-  const openIdentityDocument = async () => {
-    if (!selected) return
-    setDocumentLoading(true)
-    setDocumentLink("")
-    setError("")
-    try {
-      const result = await getAdminVerificationDocument(selected.id)
-      setDocumentLink(result.url)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not open the identity document.")
-    } finally {
-      setDocumentLoading(false)
-    }
-  }
-  return (
-    <div className="content console-content">
-      <PageHeader
-        title="Verification queue"
-        description="Review privately submitted identity documents and provider applications."
-        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
-      />
-      {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="filters">
-        <Button variant="secondary" onClick={() => setQueue("customer")}>Customer identity checks</Button>
-        <label>
-          Status
-          <select value={status} onChange={(event) => {
-            setStatus(event.target.value as AdminVerificationStatus)
-            setOffset(0)
-          }}>
-            <option value="in_review">In review</option>
-            <option value="not_started">Not started</option>
-            <option value="verified">Verified</option>
-            <option value="rejected">Rejected</option>
-            <option value="all">All</option>
-          </select>
-        </label>
-      </div>
-      <section className="card table-card">
-        {loading ? <p role="status">Loading verification records…</p> : page.items.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Applicant</th><th>Provider name</th><th>Region</th><th>Status</th><th>Submitted</th><th>Review</th></tr></thead>
-              <tbody>{page.items.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.displayName}</td>
-                  <td>{item.publicName}</td>
-                  <td>{item.region || "—"}</td>
-                  <td>{item.status.replace(/_/g, " ")}</td>
-                  <td>{new Date(item.submittedAt).toLocaleString()}</td>
-                  <td><Button variant="secondary" onClick={() => {
-                    setSelected(item)
-                    setReason("")
-                  }}>Review</Button></td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        ) : !error ? <EmptyState title="No verification records" detail="No profiles match this status." /> : null}
-        {selected?.status === "in_review" && (
-          <div className="card-actions">
-            <div>
-              <strong>Identity document: </strong>{selected.documentType?.replace("_", " ") || "Not provided"}
-              <div>
-                <Button variant="secondary" disabled={documentLoading} onClick={() => void openIdentityDocument()}>
-                  {documentLoading ? "Preparing secure link…" : "View private ID document"}
-                </Button>
-                {documentLink && <a href={documentLink} target="_blank" rel="noreferrer">Open document (link expires in 60 seconds)</a>}
-              </div>
-              {selected.skillsEvidence && <p><strong>Skills evidence:</strong> {selected.skillsEvidence}</p>}
-            </div>
-            <label>
-              Decision note (required to reject)
-              <input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
-            </label>
-            <Button disabled={saving || !selected.documentType} onClick={() => void decide("verified")}>{saving ? "Saving…" : "Approve provider access"}</Button>
-            <Button variant="danger" disabled={saving || !reason.trim()} onClick={() => void decide("rejected")}>Reject</Button>
-          </div>
-        )}
-        <div className="card-actions">
-          <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button>
-          <span>{page.total ? `${offset + 1}–${Math.min(offset + page.items.length, page.total)} of ${page.total}` : "0 records"}</span>
-          <Button variant="secondary" disabled={loading || offset + pageSize >= page.total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button>
-        </div>
-      </section>
-      <DemoNotice>Opening an ID creates an audited, one-minute private link. Approve only after comparing the document with the applicant details.</DemoNotice>
-    </div>
-  )
-}
-
-function CustomerIdentityQueue({ onBack }: { onBack: () => void }) {
-  const { getAdminCustomerVerifications, getAdminCustomerVerificationDocument, decideAdminCustomerVerification } = useAuth()
-  const [page, setPage] = useState<{ items: AdminCustomerVerificationSummary[]; total: number }>({ items: [], total: 0 })
-  const [selected, setSelected] = useState<AdminCustomerVerificationSummary | null>(null)
-  const [status, setStatus] = useState<AdminVerificationStatus>("in_review")
-  const [reason, setReason] = useState("")
-  const [documentLink, setDocumentLink] = useState("")
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const load = () => {
-    setLoading(true)
-    setError("")
-    void getAdminCustomerVerifications(status, 25, 0).then((result) => {
-      setPage(result)
-      setSelected((current) => result.items.find((item) => item.id === current?.id) ?? result.items[0] ?? null)
-    }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load customer identity checks.")).finally(() => setLoading(false))
-  }
-  useEffect(() => load(), [getAdminCustomerVerifications, status])
-  const decide = async (decision: "verified" | "rejected") => {
-    if (!selected) return
-    if (decision === "rejected" && !reason.trim()) { setError("Enter a reason before rejecting this identity check."); return }
-    setBusy(true)
-    setError("")
-    try {
-      const updated = await decideAdminCustomerVerification(selected.id, decision, reason.trim())
-      setPage((current) => ({ ...current, items: current.items.map((item) => item.id === updated.id ? updated : item) }))
-      setSelected(updated)
-      setReason("")
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save the decision.") }
-    finally { setBusy(false) }
-  }
-  const openDocument = async () => {
-    if (!selected) return
-    setDocumentLink("")
-    try { setDocumentLink((await getAdminCustomerVerificationDocument(selected.id)).url) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not open the private ID document.") }
-  }
-  return <div className="content console-content">
-    <PageHeader title="Customer identity checks" description="Review customer identity documents separately from provider applications." action={<Button variant="secondary" onClick={onBack}>Provider applications</Button>} />
-    {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="filters"><label>Status<select value={status} onChange={(event) => setStatus(event.target.value as AdminVerificationStatus)}><option value="in_review">In review</option><option value="verified">Verified</option><option value="rejected">Rejected</option><option value="all">All</option></select></label><Button variant="secondary" onClick={load}>Refresh</Button></div>
-    <section className="card table-card">{loading ? <p role="status">Loading customer checks…</p> : page.items.length ? <div className="table-wrap"><table><thead><tr><th>Customer</th><th>ID type</th><th>Status</th><th>Submitted</th><th>Review</th></tr></thead><tbody>{page.items.map((item) => <tr key={item.id}><td>{item.displayName}</td><td>{item.documentType.replace("_", " ")}</td><td>{item.status.replace(/_/g, " ")}</td><td>{new Date(item.submittedAt).toLocaleString()}</td><td><Button variant="secondary" onClick={() => { setSelected(item); setReason(""); setDocumentLink("") }}>Review</Button></td></tr>)}</tbody></table></div> : !error ? <EmptyState title="No customer checks" detail="No customer identity records match this status." /> : null}
-      {selected?.status === "in_review" && <div className="card-actions"><div><strong>Private ID document</strong><div><Button variant="secondary" onClick={() => void openDocument()}>Create secure document link</Button>{documentLink && <a href={documentLink} target="_blank" rel="noreferrer">Open document (expires in 60 seconds)</a>}</div></div><label>Decision note (required to reject)<input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} /></label><Button disabled={busy} onClick={() => void decide("verified")}>Approve customer identity</Button><Button variant="danger" disabled={busy || !reason.trim()} onClick={() => void decide("rejected")}>Reject</Button></div>}
-      <p className="caption">Identity documents are private. Open only for review; secure links expire after 60 seconds.</p>
-    </section>
-  </div>
 }
 
 function Moderation() {
@@ -499,14 +320,14 @@ function Moderation() {
     }
   }
   return (
-    <div className="content console-content">
+    <div className="content console-content moderation-admin">
       <PageHeader
         title="Reports & moderation"
         description="Review user-submitted reports and record moderation outcomes."
         action={<Button variant="secondary" onClick={load}>Refresh</Button>}
       />
       {error && <p className="form-error" role="alert">{error}</p>}
-      <label>
+      <div className="moderation-filters"><label>
         Search reports by Job ID
         <input value={jobSearch} onChange={(event) => { setJobSearch(event.target.value); setOffset(0) }} placeholder="For example, OJ-0000000042" />
       </label>
@@ -522,16 +343,17 @@ function Moderation() {
           <option value="dismissed">Dismissed</option>
           <option value="all">All</option>
         </select>
-      </label>
-      <section className="card">
+      </label></div>
+      <section className="card moderation-queue">
         {loading ? <p role="status">Loading reports…</p> : reports.length ? (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Reason</th><th>Subject</th><th>Details</th><th>Status</th><th>Reported</th><th>Review</th></tr></thead>
-              <tbody>{reports.map((report) => (
+              <thead><tr><th className="moderation-number-heading">#</th><th>Reason</th><th>Subject</th><th>Details</th><th>Status</th><th>Reported</th><th>Review</th></tr></thead>
+              <tbody>{reports.map((report, index) => (
                 <tr key={report.id}>
+                  <td className="moderation-number">{offset + index + 1}</td>
                   <td>{report.reason.replace(/_/g, " ")}</td>
-                  <td>{report.subjectType === "job" ? `Job ID ${report.jobReference ?? report.subjectId}` : `${report.subjectType} · ${report.subjectId}`}</td>
+                  <td>{report.subjectType === "job" ? `Job ID ${report.jobReference ?? report.subjectId}` : `${report.subjectType} | ${report.subjectId}`}</td>
                   <td>{report.details}</td>
                   <td>{report.status}</td>
                   <td>{new Date(report.createdAt).toLocaleString()}</td>
@@ -583,7 +405,7 @@ function Moderation() {
 }
 
 function Categories() {
-  const { getAdminCategories, saveAdminCategory } = useAuth()
+  const { getAdminCategories, saveAdminCategory, getAdminSettings, saveAdminSettings, getAdminAuditEvents } = useAuth()
   const [categories, setCategories] = useState<AdminCategory[]>([])
   const [draft, setDraft] = useState({
     name: "",
@@ -596,12 +418,21 @@ function Categories() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
   const [message, setMessage] = useState("")
+  const [settings, setSettings] = useState<AdminSystemSettings | null>(null)
+  const [commission, setCommission] = useState("10")
+  const [audit, setAudit] = useState<AdminAuditEvent[]>([])
+  const [savingCommission, setSavingCommission] = useState(false)
 
   const load = () => {
     setLoading(true)
     setError("")
-    void getAdminCategories()
-      .then(setCategories)
+    void Promise.all([getAdminCategories(), getAdminSettings(), getAdminAuditEvents(50, 0)])
+      .then(([items, currentSettings, events]) => {
+        setCategories(items)
+        setSettings(currentSettings)
+        setCommission(String(currentSettings.marketplaceCommissionPercent))
+        setAudit(events.items.filter((event) => event.action.startsWith("admin.category") || event.action === "admin.system_settings.update").slice(0, 6))
+      })
       .catch((caught: unknown) =>
         setError(caught instanceof Error ? caught.message : "Could not load categories."),
       )
@@ -615,11 +446,8 @@ function Categories() {
     setMessage("")
     try {
       const saved = await saveAdminCategory(draft)
-      setCategories((items) =>
-        [...items.filter((item) => item.id !== saved.id), saved].sort(
-          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
-        ),
-      )
+      setCategories((items) => [...items.filter((item) => item.id !== saved.id), saved].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)))
+      load()
       setEditingSlug("")
       setDraft({ name: "", slug: "", active: true, sortOrder: 0 })
       setMessage(`Saved category “${saved.name}”.`)
@@ -628,6 +456,32 @@ function Categories() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const toggleCategory = async (category: AdminCategory) => {
+    const active = !category.active
+    if (active && category.openJobs > 0 && !window.confirm(`${category.openJobs} open job(s) already use this category. Existing jobs remain unchanged. Activate it for new jobs?`)) return
+    if (!active && category.openJobs > 0 && !window.confirm(`${category.openJobs} open job(s) use this category. They remain unchanged, but new jobs can no longer select it. Continue?`)) return
+    setSaving(true); setError(""); setMessage("")
+    try {
+      await saveAdminCategory({ name: category.name, slug: category.slug, active, sortOrder: category.sortOrder })
+      setMessage(`${category.name} is now ${active ? "active" : "inactive"}.`)
+      load()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update category status.") }
+    finally { setSaving(false) }
+  }
+
+  const saveCommission = async () => {
+    if (!settings) return
+    const percent = Number(commission)
+    if (!Number.isFinite(percent) || percent < 0 || percent > 30) { setError("Commission must be between 0 and 30 percent."); return }
+    setSavingCommission(true); setError(""); setMessage("")
+    try {
+      const saved = await saveAdminSettings({ ...settings, marketplaceCommissionPercent: percent })
+      setSettings(saved); setCommission(String(saved.marketplaceCommissionPercent)); setMessage("Commission rate saved. New agreements will use this rate; existing agreements keep their original rate.")
+      void getAdminAuditEvents(50, 0).then((events) => setAudit(events.items.filter((event) => event.action.startsWith("admin.category") || event.action === "admin.system_settings.update").slice(0, 6)))
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save the commission rate.") }
+    finally { setSavingCommission(false) }
   }
 
   return (
@@ -640,26 +494,13 @@ function Categories() {
       {error && <p className="form-error" role="alert">{error}</p>}
       {message && <p role="status">{message}</p>}
       <div className="settings-grid">
-        <section className="card">
-          <h2>Service categories</h2>
-          {loading ? <p role="status">Loading categories…</p> : categories.length ? categories.map((category) => (
-            <div className="setting-line" key={category.id}>
-              <span>{category.name} · {category.active ? "active" : "inactive"}</span>
-              <Button variant="ghost" onClick={() => {
-                setEditingSlug(category.slug)
-                setDraft({
-                  name: category.name,
-                  slug: category.slug,
-                  active: !category.active,
-                  sortOrder: category.sortOrder,
-                })
-              }}>Edit / toggle</Button>
-            </div>
-          )) : !loading && <p>No categories configured.</p>}
+        <section className="card table-card">
+          <div className="section-title"><div><h2>Service categories</h2><p className="caption">Active categories appear in hirer job posting. Deactivation preserves existing jobs.</p></div><Badge>{categories.filter((item) => item.active).length} active</Badge></div>
+          {loading ? <p role="status">Loading categories…</p> : categories.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Category</th><th>Slug</th><th>Jobs</th><th>Open</th><th>Status</th><th>Actions</th></tr></thead><tbody>{categories.map((category, index) => <tr key={category.id}><td>{index + 1}</td><td><strong>{category.name}</strong><small className="caption">Sort {category.sortOrder}</small></td><td>{category.slug}</td><td>{category.totalJobs}</td><td>{category.openJobs}</td><td><Badge tone={category.active ? "green" : "amber"}>{category.active ? "Active" : "Inactive"}</Badge></td><td><div className="card-actions"><Button variant="ghost" disabled={saving} onClick={() => { setEditingSlug(category.slug); setDraft({ name: category.name, slug: category.slug, active: category.active, sortOrder: category.sortOrder }) }}>Edit</Button><Button variant="secondary" disabled={saving} onClick={() => void toggleCategory(category)}>{category.active ? "Deactivate" : "Activate"}</Button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No categories configured" detail="Add the services hirers can choose when posting jobs." />}
           <h3>{editingSlug ? "Edit category" : "Add category"}</h3>
           <label>
             Name
-            <input maxLength={80} value={draft.name} onChange={(event) => {
+            <input maxLength={80} disabled={Boolean(editingSlug && categories.find((item) => item.slug === editingSlug)?.totalJobs)} value={draft.name} onChange={(event) => {
               const name = event.target.value
               setDraft((current) => ({
                 ...current,
@@ -701,12 +542,16 @@ function Categories() {
             }}>Cancel</Button>}
           </div>
         </section>
+        <section className="card setting-card">
+          <h2>Marketplace commission</h2>
+          <p className="caption">This rate is saved on new payment agreements when a hirer accepts a quote. Existing agreements keep their original rate.</p>
+          <label>Commission rate (%)<input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} /></label>
+          <div className="metrics"><Metric label="Example job amount" value="KES 10,000" /><Metric label="OddJobs fee" value={`KES ${(10000 * Number(commission || 0) / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} /><Metric label="Worker share" value={`KES ${(10000 * (1 - Number(commission || 0) / 100)).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} /></div>
+          <Button disabled={savingCommission || !settings} onClick={() => void saveCommission()}>{savingCommission ? "Saving…" : "Save commission rate"}</Button>
+          <p className="caption">Fee reporting and admin receipt verification are handled under Payments and worker earnings. Payment transfers are still recorded manually.</p>
+        </section>
       </div>
-      <DemoNotice>
-        Category and settings records are persisted and audited. Commission
-        calculation, promo codes, subscriptions, and job validation against this
-        catalog are not implemented.
-      </DemoNotice>
+      <section className="card table-card"><div className="section-title"><div><h2>Recent configuration changes</h2><p className="caption">Latest category and marketplace fee updates.</p></div></div>{audit.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Change</th><th>Admin</th><th>When</th></tr></thead><tbody>{audit.map((event, index) => <tr key={event.id}><td>{index + 1}</td><td>{event.action === "admin.system_settings.update" ? `Commission updated${event.metadata.marketplaceCommissionPercent !== undefined ? ` to ${event.metadata.marketplaceCommissionPercent}%` : ""}` : `Category settings updated${event.metadata.slug ? ` | ${event.metadata.slug}` : ""}`}</td><td><code title={event.actorUserId}>{event.actorUserId.slice(0, 8)}</code></td><td>{new Date(event.createdAt).toLocaleString()}</td></tr>)}</tbody></table></div> : <p className="caption">No configuration changes recorded yet.</p>}</section>
     </div>
   )
 }
@@ -797,7 +642,7 @@ function AdApprovals() {
             <div>
               <h3>{selected.title}</h3>
               <p>{selected.description}</p>
-              <p>{selected.advertiserName} · {selected.placement.replace(/_/g, " ")}</p>
+              <p>{selected.advertiserName} | {selected.placement.replace(/_/g, " ")}</p>
               {selected.destinationUrl && <p>Destination: {selected.destinationUrl}</p>}
             </div>
             <label>
@@ -826,6 +671,28 @@ function AdApprovals() {
   )
 }
 
+function auditActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    "admin.verification.verified": "Provider ID approved",
+    "admin.verification.rejected": "Provider ID rejected",
+    "admin.customer_verification.verified": "Hirer ID approved",
+    "admin.customer_verification.rejected": "Hirer ID rejected",
+    "admin.moderation.resolved": "Report resolved",
+    "admin.moderation.dismissed": "Report dismissed",
+    "admin.platform_fee.received": "Commission receipt verified",
+    "admin.commission.restriction_placed": "Hirer account restricted",
+    "admin.commission.restriction_released": "Hirer restriction released",
+    "admin.provider.payout_hold": "Worker payout held",
+    "admin.provider.payout_hold_removed": "Worker payout hold removed",
+    "admin.support.case.replied": "Support case reply sent",
+    "admin.support.case.status_changed": "Support case status changed",
+  }
+  if (labels[action]) return labels[action]
+  return action.replace(/^admin\./, "").split(".").map((part) =>
+    part.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+  ).join(" / ")
+}
+
 function AuditLog() {
   const { getAdminAuditEvents } = useAuth()
   const [events, setEvents] = useState<AdminAuditEvent[]>([])
@@ -833,56 +700,135 @@ function AuditLog() {
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [search, setSearch] = useState("")
+  const [action, setAction] = useState("")
+  const [from, setFrom] = useState("")
+  const [to, setTo] = useState("")
+  const [filters, setFilters] = useState({ search: "", action: "", from: "", to: "" })
   const pageSize = 25
   const load = () => {
     setLoading(true)
     setError("")
-    void getAdminAuditEvents(pageSize, offset)
+    void getAdminAuditEvents(pageSize, offset, filters)
       .then((page) => {
         setEvents(page.items)
         setTotal(page.total)
       })
-      .catch((caught: unknown) =>
-        setError(caught instanceof Error ? caught.message : "Could not load audit events."),
-      )
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load audit events."))
       .finally(() => setLoading(false))
   }
-  useEffect(() => load(), [getAdminAuditEvents, offset])
-  return (
-    <div className="content console-content">
-      <PageHeader
-        title="Audit log"
-        description="Persisted admin actions and read events from the API."
-        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
-      />
-      {error && <p className="form-error" role="alert">{error}</p>}
-      <section className="card table-card">
-        {loading ? <p role="status">Loading audit events…</p> : events.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Time</th><th>Actor ID</th><th>Action</th><th>Target</th><th>Request ID</th></tr></thead>
-              <tbody>{events.map((event) => (
-                <tr key={event.id}>
-                  <td>{new Date(event.createdAt).toLocaleString()}</td>
-                  <td>{event.actorUserId}</td>
-                  <td>{event.action}</td>
-                  <td>{event.targetType ? `${event.targetType}${event.targetId ? ` · ${event.targetId}` : ""}` : "—"}</td>
-                  <td>{event.requestId}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        ) : !error ? <EmptyState title="No audit events" detail="Administrative events will appear here." /> : null}
-        <div className="card-actions">
-          <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button>
-          <span>{total ? `${offset + 1}–${Math.min(offset + events.length, total)} of ${total}` : "0 events"}</span>
-          <Button variant="secondary" disabled={loading || offset + pageSize >= total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button>
-        </div>
-      </section>
-    </div>
-  )
+  useEffect(() => load(), [getAdminAuditEvents, offset, filters])
+  const applyFilters = (event: React.FormEvent) => { event.preventDefault(); setOffset(0); setFilters({ search, action, from, to }) }
+  return <div className="content console-content">
+    <PageHeader title="Audit log" description="Admin decisions and sensitive record access, with a trace back to the request." action={<Button variant="secondary" onClick={load} disabled={loading}>Refresh</Button>} />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <form className="card audit-filters" onSubmit={applyFilters}>
+      <label>Search records<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Administrator, action, record ID" /></label>
+      <label>Action contains<input value={action} onChange={(event) => setAction(event.target.value)} placeholder="e.g. verification" /></label>
+      <label>From<input type="date" value={from} max={to || undefined} onChange={(event) => setFrom(event.target.value)} /></label>
+      <label>To<input type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)} /></label>
+      <Button type="submit" disabled={loading}>Apply filters</Button>
+      <Button type="button" variant="secondary" disabled={loading} onClick={() => { setSearch(""); setAction(""); setFrom(""); setTo(""); setOffset(0); setFilters({ search: "", action: "", from: "", to: "" }) }}>Clear</Button>
+    </form>
+    <section className="card table-card">
+      {loading ? <p role="status">Loading audit events...</p> : events.length ? <div className="table-wrap">
+        <table className="audit-table">
+          <thead><tr><th>#</th><th>Time</th><th>Administrator</th><th>Action</th><th>Record</th><th>Details</th><th>Request ID</th></tr></thead>
+          <tbody>{events.map((event, index) => <tr key={event.id}>
+            <td>{offset + index + 1}</td>
+            <td>{new Date(event.createdAt).toLocaleString()}</td>
+            <td><strong>{event.actorDisplayName || "Admin"}</strong><small className="caption" title={event.actorUserId}>{event.actorUserId.slice(0, 8)}</small></td>
+            <td>{auditActionLabel(event.action)}</td>
+            <td>{event.targetType?.replaceAll("_", " ") || "System"}<small className="caption" title={event.targetId ?? ""}>{event.targetId ? event.targetId.slice(0, 12) : ""}</small></td>
+            <td>{Object.entries(event.metadata).filter(([key]) => !["messageId", "limit", "offset", "search", "count"].includes(key)).map(([key, value]) => <small className="audit-detail" key={key}><strong>{key.replaceAll("_", " ")}:</strong> {String(value)}</small>)}</td>
+            <td><code title={event.requestId}>{event.requestId.slice(0, 12)}</code></td>
+          </tr>)}</tbody>
+        </table>
+      </div> : !error ? <EmptyState title="No audit events" detail="Administrative events will appear here." /> : null}
+      <div className="card-actions">
+        <Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button>
+        <span>{total ? (offset + 1) + "-" + Math.min(offset + events.length, total) + " of " + total : "0 events"}</span>
+        <Button variant="secondary" disabled={loading || offset + pageSize >= total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button>
+      </div>
+    </section>
+  </div>
 }
 
+const adminRoleLabels: Record<AdminMemberRole, string> = {
+  OWNER: "Owner", ADMIN: "Administrator", OPERATIONS_ADMIN: "Operations", VERIFICATION_REVIEWER: "Verification reviewer",
+  MODERATION_REVIEWER: "Moderation reviewer", SUPPORT_AGENT: "Support agent", FINANCE_REVIEWER: "Finance reviewer", ANALYST: "Analyst",
+}
+const manageableAdminRoles: AdminMemberRole[] = ["ADMIN", "OPERATIONS_ADMIN", "VERIFICATION_REVIEWER", "MODERATION_REVIEWER", "SUPPORT_AGENT", "FINANCE_REVIEWER", "ANALYST"]
+
+function AdminTeam() {
+  const auth = useAuth()
+  const [team, setTeam] = useState<AdminTeamSummary | null>(null)
+  const [email, setEmail] = useState("")
+  const [role, setRole] = useState<AdminMemberRole>("SUPPORT_AGENT")
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState("")
+  const [error, setError] = useState("")
+  const load = () => { setLoading(true); setError(""); void auth.getAdminTeam().then(setTeam).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load the admin team.")).finally(() => setLoading(false)) }
+  useEffect(() => { load() }, [auth.getAdminTeam])
+  const invite = async (event: React.FormEvent) => {
+    event.preventDefault(); setBusy("invite"); setError("")
+    try { await auth.inviteAdminUser(email.trim(), role); setEmail(""); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not send the invitation.") }
+    finally { setBusy("") }
+  }
+  const changeRole = async (userId: string, nextRole: AdminMemberRole) => {
+    setBusy(userId); setError("")
+    try {
+      await auth.setAdminMemberRole(userId, nextRole)
+      load()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update the role.") }
+    finally { setBusy("") }
+  }
+  const remove = async (userId: string, name: string) => {
+    if (!window.confirm(`Remove admin access for ${name}? This action is recorded in the audit log.`)) return
+    setBusy(userId); setError("")
+    try { await auth.removeAdminMember(userId); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not remove administrator access.") }
+    finally { setBusy("") }
+  }
+  const revoke = async (id: string) => { setBusy(id); setError(""); try { await auth.revokeAdminInvitation(id); load() } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not revoke the invitation.") } finally { setBusy("") } }
+  return <div className="content console-content">
+    <PageHeader title="Admin team & access" description="Invite administrators, assign scoped roles, and review pending invitations." action={<Button variant="secondary" onClick={load} disabled={loading}>Refresh</Button>} />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <form className="card admin-invite-form" onSubmit={invite}>
+      <div><h2>Invite an administrator</h2><p className="caption">An invitation is sent to their email and expires after seven days.</p></div>
+      <label>Email address<input type="email" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" /></label>
+      <label>Access role<select value={role} onChange={(event) => setRole(event.target.value as AdminMemberRole)}>{manageableAdminRoles.map((item) => <option value={item} key={item}>{adminRoleLabels[item]}</option>)}</select></label>
+      <Button type="submit" disabled={busy === "invite" || !email.trim()}>{busy === "invite" ? "Sending…" : "Send invitation"}</Button>
+    </form>
+    <section className="card table-card admin-team-card">
+      <div className="section-title"><div><h2>Administrators</h2><p className="caption">Roles limit which admin pages and actions each person can access.</p></div><span>{team?.members.length ?? 0} members</span></div>
+      {loading ? <p role="status">Loading admin team…</p> : team?.members.length ? <div className="table-wrap"><table className="admin-team-table"><thead><tr><th>#</th><th>Administrator</th><th>Role</th><th>Joined</th><th>Access</th></tr></thead><tbody>{team.members.map((member, index) => <tr key={member.userId}><td>{index + 1}</td><td><strong>{member.displayName}</strong>{member.legacyOwner && <small className="caption">Legacy owner · protected</small>}</td><td>{member.legacyOwner ? <Badge tone="amber">Owner</Badge> : <select aria-label={`Role for ${member.displayName}`} value={member.role} disabled={busy === member.userId} onChange={(event) => void changeRole(member.userId, event.target.value as AdminMemberRole)}>{Object.entries(adminRoleLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>}</td><td>{new Date(member.joinedAt).toLocaleDateString()}</td><td>{member.legacyOwner ? <span className="caption">Existing admin</span> : <Button variant="secondary" disabled={busy === member.userId} onClick={() => void remove(member.userId, member.displayName)}>Remove</Button>}</td></tr>)}</tbody></table></div> : <EmptyState title="No administrators" detail="Invite someone to help manage OddJobs." />}
+    </section>
+    <section className="card table-card admin-team-card">
+      <div className="section-title"><div><h2>Invitations</h2><p className="caption">Pending and recently completed invitations.</p></div><span>{team?.invitations.filter((item) => item.status === "PENDING").length ?? 0} pending</span></div>
+      {team?.invitations.length ? <div className="table-wrap"><table className="admin-team-table"><thead><tr><th>#</th><th>Email</th><th>Role</th><th>Status</th><th>Expires</th><th>Action</th></tr></thead><tbody>{team.invitations.map((invitation, index) => <tr key={invitation.id}><td>{index + 1}</td><td>{invitation.email}</td><td>{adminRoleLabels[invitation.role]}</td><td><Badge tone={invitation.status === "PENDING" ? "amber" : invitation.status === "ACCEPTED" ? "green" : "neutral"}>{invitation.status.toLowerCase()}</Badge></td><td>{new Date(invitation.expiresAt).toLocaleDateString()}</td><td>{invitation.status === "PENDING" && <Button variant="secondary" disabled={busy === invitation.id} onClick={() => void revoke(invitation.id)}>Revoke</Button>}</td></tr>)}</tbody></table></div> : <EmptyState title="No invitations yet" detail="New invitations will appear here." />}
+    </section>
+  </div>
+}
+
+function AdminInviteAccept() {
+  const auth = useAuth()
+  const [invitation] = useState(() => ({ invitationId: new URLSearchParams(window.location.search).get("invitationId") ?? "", token: new URLSearchParams(window.location.search).get("token") ?? "" }))
+  const [status, setStatus] = useState("Checking invitation…")
+  const [error, setError] = useState("")
+  useEffect(() => {
+    window.history.replaceState(null, "", window.location.pathname)
+    if (!invitation.invitationId || !invitation.token) { setError("The invitation link is incomplete. Ask the workspace owner to send a new invitation."); return }
+    if (auth.loading) return
+    if (!auth.profile) { setError("Sign in with the email address that received the invitation, then reopen its link."); return }
+    void auth.acceptAdminInvitation(invitation.invitationId, invitation.token).then((result) => {
+      setStatus("Invitation accepted. Opening your admin workspace…")
+      window.location.replace(result.redirectTo)
+    }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "This invitation could not be accepted."))
+  }, [auth.loading, auth.profile, auth.acceptAdminInvitation, invitation])
+  return <div className="content console-content"><PageHeader title="Join the admin team" description="Accept a secure invitation to access the OddJobs admin workspace." />{error ? <p className="form-error" role="alert">{error}</p> : <p role="status">{status}</p>}</div>
+}
 function Payments() {
   const auth = useAuth()
   const [page, setPage] = useState<AdminJobPaymentPage | null>(null)
@@ -928,12 +874,21 @@ function Payments() {
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update payout hold.") }
     finally { setBusyId("") }
   }
+  const toggleHirerRestriction = async (payment: JobPaymentRecord) => {
+    const restricted = !payment.customerCommissionRestricted
+    const reason = window.prompt(restricted ? "Reason for restricting new hirings (at least 10 characters):" : "Reason for releasing the hiring restriction (at least 10 characters):")?.trim() ?? ""
+    if (reason.length < 10) { setError("Enter a reason of at least 10 characters."); return }
+    setBusyId(payment.customerId); setError("")
+    try { await auth.setAdminCommissionRestriction(payment.customerId, restricted, reason); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update the hiring restriction.") }
+    finally { setBusyId("") }
+  }
   return <div className="content console-content">
     <PageHeader title="Payments and worker earnings" description="Search by job ID, worker, hirer, or payment reference. Financial figures include confirmed payments only." action={<Button variant="secondary" onClick={load}>Refresh</Button>} />
     {error && <p className="form-error" role="alert">{error}</p>}
     {page && <div className="metrics"><Metric label="Confirmed gross payments" value={money(page.summary.paidGrossMinor)} /><Metric label="OddJobs fees on paid jobs" value={money(page.summary.commissionMinor)} /><Metric label="Worker earnings" value={money(page.summary.providerNetMinor)} /><Metric label="Fees due from hirers" value={money(page.summary.commissionDueMinor)} /><Metric label="Disputed payments" value={String(page.summary.disputedCount)} /></div>}
     <section className="card table-card"><div className="filters"><label>Search<input value={search} onChange={(event) => { setSearch(event.target.value); setOffset(0) }} placeholder="Job ID, payment ID, worker, hirer" /></label><label>Status<select value={status} onChange={(event) => { setStatus(event.target.value as JobPaymentStatus | "all"); setOffset(0) }}><option value="all">All statuses</option><option value="awaiting_payment">Awaiting payment</option><option value="reported">Reported</option><option value="paid">Paid</option><option value="disputed">Disputed</option><option value="refunded">Refunded</option></select></label></div>
-      {loading ? <p role="status">Loading payments…</p> : page?.items.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Job / payment</th><th>Worker</th><th>Hirer</th><th>Agreed</th><th>OddJobs fee</th><th>Worker share</th><th>Worker payment</th><th>Fee reconciliation</th></tr></thead><tbody>{page.items.map((payment, index) => <tr key={payment.id}><td>{offset + index + 1}</td><td><strong>{payment.jobReference}</strong><small className="caption">{payment.jobTitle}</small><small className="caption">{payment.paymentReference}</small></td><td>{payment.providerName}</td><td>{payment.customerName}</td><td>{money(payment.grossAmountMinor)}</td><td>{money(payment.commissionAmountMinor)} <small className="caption">({(payment.commissionBasisPoints / 100).toFixed(1)}%)</small></td><td>{money(payment.providerAmountMinor)}</td><td>{payment.method?.replace("_", " ") ?? "—"}<small className="caption">{payment.status.replaceAll("_", " ")}</small></td><td><Badge tone={payment.platformFeeStatus === "received" ? "green" : payment.platformFeeStatus === "disputed" ? "red" : "amber"}>{payment.platformFeeStatus.replaceAll("_", " ")}</Badge>{payment.platformFeeStatus === "reported" && <div className="card-actions"><Button variant="secondary" disabled={busyId === payment.id} onClick={() => void markCommission(payment.id)}>Verify fee receipt</Button></div>}{payment.platformFeePaymentReference && <small className="caption">Hirer reference: {payment.platformFeePaymentReference}</small>}{payment.platformFeeReceiptReference && <small className="caption">Verified receipt: {payment.platformFeeReceiptReference}</small>}</td></tr>)}</tbody></table></div> : !error && <EmptyState title="No payment records" detail="Accepted bids create payment agreements. Confirmed payments and disputes will appear here." />}
+      {loading ? <p role="status">Loading payments…</p> : page?.items.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Job / payment</th><th>Worker</th><th>Hirer</th><th>Agreed</th><th>OddJobs fee</th><th>Worker share</th><th>Worker payment</th><th>Fee reconciliation</th></tr></thead><tbody>{page.items.map((payment, index) => <tr key={payment.id}><td>{offset + index + 1}</td><td><strong>{payment.jobReference}</strong><small className="caption">{payment.jobTitle}</small><small className="caption">{payment.paymentReference}</small></td><td>{payment.providerName}</td><td>{payment.customerName}</td><td>{money(payment.grossAmountMinor)}</td><td>{money(payment.commissionAmountMinor)} <small className="caption">({(payment.commissionBasisPoints / 100).toFixed(1)}%)</small></td><td>{money(payment.providerAmountMinor)}</td><td>{payment.method?.replace("_", " ") ?? "—"}<small className="caption">{payment.status.replaceAll("_", " ")}</small></td><td><Badge tone={payment.platformFeeStatus === "received" ? "green" : payment.platformFeeStatus === "disputed" ? "red" : "amber"}>{payment.platformFeeStatus.replaceAll("_", " ")}</Badge>{payment.commissionOverdue && <small className="caption">OVERDUE</small>}{payment.platformFeeStatus === "due" && payment.platformFeeDueAt && <small className="caption">Due {new Date(payment.platformFeeDueAt).toLocaleString()} {Date.now() > new Date(payment.platformFeeDueAt).getTime() ? "· OVERDUE" : ""}</small>}{payment.platformFeeStatus === "reported" && <div className="card-actions"><Button variant="secondary" disabled={busyId === payment.id} onClick={() => void markCommission(payment.id)}>Verify fee receipt</Button></div>}{payment.platformFeePaymentReference && <small className="caption">Hirer reference: {payment.platformFeePaymentReference}</small>}{payment.platformFeeReceiptReference && <small className="caption">Verified receipt: {payment.platformFeeReceiptReference}</small>}{(payment.commissionOverdue || payment.customerCommissionRestricted) && <div className="card-actions">{payment.customerCommissionRestricted && <Badge tone="amber">Hiring restricted</Badge>}<Button variant="secondary" disabled={busyId === payment.customerId} onClick={() => void toggleHirerRestriction(payment)}>{payment.customerCommissionRestricted ? "Release restriction" : "Restrict new hiring"}</Button></div>}</td></tr>)}</tbody></table></div> : !error && <EmptyState title="No payment records" detail="Accepted bids create payment agreements. Confirmed payments and disputes will appear here." />}
       <div className="card-actions"><Button variant="secondary" disabled={loading || offset === 0} onClick={() => setOffset((value) => Math.max(0, value - pageSize))}>Previous</Button><span>{page?.total ? `${offset + 1}–${Math.min(offset + page.items.length, page.total)} of ${page.total}` : "0 payments"}</span><Button variant="secondary" disabled={loading || !page || offset + pageSize >= page.total} onClick={() => setOffset((value) => value + pageSize)}>Next</Button></div>
     </section>
     <section className="card table-card"><h2>Lifetime earnings by worker</h2>{page?.workers.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Worker</th><th>Paid jobs</th><th>Agreed job totals</th><th>OddJobs fee share</th><th>Worker earnings</th><th>Worker payout hold</th></tr></thead><tbody>{page.workers.map((worker, index) => <tr key={worker.providerId}><td>{index + 1}</td><td>{worker.providerName}</td><td>{worker.paidJobs}</td><td>{money(worker.grossMinor)}</td><td>{money(worker.commissionMinor)}</td><td>{money(worker.netMinor)}</td><td>{worker.payoutHeld ? <><Badge tone="amber">Held</Badge> <Button variant="secondary" disabled={busyId === worker.providerId} onClick={() => void toggleHold(worker.providerId, false)}>Release hold</Button></> : <Button variant="secondary" disabled={busyId === worker.providerId} onClick={() => void toggleHold(worker.providerId, true)}>Place hold</Button>}</td></tr>)}</tbody></table></div> : <p className="caption">Worker totals appear after the first confirmed payment.</p>}</section>
@@ -944,7 +899,6 @@ function Payments() {
 function Config() {
   const { getAdminSettings, saveAdminSettings } = useAuth()
   const [settings, setSettings] = useState<AdminSystemSettings | null>(null)
-  const [commission, setCommission] = useState("10")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
@@ -955,7 +909,6 @@ function Config() {
     void getAdminSettings()
       .then((value) => {
         setSettings(value)
-        setCommission(String(value.marketplaceCommissionPercent))
       })
       .catch((caught: unknown) =>
         setError(caught instanceof Error ? caught.message : "Could not load settings."),
@@ -965,18 +918,12 @@ function Config() {
   useEffect(() => load(), [getAdminSettings])
   const save = async () => {
     if (!settings) return
-    const percent = Number(commission)
-    if (!commission.trim() || !Number.isFinite(percent) || percent < 0 || percent > 30) {
-      setError("Commission must be between 0 and 30 percent.")
-      return
-    }
     setSaving(true)
     setError("")
     setMessage("")
     try {
       const saved = await saveAdminSettings({
         ...settings,
-        marketplaceCommissionPercent: percent,
       })
       setSettings(saved)
       setMessage("Settings saved and recorded in the admin audit log.")
@@ -999,10 +946,6 @@ function Config() {
         <div className="settings-grid">
           <section className="card setting-card">
             <h2>Marketplace</h2>
-            <label>
-              Marketplace commission (%)
-              <input type="number" min="0" max="30" step="0.1" value={commission} onChange={(event) => setCommission(event.target.value)} />
-            </label>
             <label className="setting-line">
               New provider applications enabled
               <input type="checkbox" checked={settings.newProviderApplicationsEnabled} onChange={(event) =>
@@ -1020,98 +963,205 @@ function Config() {
         </div>
       )}
       <DemoNotice>
-        Provider-application and ad-submission switches are API-enforced. The
-        commission rate is stored and audited but is not applied to charges:
-        fee calculation is not implemented. Integration secrets and notification
-        provider settings are intentionally not editable in the browser.
+        Provider-application and ad-submission switches are API-enforced. Commission settings are managed on Categories & fees and captured when a quote is accepted. Payments are recorded and reconciled manually; payment transfers are not integrated.
       </DemoNotice>
     </div>
   )
 }
 
 function AdminMonitoring() {
-  const { getAdminMonitoring, getAdminMonitoringHistory } = useAuth()
+  const { getAdminMonitoring, getAdminMonitoringHistory, getAdminAlerts, updateAdminAlert } = useAuth()
   const [snapshot, setSnapshot] = useState<AdminMonitoringSnapshot | null>(null)
   const [history, setHistory] = useState<AdminMonitoringSnapshot[]>([])
+  const [alerts, setAlerts] = useState<AdminAlertSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const load = () => {
     setLoading(true)
     setError("")
-    void Promise.all([
-      getAdminMonitoring(),
-      getAdminMonitoringHistory(50),
-    ])
-      .then(([current, previous]) => {
+    void Promise.all([getAdminMonitoring(), getAdminMonitoringHistory(50), getAdminAlerts(50)])
+      .then(([current, previous, managedAlerts]) => {
         setSnapshot(current)
         setHistory(previous)
+        setAlerts(managedAlerts)
+        setLastUpdated(new Date())
       })
-      .catch((caught: unknown) =>
-        setError(caught instanceof Error ? caught.message : "Could not load monitoring data."),
-      )
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load monitoring data."))
       .finally(() => setLoading(false))
   }
-  useEffect(() => load(), [getAdminMonitoring, getAdminMonitoringHistory])
-  return (
-    <div className="content console-content">
-      <PageHeader
-        title="System monitoring"
-        description="API, database, and moderation/verification queue signals."
-        action={<Button variant="secondary" onClick={load}>Refresh</Button>}
-      />
-      {error && <p className="form-error" role="alert">{error}</p>}
-      {loading ? <p role="status">Checking service health…</p> : snapshot && (
-        <>
-          <div className="metrics">
-            <Metric label="Database" value={snapshot.database === "ok" ? "Connected" : "Unavailable"} />
-            <Metric label="API uptime" value={`${Math.floor(snapshot.uptimeSeconds / 60)} min`} />
-            <Metric label="Pending verifications" value={snapshot.pendingVerifications.toLocaleString()} />
-            <Metric label="Open reports" value={snapshot.openReports.toLocaleString()} />
-            <Metric label="Heap usage" value={`${Math.round(snapshot.heapUsedBytes / snapshot.heapLimitBytes * 100)}%`} />
-          </div>
-          <section className="card">
-            <div className="section-title">
-              <h2>Current alerts</h2>
-              <span>Checked {new Date(snapshot.checkedAt).toLocaleString()}</span>
-            </div>
-            {snapshot.alerts.length ? snapshot.alerts.map((alert) => (
-              <p className="form-error" role="status" key={alert.code}>
-                {alert.severity.toUpperCase()}: {alert.message}
-              </p>
-            )) : <p>No alerts from the current checks.</p>}
-          </section>
-          <section className="card">
-            <h2>Recent recorded checks</h2>
-            {history.length ? (
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Checked</th><th>Database</th><th>Pending verifications</th><th>Open reports</th><th>Alerts</th></tr></thead>
-                  <tbody>{history.map((item) => (
-                    <tr key={item.checkedAt}>
-                      <td>{new Date(item.checkedAt).toLocaleString()}</td>
-                      <td>{item.database}</td>
-                      <td>{item.pendingVerifications}</td>
-                      <td>{item.openReports}</td>
-                      <td>{item.alerts.length}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            ) : <p>No monitoring snapshots recorded yet.</p>}
-          </section>
-          <DemoNotice>
-            Snapshots are recorded when an admin requests a health check and
-            retain up to 1,000 records. No continuous collector or external
-            notification delivery is configured.
-          </DemoNotice>
-        </>
-      )}
+  useEffect(() => { load() }, [getAdminMonitoring, getAdminMonitoringHistory, getAdminAlerts])
+  useEffect(() => {
+    const timer = window.setInterval(() => load(), 60_000)
+    return () => window.clearInterval(timer)
+  }, [getAdminMonitoring, getAdminMonitoringHistory, getAdminAlerts])
+  const takeAlertAction = async (id: string, action: "acknowledge" | "assign" | "resolve") => {
+    const reason = action === "resolve" ? window.prompt("Why is this alert resolved? Add a short note for the audit trail.")?.trim() ?? "" : undefined
+    if (action === "resolve" && (reason?.length ?? 0) < 5) { setError("Add a resolution note of at least five characters."); return }
+    setError("")
+    try { await updateAdminAlert(id, action, reason); load() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update this alert.") }
+  }
+  const money = (minor: number) => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(minor / 100)
+  return <div className="content console-content admin-monitoring">
+    <PageHeader title="System monitoring" description="Live API health and operational queues that need attention." action={<Button variant="secondary" onClick={load} disabled={loading}>Refresh</Button>} />
+    <p className="monitoring-live-status"><i /> Checks run automatically every minute while the API is running{lastUpdated ? " | Updated " + lastUpdated.toLocaleTimeString() : ""}{loading ? " | Refreshing..." : ""}</p>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {loading && !snapshot ? <p role="status">Checking API and marketplace health...</p> : snapshot && <>
+      <section className="metrics monitoring-metrics">
+        <Metric label="API" value="Online" />
+        <Metric label="Database" value={snapshot.database === "ok" ? "Connected" : "Unavailable"} />
+        <Metric label="Database check" value={snapshot.database === "ok" ? snapshot.databaseLatencyMs + " ms" : "Failed"} />
+        <Metric label="API uptime" value={Math.floor(snapshot.uptimeSeconds / 3600) + "h " + Math.floor(snapshot.uptimeSeconds % 3600 / 60) + "m"} />
+        <Metric label="Provider ID checks" value={snapshot.pendingVerifications.toLocaleString()} />
+        <Metric label="Hirer ID checks" value={(snapshot.pendingCustomerVerifications ?? 0).toLocaleString()} />
+        <Metric label="Open reports" value={snapshot.openReports.toLocaleString()} />
+        <Metric label="Active support cases" value={(snapshot.openSupportCases ?? 0).toLocaleString()} />
+        <Metric label="Overdue commissions" value={(snapshot.overdueCommissionCount ?? 0).toLocaleString()} />
+        <Metric label="Overdue commission value" value={money(snapshot.overdueCommissionMinor ?? 0)} />
+        <Metric label="API memory" value={Math.round(snapshot.heapUsedBytes / snapshot.heapLimitBytes * 100) + "%"} />
+      </section>
+      <section className="card monitoring-alerts">
+        <div className="section-title"><div><h2>Managed alerts</h2><p className="caption">Alerts stay open until the condition clears or an administrator resolves them.</p></div><span>{alerts.filter((item) => item.status !== "resolved").length} active</span></div>
+        {alerts.filter((item) => item.status !== "resolved").length ? <div className="monitoring-alert-list">{alerts.filter((item) => item.status !== "resolved").map((alert, index) => <article className="monitoring-alert" key={alert.id}><span className={alert.severity === "critical" ? "critical" : "warning"}>{alert.severity}</span><strong>{alert.message}</strong><small>#{index + 1} · {alert.code.replaceAll("_", " ")} · First seen {new Date(alert.firstSeenAt).toLocaleString()} · Last seen {new Date(alert.lastSeenAt).toLocaleString()}</small><small>Status: {alert.status}{alert.assignedAdminName ? ` · Assigned to ${alert.assignedAdminName}` : " · Unassigned"}</small><div className="card-actions">{alert.status === "open" && <Button variant="secondary" onClick={() => void takeAlertAction(alert.id, "acknowledge")}>Acknowledge</Button>}<Button variant="secondary" onClick={() => void takeAlertAction(alert.id, "assign")}>Assign to me</Button><Button variant="secondary" onClick={() => void takeAlertAction(alert.id, "resolve")}>Resolve</Button></div></article>)}</div> : <p className="monitoring-clear"><i /> No active alerts. Current checks are healthy.</p>}
+      </section>
+      <section className="card monitoring-health-target"><div><h2>External uptime check</h2><p>Point your uptime monitor at the deployed API’s <code>/health/ready</code> endpoint. It reports process and database readiness independently of this admin session.</p></div><Badge tone="green">Ready endpoint available</Badge></section>
+      <section className="card monitoring-history">
+        <div className="section-title"><div><h2>Recent health checks</h2><p className="caption">Automated history, newest first. Up to 50 checks shown.</p></div><span>{history.length} checks</span></div>
+        {history.length ? <div className="table-wrap"><table className="monitoring-table"><thead><tr><th>#</th><th>Checked</th><th>Database</th><th>Provider IDs</th><th>Reports</th><th>Heap</th><th>Alerts</th></tr></thead><tbody>{history.map((item, index) => <tr key={item.checkedAt}><td>{index + 1}</td><td>{new Date(item.checkedAt).toLocaleString()}</td><td><Badge tone={item.database === "ok" ? "green" : "red"}>{item.database}</Badge></td><td>{item.pendingVerifications}</td><td>{item.openReports}</td><td>{Math.round(item.heapUsedBytes / item.heapLimitBytes * 100)}%</td><td>{item.alerts.length ? <Badge tone="amber">{item.alerts.length}</Badge> : <span className="caption">Clear</span>}</td></tr>)}</tbody></table></div> : <p className="monitoring-clear">The first scheduled check is being recorded.</p>}
+      </section>
+    </>}
+  </div>
+}
+function nairobiDate(offsetDays = 0) {
+  const date = new Date()
+  date.setDate(date.getDate() + offsetDays)
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date)
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "00"
+  return `${part("year")}-${part("month")}-${part("day")}`
+}
+
+function AnalyticsTrend({ series }: { series: AdminAnalyticsReport["series"] }) {
+  const groupSize = Math.max(1, Math.ceil(series.length / 24))
+  const groups: { from: string; to: string; posted: number; hired: number; completed: number }[] = []
+  for (let index = 0; index < series.length; index += groupSize) {
+    const points = series.slice(index, index + groupSize)
+    groups.push({
+      from: points[0].date,
+      to: points[points.length - 1].date,
+      posted: points.reduce((sum, point) => sum + point.jobsPosted, 0),
+      hired: points.reduce((sum, point) => sum + point.hiredJobs, 0),
+      completed: points.reduce((sum, point) => sum + point.completedJobs, 0),
+    })
+  }
+  const max = Math.max(1, ...groups.flatMap((group) => [group.posted, group.hired, group.completed]))
+  const labels = [...new Set([0, Math.floor((groups.length - 1) / 2), groups.length - 1])]
+  return <div className="analytics-chart" role="img" aria-label="Grouped bars show jobs posted, hired, and completed">
+    <div className="analytics-bars">
+      {groups.map((group) => <div className="analytics-bar-group" key={group.from} title={group.from + (group.to !== group.from ? " to " + group.to : "") + ": " + group.posted + " posted, " + group.hired + " hired, " + group.completed + " completed"}>
+        <span className="analytics-bar posted" style={{ height: Math.max(group.posted ? 3 : 0, group.posted / max * 100) + "%" }} />
+        <span className="analytics-bar hired" style={{ height: Math.max(group.hired ? 3 : 0, group.hired / max * 100) + "%" }} />
+        <span className="analytics-bar completed" style={{ height: Math.max(group.completed ? 3 : 0, group.completed / max * 100) + "%" }} />
+      </div>)}
     </div>
-  )
+    <div className="analytics-chart-dates">{labels.map((index) => <span key={index}>{groups[index]?.from.slice(5)}</span>)}</div>
+    <div className="analytics-legend"><span><i className="posted" />Posted</span><span><i className="hired" />Hired</span><span><i className="completed" />Completed</span></div>
+  </div>
+}
+function Analytics() {
+  const { getAdminAnalytics } = useAuth()
+  const [from, setFrom] = useState(() => nairobiDate(-29))
+  const [to, setTo] = useState(() => nairobiDate())
+  const [category, setCategory] = useState("all")
+  const [status, setStatus] = useState<AdminAnalyticsFilters["status"]>("all")
+  const [report, setReport] = useState<AdminAnalyticsReport | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+
+  const loadReport = (filters: AdminAnalyticsFilters = { from, to, category, status }) => {
+    setLoading(true)
+    setError("")
+    void getAdminAnalytics(filters).then((nextReport) => {
+      setReport(nextReport)
+      setLastUpdated(new Date())
+    }).catch((caught: unknown) => {
+      setError(caught instanceof Error ? caught.message : "Could not load analytics.")
+    }).finally(() => setLoading(false))
+  }
+  useEffect(() => { loadReport() }, [getAdminAnalytics])
+  useEffect(() => {
+    const timer = window.setInterval(() => loadReport(), 60_000)
+    return () => window.clearInterval(timer)
+  }, [getAdminAnalytics, from, to, category, status])
+
+  const money = (minor: number) => new Intl.NumberFormat("en-KE", {
+    style: "currency", currency: report?.currency ?? "KES", maximumFractionDigits: 0,
+  }).format(minor / 100)
+  const percentChange = (value: number, prior: number) => prior ? `${value >= prior ? "+" : ""}${Math.round(((value - prior) / prior) * 100)}% vs previous period` : "No previous-period baseline"
+  const setRange = (days: number) => {
+    const nextFrom = nairobiDate(-(days - 1))
+    const nextTo = nairobiDate()
+    setFrom(nextFrom)
+    setTo(nextTo)
+    loadReport({ from: nextFrom, to: nextTo, category, status })
+  }
+  return <div className="content console-content admin-analytics">
+    <PageHeader eyebrow="Marketplace performance" title="Analytics" description="Track marketplace activity, agreed job value, and commission reconciliation." action={<Button variant="secondary" onClick={() => loadReport()} disabled={loading}>Refresh</Button>} />
+    <p className="analytics-live-status" aria-live="polite"><i /> {report ? "Live marketplace data" : "Connecting to marketplace data"}{lastUpdated ? " | Updated " + lastUpdated.toLocaleTimeString() : ""}{loading ? " | Refreshing..." : ""}</p>
+    <section className="card analytics-filters" aria-label="Analytics filters">
+      <div className="analytics-presets">
+        <button type="button" onClick={() => setRange(7)}>7 days</button>
+        <button type="button" onClick={() => setRange(30)}>30 days</button>
+        <button type="button" onClick={() => setRange(90)}>90 days</button>
+      </div>
+      <label>From<input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></label>
+      <label>To<input type="date" value={to} min={from} max={nairobiDate()} onChange={(event) => setTo(event.target.value)} /></label>
+      <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{(report?.categories ?? []).map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+      <label>Job status<select value={status} onChange={(event) => setStatus(event.target.value as AdminAnalyticsFilters["status"])}><option value="all">All statuses</option><option value="open">Open</option><option value="hired">Hired / in progress</option><option value="completed">Completed</option><option value="cancelled">Cancelled / expired</option><option value="disputed">Disputed</option></select></label>
+      <Button onClick={() => loadReport()}>Apply filters</Button>
+    </section>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {loading && !report ? <p role="status">Loading analytics…</p> : report && <>
+      <p className="analytics-period-note">Job activity uses the job creation date. Commission receipts use the receipt date. Current overdue fees are a live balance and are not limited to this date range.</p>
+      <section className="metrics analytics-metrics">
+        <Metric label="Jobs posted" value={report.current.jobsPosted.toLocaleString()} />
+        <Metric label="With proposals" value={report.current.jobsWithProposals.toLocaleString()} />
+        <Metric label="Hired" value={report.current.hiredJobs.toLocaleString()} />
+        <Metric label="Completed" value={report.current.completedJobs.toLocaleString()} />
+      </section>
+      <div className="analytics-comparison">
+        <span>{percentChange(report.current.jobsPosted, report.previous.jobsPosted)}</span>
+        <span>Previous period: {report.previous.jobsPosted.toLocaleString()} jobs | {report.previous.hiredJobs.toLocaleString()} hired | {report.previous.completedJobs.toLocaleString()} completed</span>
+      </div>
+      <div className="analytics-finance-grid">
+        <section className="card analytics-finance-card"><span>Agreed job value</span><strong>{money(report.current.agreedGrossMinor)}</strong><small>{percentChange(report.current.agreedGrossMinor, report.previous.agreedGrossMinor)}</small><small>Value agreed on accepted quotes; not a cash receipt.</small></section>
+        <section className="card analytics-finance-card"><span>Expected commission</span><strong>{money(report.current.expectedCommissionMinor)}</strong><small>From agreements attached to jobs posted in this period.</small></section>
+        <section className="card analytics-finance-card"><span>Reported by hirers</span><strong>{money(report.current.reportedCommissionMinor)}</strong><small>Current reported status for this period's job cohort.</small></section>
+        <section className="card analytics-finance-card"><span>Verified commission</span><strong>{money(report.current.verifiedCommissionMinor)}</strong><small>{percentChange(report.current.verifiedCommissionMinor, report.previous.verifiedCommissionMinor)} | receipt date in selected period</small></section>
+        <section className="card analytics-finance-card analytics-overdue"><span>Currently overdue</span><strong>{money(report.current.overdueCommissionMinor)}</strong><small>{report.current.overdueCommissionCount.toLocaleString()} commission records need follow-up.</small></section>
+      </div>
+      <section className="card analytics-section">
+        <div className="analytics-section-heading"><div><h2>Marketplace activity</h2><p>Daily jobs posted, hired, and completed.</p></div><span>{report.series.length} days</span></div>
+        <AnalyticsTrend series={report.series} />
+      </section>
+      <section className="card analytics-section">
+        <div className="analytics-section-heading"><div><h2>Jobs in this period</h2><p>Newest first | up to 100 records.</p></div><span>{report.jobs.length.toLocaleString()} shown</span></div>
+        {report.jobs.length ? <div className="table-wrap"><table className="analytics-table"><thead><tr><th>#</th><th>Job</th><th>Category</th><th>Proposals</th><th>Status</th><th>Posted</th></tr></thead><tbody>{report.jobs.map((job, index) => <tr key={job.reference}><td>{index + 1}</td><td><strong>{job.reference}</strong><small className="caption">{job.title}</small></td><td>{job.category}</td><td>{job.proposals}</td><td><Badge tone={job.status === "completed" ? "green" : job.status === "disputed" ? "red" : "amber"}>{job.status.replaceAll("_", " ")}</Badge></td><td>{new Date(job.createdAt).toLocaleDateString()}</td></tr>)}</tbody></table></div> : <p className="analytics-empty">No jobs match this period and filter.</p>}
+      </section>
+      <section className="card analytics-section">
+        <div className="analytics-section-heading"><div><h2>Commission pipeline</h2><p>Current fee status for payment agreements attached to jobs posted in this period.</p></div><span>{report.commissions.length.toLocaleString()} shown</span></div>
+        {report.commissions.length ? <div className="table-wrap"><table className="analytics-table"><thead><tr><th>#</th><th>Job</th><th>Hirer</th><th>Worker</th><th>Fee</th><th>Status</th><th>Due</th></tr></thead><tbody>{report.commissions.map((item, index) => <tr key={item.reference}><td>{index + 1}</td><td><strong>{item.reference}</strong><small className="caption">{item.title}</small></td><td>{item.customer}</td><td>{item.provider}</td><td>{money(item.feeMinor)}</td><td><Badge tone={item.status === "received" ? "green" : item.status === "disputed" ? "red" : "amber"}>{item.status}</Badge></td><td>{item.dueAt ? new Date(item.dueAt).toLocaleDateString() : "—"}</td></tr>)}</tbody></table></div> : <p className="analytics-empty">No payment agreements were created in this period.</p>}
+      </section>
+    </>}
+  </div>
 }
 
 export type AdminConsoleScreenKey =
   | "payments"
+  | "analytics"
   | "messages"
   | "monitoring"
   | "overview"
@@ -1122,20 +1172,25 @@ export type AdminConsoleScreenKey =
   | "adApprovals"
   | "audit"
   | "config"
+  | "team"
+  | "acceptInvite"
 
 export default function AdminConsoleScreen({ screen }: { screen: AdminConsoleScreenKey }) {
   switch (screen) {
     case "payments": return <Payments />
+    case "analytics": return <Analytics />
     case "messages": return <AdminMessages />
     case "monitoring": return <AdminMonitoring />
     case "overview": return <Overview />
     case "users": return <Users />
-    case "verification": return <Verification />
+    case "verification": return <IdentityVerification />
     case "moderation": return <Moderation />
     case "categories": return <Categories />
     case "adApprovals": return <AdApprovals />
     case "audit": return <AuditLog />
     case "config": return <Config />
+    case "team": return <AdminTeam />
+    case "acceptInvite": return <AdminInviteAccept />
     default: return null
   }
 }

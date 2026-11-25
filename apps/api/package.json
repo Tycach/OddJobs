@@ -12,6 +12,7 @@
     "prebuild": "npm run generate",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
+    "admin:bootstrap": "npm run build && node scripts/bootstrap-admin.mjs",
     "pretest": "npm run generate",
     "test": "tsx --test test/app.test.ts test/security.test.ts",
     "pretypecheck": "npm run generate",

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react"
 import {
   AuthProvider,
   useAuth,
+  type AdminAccess,
 } from "./auth/AuthProvider"
 import AuthExperience from "./auth/AuthExperience"
 import ProviderApplicationScreen from "./auth/ProviderApplicationScreen"
@@ -51,7 +52,7 @@ import {
 function preloadPage(screen: Screen, role: Role) {
   const customerPage = ["home", "workFeed", "map", "post", "jobs", "bids", "checkout", "track", "chat", "review", "dispute", "history", "saved", "settings", "hiringAnalytics", "hiringGuide"]
   const providerPage = ["providerHome", "listingCreate", "onboarding", "providerVerification", "identityVerification", "feed", "jobDetail", "providerBids", "management", "wallet", "reputation", "training", "plans", "analytics", "ads"]
-  const adminPage = ["messages", "overview", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "config"]
+  const adminPage = ["messages", "overview", "analytics", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "config", "team"]
   let load: (() => Promise<unknown>) | undefined
 
   if (screen === "welcome") load = loadLandingPage
@@ -60,6 +61,7 @@ function preloadPage(screen: Screen, role: Role) {
   else if (screen === "notifications") load = loadNotifications
   else if (screen === "operations") load = loadMarketplaceOperations
   else if (role === "admin" && (adminPage.includes(screen) || screen === "payments")) load = loadAdminConsole
+  else if (screen === "adminInviteAccept") load = loadAdminConsole
   else if (role === "provider" && providerPage.includes(screen)) load = loadProviderScreens
   else if (["disputes", "inbox", "knowledgeBase", "programmes", "impact", "builder"].includes(screen)) load = loadPrototypeScreens
 
@@ -309,13 +311,31 @@ function AppShell() {
   const [selectedDisputeListingId, setSelectedDisputeListingId] = useState<string | null>(null)
   const [routeNotice, setRouteNotice] = useState("")
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [adminAccess, setAdminAccess] = useState<AdminAccess | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const [store, setStore] = useState<DemoStore>(readDemoStore)
   const [storageError, setStorageError] = useState("")
   const [online, setOnline] = useState(navigator.onLine)
   const [offlineBannerDismissed, setOfflineBannerDismissed] = useState(false)
   const { role, screen } = route
-  const workspaceNavigation = navigation[role]
+  const workspaceNavigation = role === "admin" && adminAccess
+    ? navigation.admin.filter((item) => adminAccess.screens.includes(item.screen))
+    : navigation[role]
+  useEffect(() => {
+    if (role !== "admin" || !auth.profile) { setAdminAccess(null); return }
+    let active = true
+    void auth.getAdminAccess().then((access) => { if (active) setAdminAccess(access) }).catch((error: unknown) => {
+      console.error("Unable to load admin access profile.", error)
+    })
+    return () => { active = false }
+  }, [role, auth.profile?.id, auth.getAdminAccess])
+  useEffect(() => {
+    if (role !== "admin" || !adminAccess || route.screen === "login") return
+    if (adminAccess.screens.includes(route.screen)) return
+    const nextRoute = { role: "admin" as const, screen: "overview" as const }
+    window.history.replaceState(null, "", workspacePath(nextRoute))
+    setRoute(nextRoute)
+  }, [role, route.screen, adminAccess])
   useEffect(() => {
     if (role !== "provider" || screen !== "profile") return
     const nextRoute: WorkspaceRoute = { role: "provider", screen: "settings" }
@@ -504,7 +524,7 @@ function AppShell() {
   if (auth.loading) {
     return (
       <div className="auth-shell">
-        <p className="center-note">Checking your accountâ€¦</p>
+        <p className="center-note">Checking your account…</p>
       </div>
     )
   }
@@ -581,7 +601,7 @@ function AppShell() {
                 disabled={signingOut}
                 onClick={() => void signOutAndReturnToLogin()}
               >
-                {signingOut ? "Signing outâ€¦" : "Sign out"}
+                {signingOut ? "Signing out…" : "Sign out"}
               </Button>
             </section>
           </div>
@@ -668,6 +688,7 @@ function AppShell() {
       case "plans":
         return <ProviderScreens screen="plans" go={go} />
       case "analytics":
+        if (role === "admin") return <AdminConsoleScreen screen="analytics" />
         return role === "consumer" ? <CustomerScreens screen="hiringAnalytics" go={go} onOpenProvider={openProvider} /> : <ProviderScreens screen="analytics" go={go} />
       case "hiringAnalytics":
         return <CustomerScreens screen="hiringAnalytics" go={go} onOpenProvider={openProvider} />
@@ -677,6 +698,10 @@ function AppShell() {
         return <ProviderScreens screen="ads" go={go} />
       case "messages":
         return <AdminConsoleScreen screen="messages" />
+      case "team":
+        return <AdminConsoleScreen screen="team" />
+      case "adminInviteAccept":
+        return <AdminConsoleScreen screen="acceptInvite" />
       case "overview":
         return <AdminConsoleScreen screen="overview" />
       case "monitoring":
@@ -715,7 +740,7 @@ function AppShell() {
   }
   if (screen === "welcome") {
     return (
-      <Suspense fallback={<p className="center-note" role="status">Loading OddJobsâ€¦</p>}>
+      <Suspense fallback={<p className="center-note" role="status">Loading OddJobs…</p>}>
         <LandingPage
           onSignIn={() => navigate("consumer", "workspace")}
           onLogin={(nextRole) => navigate(nextRole, "login")}
@@ -857,7 +882,7 @@ function AppShell() {
                 onClick={() => void signOutAndReturnToLogin()}
               >
                 <Icon name="logout" />
-                <span>{signingOut ? "Signing outâ€¦" : "Sign out"}</span>
+                <span>{signingOut ? "Signing out…" : "Sign out"}</span>
               </button>
             </aside>
           </>
@@ -907,7 +932,7 @@ function AppShell() {
               onClick={() => void signOutAndReturnToLogin()}
             >
               <Icon name="logout" />
-              <span>{signingOut ? "Signing outâ€¦" : "Sign out"}</span>
+              <span>{signingOut ? "Signing out…" : "Sign out"}</span>
             </button>
             {role === "consumer" && <button className="support-mini" onClick={() => navigate("consumer", "dispute")}>
               <Icon name="message" />

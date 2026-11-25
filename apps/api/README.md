@@ -187,6 +187,14 @@ provisioned by a trusted operator; public signup and provider application
 flows do not grant them. Do not expose the database connection or grant admin
 roles through browser-facing code.
 
+For a first local development admin, create and confirm the account in Supabase
+Auth, then run `npm run admin:bootstrap -- admin@example.com` from `apps/api`.
+The one-time script bootstraps the OddJobs profile and grants the `ADMIN` role
+only after you confirm the Supabase project ref. It refuses to run unless
+`NODE_ENV=development`; verify the displayed Supabase project and database host
+are your dedicated development environment before continuing. Never use this
+script against shared or production data.
+
 The admin Overview, Monitoring, Users & roles, Verification queue, Reports &
 moderation, Audit log, Categories & fees, Ad approvals, and System config
 screens use API-backed data. Before release, apply migrations in staging,
@@ -233,8 +241,11 @@ limits. Do not run load, brute-force, or destructive tests against production.
 - Admin-issued account suspension blocks the existing active-profile guarded
   operations and can be reversed by an admin. It does not ban the identity at
   Supabase Auth or remove content.
-- Monitoring snapshots are created on admin health-check requests, not by a
-  continuous background collector. External alerts are not configured.
+- A one-minute background collector records database, API resource, queue,
+  report, support, and overdue-commission signals. Managed alerts can be
+  acknowledged, assigned, and resolved with audited outcomes. The API exposes
+  `/health/ready` for an external uptime provider; outbound email/SMS alerts
+  and a third-party uptime account still need to be configured separately.
 - Identity documents are not collected or stored; do not approve verification
   based on profile fields alone.
 - Do not connect a real payment provider until legal/provider approval, ledger
@@ -242,3 +253,14 @@ limits. Do not run load, brute-force, or destructive tests against production.
   reconciliation are implemented and tested. See
   `../../docs/marketplace-payments-plan.md` and
   `../../docs/implementation-roadmap.md`.
+
+## Admin team access
+
+- Only an owner can invite administrators, revoke pending invitations, assign
+  scoped roles, or remove invited administrators. Existing admin accounts are
+  treated as protected legacy owners until explicitly managed.
+- Invitations are sent through Supabase Auth and expire after seven days.
+  Configure `SUPABASE_SECRET_KEY` on the API only, and allow the local and
+  production `/consumer/adminInviteAccept` URLs in Supabase Auth redirect URLs.
+- Team changes, invitations, alert actions, and other admin decisions are
+  recorded in the audit log. Routine dashboard reads are not logged.

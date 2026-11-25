@@ -219,6 +219,7 @@ export type JobPaymentRecord = {
   platformFeeStatus: PlatformFeeStatus
   platformFeeReportedByUserId: string | null
   platformFeeReportedAt: string | null
+  platformFeeDueAt: string | null
   platformFeePaymentReference: string | null
   platformFeeReceivedAt: string | null
   platformFeeReceiptReference: string | null
@@ -227,6 +228,9 @@ export type JobPaymentRecord = {
   resolvedAt: string | null
   payoutHoldAt?: string | null
   payoutHoldReason?: string | null
+  commissionOverdue?: boolean
+  customerCommissionRestricted?: boolean
+  customerRestrictionReason?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -363,6 +367,22 @@ export type JobConversationMessage = {
   createdAt: string
 }
 
+export type SupportCaseStatus = "open" | "in_progress" | "waiting_on_user" | "resolved"
+export type SupportCategory = "general" | "payment" | "work_review" | "safety" | "account" | "other"
+export type SupportCaseSummary = {
+  id: string; caseReference: string; jobId: string; jobReference: string; jobTitle: string
+  requesterId: string; requesterName: string; requesterRole: "consumer" | "provider"
+  category: SupportCategory; subject: string; status: SupportCaseStatus
+  latestMessage: string; updatedAt: string; createdAt: string
+}
+export type SupportCaseMessage = {
+  id: string; caseId: string; senderId: string; senderName: string
+  senderRole: "consumer" | "provider" | "admin" | "support"; body: string; createdAt: string
+}
+export type CreateSupportCaseInput = {
+  jobReference: string; category: SupportCategory; subject: string; body: string
+}
+
 export class MarketplaceConflictError extends Error {
   constructor(message: string) {
     super(message)
@@ -371,6 +391,8 @@ export class MarketplaceConflictError extends Error {
 }
 
 export interface MarketplaceStore {
+  hasActiveCommissionRestriction?(userId: string): Promise<boolean>
+  listActiveServiceCategories?(): Promise<Array<{ name: string; slug: string }>>
   listMyJobPayments?(userId: string, role: "consumer" | "provider"): Promise<JobPaymentRecord[]>
   reportJobPayment?(userId: string, jobId: string, method: JobPaymentMethod, requestId: string): Promise<JobPaymentRecord | null>
   reportPlatformFee?(userId: string, jobId: string, paymentReference: string, requestId: string): Promise<JobPaymentRecord | null>
@@ -380,6 +402,10 @@ export interface MarketplaceStore {
   openJobConversation?(userId: string, role: "consumer" | "provider", jobId: string, providerId?: string): Promise<JobConversation | null>
   listJobConversationMessages?(userId: string, conversationId: string): Promise<JobConversationMessage[] | null>
   createJobConversationMessage?(userId: string, conversationId: string, body: string, requestId: string): Promise<JobConversationMessage | null>
+  listSupportCases?(userId: string, role: "consumer" | "provider"): Promise<SupportCaseSummary[]>
+  createSupportCase?(userId: string, role: "consumer" | "provider", input: CreateSupportCaseInput, requestId: string): Promise<SupportCaseSummary | null>
+  listSupportCaseMessages?(userId: string, role: "consumer" | "provider", caseId: string): Promise<SupportCaseMessage[] | null>
+  createSupportCaseMessage?(userId: string, role: "consumer" | "provider", caseId: string, body: string, requestId: string): Promise<SupportCaseMessage | null>
   listServiceListings?(userId: string, role: "consumer" | "provider", view: "feed" | "mine"): Promise<ServiceListing[]>
   createServiceListing?(userId: string, input: CreateServiceListingInput, requestId: string): Promise<ServiceListing>
   claimServiceListing?(userId: string, listingId: string, requestId: string): Promise<ServiceListing | null>
@@ -471,6 +497,14 @@ export type AdminUserSummary = {
 
   roles: string[]
 
+  commissionRestricted: boolean
+
+  commissionRestrictionReason: string | null
+
+  overdueCommissionCount: number
+
+  overdueCommissionMinor: number
+
   createdAt: string
 }
 
@@ -478,6 +512,8 @@ export type AdminAuditEvent = {
   id: string
 
   actorUserId: string
+
+  actorDisplayName?: string | null
 
   action: string
 
@@ -490,6 +526,53 @@ export type AdminAuditEvent = {
   requestId: string
 
   createdAt: string
+}
+
+export type AdminAuditFilters = {
+  search: string
+  action: string
+  from: string
+  to: string
+}
+
+export type AdminMemberRole = "OWNER" | "ADMIN" | "OPERATIONS_ADMIN" | "VERIFICATION_REVIEWER" | "MODERATION_REVIEWER" | "SUPPORT_AGENT" | "FINANCE_REVIEWER" | "ANALYST"
+
+export type AdminMemberSummary = {
+  userId: string
+  displayName: string
+  role: AdminMemberRole
+  legacyOwner: boolean
+  joinedAt: string
+}
+
+export type AdminInvitationSummary = {
+  id: string
+  email: string
+  role: AdminMemberRole
+  status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"
+  invitedByName: string
+  createdAt: string
+  expiresAt: string
+}
+
+export type AdminTeamSummary = {
+  members: AdminMemberSummary[]
+  invitations: AdminInvitationSummary[]
+}
+
+export type AdminAlertSummary = {
+  id: string
+  code: string
+  severity: "critical" | "warning"
+  message: string
+  status: "open" | "acknowledged" | "resolved"
+  firstSeenAt: string
+  lastSeenAt: string
+  acknowledgedAt: string | null
+  assignedAdminId: string | null
+  assignedAdminName: string | null
+  resolvedAt: string | null
+  resolutionNote: string | null
 }
 
 export type AdminPage<T,> = {
@@ -514,6 +597,40 @@ export type AdminOverview = {
   completedJobs: number
 
   disputedJobs: number
+}
+
+export type AdminAnalyticsFilters = {
+  from: string
+  to: string
+  category: string
+  status: "all" | "open" | "hired" | "completed" | "cancelled" | "disputed"
+}
+
+export type AdminAnalyticsReport = {
+  currency: string
+  categories: string[]
+  current: {
+    jobsPosted: number
+    jobsWithProposals: number
+    hiredJobs: number
+    completedJobs: number
+    agreedGrossMinor: number
+    expectedCommissionMinor: number
+    reportedCommissionMinor: number
+    verifiedCommissionMinor: number
+    overdueCommissionMinor: number
+    overdueCommissionCount: number
+  }
+  previous: {
+    jobsPosted: number
+    hiredJobs: number
+    completedJobs: number
+    agreedGrossMinor: number
+    verifiedCommissionMinor: number
+  }
+  series: { date: string; jobsPosted: number; hiredJobs: number; completedJobs: number; agreedGrossMinor: number; verifiedCommissionMinor: number }[]
+  jobs: { reference: string; title: string; category: string; status: string; proposals: number; createdAt: string }[]
+  commissions: { reference: string; title: string; customer: string; provider: string; feeMinor: number; status: string; dueAt: string | null; updatedAt: string }[]
 }
 
 export type AdminVerificationSummary = {
@@ -572,6 +689,8 @@ export type AdminCategory = {
   slug: string
   active: boolean
   sortOrder: number
+  totalJobs: number
+  openJobs: number
 }
 
 export type AdminAdCampaign = {
@@ -619,9 +738,19 @@ export type AdminMonitoringSnapshot = {
 
   database: "ok" | "unavailable"
 
+  databaseLatencyMs?: number
+
   pendingVerifications: number
 
+  pendingCustomerVerifications?: number
+
   openReports: number
+
+  openSupportCases?: number
+
+  overdueCommissionCount?: number
+
+  overdueCommissionMinor?: number
 
   alerts: {
     severity: "critical" | "warning"
@@ -633,11 +762,27 @@ export type AdminMonitoringSnapshot = {
 }
 
 export interface AdminStore {
+  getAdminMemberRole?(userId: string): Promise<AdminMemberRole | null>
+  listAdminTeam?(): Promise<AdminTeamSummary>
+  createAdminInvitation?(input: { id: string; email: string; role: AdminMemberRole; tokenHash: string; invitedBy: string; expiresAt: Date }): Promise<AdminInvitationSummary>
+  revokeAdminInvitation?(invitationId: string, actorUserId: string): Promise<boolean>
+  setAdminMemberRole?(input: { userId: string; role: AdminMemberRole; actorUserId: string }): Promise<boolean>
+  removeAdminMember?(input: { userId: string; actorUserId: string }): Promise<boolean>
+  acceptAdminInvitation?(input: { invitationId: string; email: string; tokenHash: string; userId: string; displayName: string }): Promise<AdminMemberRole | null>
+  listAdminAlerts?(limit: number): Promise<AdminAlertSummary[]>
+  syncAdminAlerts?(alerts: AdminMonitoringSnapshot["alerts"]): Promise<void>
+  updateAdminAlert?(input: { actorUserId: string; alertId: string; action: "acknowledge" | "assign" | "resolve"; assignedAdminId?: string | null; reason?: string }): Promise<AdminAlertSummary | null>
+  listAdminSupportCases?(search: string, status: SupportCaseStatus | "all", limit: number, offset: number): Promise<AdminPage<SupportCaseSummary>>
+  listAdminSupportCaseMessages?(caseId: string): Promise<SupportCaseMessage[] | null>
+  createAdminSupportCaseMessage?(adminUserId: string, caseId: string, body: string, requestId: string): Promise<SupportCaseMessage | null>
+  setAdminSupportCaseStatus?(adminUserId: string, caseId: string, status: SupportCaseStatus, requestId: string): Promise<SupportCaseSummary | null>
   listAdminJobPayments?(search: string, status: JobPaymentStatus | "all", limit: number, offset: number): Promise<AdminJobPaymentPage>
+  setAdminCommissionRestriction?(input: { actorUserId: string; userId: string; restricted: boolean; reason: string; requestId: string }): Promise<{ restricted: boolean; reason: string | null } | null>
   resolveAdminJobPayment?(input: { actorUserId: string; paymentId: string; resolution: "paid" | "refunded"; reason: string; requestId: string }): Promise<JobPaymentRecord | null>
   setAdminProviderPayoutHold?(input: { actorUserId: string; providerId: string; held: boolean; reason: string; requestId: string }): Promise<boolean>
   recordAdminPlatformFeeReceipt?(input: { actorUserId: string; paymentId: string; receiptReference: string; requestId: string }): Promise<JobPaymentRecord | null>
   getAdminOverview(): Promise<AdminOverview>
+  getAdminAnalytics(filters: AdminAnalyticsFilters): Promise<AdminAnalyticsReport>
 
   listAdminUsers(
     limit: number,
@@ -761,15 +906,14 @@ export interface AdminStore {
 
   getAdminMonitoringSnapshot(): Promise<{
     pendingVerifications: number
-
+    pendingCustomerVerifications: number
     openReports: number
+    openSupportCases: number
+    overdueCommissionCount: number
+    overdueCommissionMinor: number
   }>
 
-  listAdminAuditEvents(
-    limit: number,
-
-    offset: number,
-  ): Promise<AdminPage<AdminAuditEvent>>
+  listAdminAuditEvents(limit: number, offset: number, filters?: AdminAuditFilters): Promise<AdminPage<AdminAuditEvent>>
 
   listAdminMarketplaceActivity(
     limit: number,

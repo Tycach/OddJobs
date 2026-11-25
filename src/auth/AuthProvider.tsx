@@ -189,6 +189,20 @@ export type MarketplaceConversationMessage = {
   createdAt: string
 }
 
+export type SupportCaseStatus = "open" | "in_progress" | "waiting_on_user" | "resolved"
+export type SupportCategory = "general" | "payment" | "work_review" | "safety" | "account" | "other"
+export type SupportCase = {
+  id: string; caseReference: string; jobId: string; jobReference: string; jobTitle: string
+  requesterId: string; requesterName: string; requesterRole: "consumer" | "provider"
+  category: SupportCategory; subject: string; status: SupportCaseStatus
+  latestMessage: string; updatedAt: string; createdAt: string
+}
+export type SupportCaseMessage = {
+  id: string; caseId: string; senderId: string; senderName: string
+  senderRole: "consumer" | "provider" | "admin" | "support"; body: string; createdAt: string
+}
+export type CreateSupportCaseInput = { jobReference: string; category: SupportCategory; subject: string; body: string }
+
 export type MarketplaceProviderQuote = MarketplaceQuote & {
   jobReference: string
   jobTitle: string
@@ -206,10 +220,11 @@ export type JobPaymentRecord = {
   currency: string; method: JobPaymentMethod | null; status: JobPaymentStatus
   reportedByUserId: string | null; reportedAt: string | null; confirmedByUserId: string | null; confirmedAt: string | null
   platformFeeStatus: "due" | "reported" | "received" | "disputed"
-  platformFeeReportedByUserId: string | null; platformFeeReportedAt: string | null; platformFeePaymentReference: string | null
+  platformFeeReportedByUserId: string | null; platformFeeReportedAt: string | null; platformFeeDueAt: string | null; platformFeePaymentReference: string | null
   platformFeeReceivedAt: string | null; platformFeeReceiptReference: string | null
   disputeReason: string | null; resolutionNote: string | null; resolvedAt: string | null
   payoutHoldAt?: string | null; payoutHoldReason?: string | null; createdAt: string; updatedAt: string
+  commissionOverdue?: boolean; customerCommissionRestricted?: boolean; customerRestrictionReason?: string | null
 }
 export type AdminJobPaymentPage = AdminPage<JobPaymentRecord> & {
   summary: { paidGrossMinor: number; commissionMinor: number; providerNetMinor: number; commissionDueMinor: number; disputedCount: number }
@@ -279,6 +294,14 @@ export type AdminUserSummary = {
 
   roles: string[]
 
+  commissionRestricted: boolean
+
+  commissionRestrictionReason: string | null
+
+  overdueCommissionCount: number
+
+  overdueCommissionMinor: number
+
   createdAt: string
 }
 
@@ -286,6 +309,8 @@ export type AdminAuditEvent = {
   id: string
 
   actorUserId: string
+
+  actorDisplayName?: string | null
 
   action: string
 
@@ -299,6 +324,13 @@ export type AdminAuditEvent = {
 
   createdAt: string
 }
+
+export type AdminMemberRole = "OWNER" | "ADMIN" | "OPERATIONS_ADMIN" | "VERIFICATION_REVIEWER" | "MODERATION_REVIEWER" | "SUPPORT_AGENT" | "FINANCE_REVIEWER" | "ANALYST"
+export type AdminMemberSummary = { userId: string; displayName: string; role: AdminMemberRole; legacyOwner: boolean; joinedAt: string }
+export type AdminInvitationSummary = { id: string; email: string; role: AdminMemberRole; status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"; invitedByName: string; createdAt: string; expiresAt: string }
+export type AdminTeamSummary = { members: AdminMemberSummary[]; invitations: AdminInvitationSummary[] }
+export type AdminAlertSummary = { id: string; code: string; severity: "critical" | "warning"; message: string; status: "open" | "acknowledged" | "resolved"; firstSeenAt: string; lastSeenAt: string; acknowledgedAt: string | null; assignedAdminId: string | null; assignedAdminName: string | null; resolvedAt: string | null; resolutionNote: string | null }
+export type AdminAccess = { role: AdminMemberRole; screens: string[] }
 
 export type AdminMarketplaceActivity = {
   id: string
@@ -350,6 +382,40 @@ export type AdminOverview = {
   completedJobs: number
 
   disputedJobs: number
+}
+
+export type AdminAnalyticsFilters = {
+  from: string
+  to: string
+  category: string
+  status: "all" | "open" | "hired" | "completed" | "cancelled" | "disputed"
+}
+
+export type AdminAnalyticsReport = {
+  currency: string
+  categories: string[]
+  current: {
+    jobsPosted: number
+    jobsWithProposals: number
+    hiredJobs: number
+    completedJobs: number
+    agreedGrossMinor: number
+    expectedCommissionMinor: number
+    reportedCommissionMinor: number
+    verifiedCommissionMinor: number
+    overdueCommissionMinor: number
+    overdueCommissionCount: number
+  }
+  previous: {
+    jobsPosted: number
+    hiredJobs: number
+    completedJobs: number
+    agreedGrossMinor: number
+    verifiedCommissionMinor: number
+  }
+  series: { date: string; jobsPosted: number; hiredJobs: number; completedJobs: number; agreedGrossMinor: number; verifiedCommissionMinor: number }[]
+  jobs: { reference: string; title: string; category: string; status: string; proposals: number; createdAt: string }[]
+  commissions: { reference: string; title: string; customer: string; provider: string; feeMinor: number; status: string; dueAt: string | null; updatedAt: string }[]
 }
 
 export type AdminVerificationSummary = {
@@ -413,7 +479,11 @@ export type AdminCategory = {
   slug: string
   active: boolean
   sortOrder: number
+  totalJobs: number
+  openJobs: number
 }
+
+export type MarketplaceServiceCategory = { name: string; slug: string }
 
 export type AdminSystemSettings = {
   marketplaceCommissionPercent: number
@@ -444,9 +514,19 @@ export type AdminMonitoringSnapshot = {
 
   database: "ok" | "unavailable"
 
+  databaseLatencyMs?: number
+
   pendingVerifications: number
 
+  pendingCustomerVerifications?: number
+
   openReports: number
+
+  openSupportCases?: number
+
+  overdueCommissionCount?: number
+
+  overdueCommissionMinor?: number
 
   alerts: {
     severity: "critical" | "warning"
@@ -539,12 +619,22 @@ type AuthContextValue = {
   ) => Promise<AdminPage<AdminUserSummary>>
 
   reinstateAdminUser: (userId: string) => Promise<void>
+  setAdminCommissionRestriction: (userId: string, restricted: boolean, reason: string) => Promise<{ restricted: boolean; reason: string | null }>
 
   getAdminAuditEvents: (
     limit: number,
 
     offset: number,
   ) => Promise<AdminPage<AdminAuditEvent>>
+  getAdminAccess: () => Promise<AdminAccess>
+  getAdminTeam: () => Promise<AdminTeamSummary>
+  setAdminMemberRole: (userId: string, role: AdminMemberRole) => Promise<void>
+  removeAdminMember: (userId: string) => Promise<void>
+  inviteAdminUser: (email: string, role: AdminMemberRole) => Promise<AdminInvitationSummary>
+  revokeAdminInvitation: (invitationId: string) => Promise<void>
+  acceptAdminInvitation: (invitationId: string, token: string) => Promise<{ role: AdminMemberRole; redirectTo: string }>
+  getAdminAlerts: (limit?: number) => Promise<AdminAlertSummary[]>
+  updateAdminAlert: (alertId: string, action: "acknowledge" | "assign" | "resolve", reason?: string) => Promise<AdminAlertSummary>
 
   getAdminMarketplaceActivity: (
     limit: number,
@@ -562,6 +652,7 @@ type AuthContextValue = {
   releaseAdminServiceListing: (listingId: string, reason: string) => Promise<AdminServiceListing>
 
   getAdminOverview: () => Promise<AdminOverview>
+  getAdminAnalytics: (filters: AdminAnalyticsFilters) => Promise<AdminAnalyticsReport>
 
   getAdminVerifications: (
     status: AdminVerificationStatus,
@@ -619,8 +710,9 @@ type AuthContextValue = {
   getAdminMonitoringHistory: (limit: number) => Promise<AdminMonitoringSnapshot[]>
 
   getAdminCategories: () => Promise<AdminCategory[]>
+  getMarketplaceCategories: () => Promise<MarketplaceServiceCategory[]>
 
-  saveAdminCategory: (category: Omit<AdminCategory, "id">) => Promise<AdminCategory>
+  saveAdminCategory: (category: Omit<AdminCategory, "id" | "totalJobs" | "openJobs">) => Promise<AdminCategory>
 
   getAdminSettings: () => Promise<AdminSystemSettings>
 
@@ -696,6 +788,10 @@ type AuthContextValue = {
   openMarketplaceConversation: (jobId: string, role: "consumer" | "provider", providerId?: string) => Promise<MarketplaceConversation>
   getMarketplaceConversationMessages: (conversationId: string) => Promise<MarketplaceConversationMessage[]>
   sendMarketplaceConversationMessage: (conversationId: string, body: string) => Promise<MarketplaceConversationMessage>
+  getSupportCases: (role: "consumer" | "provider") => Promise<SupportCase[]>
+  createSupportCase: (role: "consumer" | "provider", input: CreateSupportCaseInput) => Promise<SupportCase>
+  getSupportCaseMessages: (role: "consumer" | "provider", caseId: string) => Promise<SupportCaseMessage[]>
+  sendSupportCaseMessage: (role: "consumer" | "provider", caseId: string, body: string) => Promise<SupportCaseMessage>
 
   getServiceListings: (role: "consumer" | "provider", view: "feed" | "mine") => Promise<ServiceListing[]>
   createServiceListing: (input: ServiceListingInput) => Promise<ServiceListing>
@@ -709,6 +805,10 @@ type AuthContextValue = {
   getServiceListingMessages: (listingId: string, role: "consumer" | "provider") => Promise<ServiceListingMessage[]>
   sendServiceListingMessage: (listingId: string, role: "consumer" | "provider", body: string) => Promise<ServiceListingMessage>
   getAdminServiceListingMessages: (limit: number, offset: number, search?: string) => Promise<AdminPage<AdminServiceListingMessage>>
+  getAdminSupportCases: (search: string, status: SupportCaseStatus | "all", limit: number, offset: number) => Promise<AdminPage<SupportCase>>
+  getAdminSupportCaseMessages: (caseId: string) => Promise<SupportCaseMessage[]>
+  sendAdminSupportMessage: (caseId: string, body: string) => Promise<SupportCaseMessage>
+  updateAdminSupportCaseStatus: (caseId: string, status: SupportCaseStatus) => Promise<SupportCase>
   getAdminJobPayments: (search: string, status: JobPaymentStatus | "all", limit: number, offset: number) => Promise<AdminJobPaymentPage>
   resolveAdminJobPayment: (paymentId: string, resolution: "paid" | "refunded", reason: string) => Promise<JobPaymentRecord>
   recordAdminPlatformFeeReceipt: (paymentId: string, receiptReference: string) => Promise<JobPaymentRecord>
@@ -801,7 +901,7 @@ function getAuthErrorMessage(
     message.includes("redirect") &&
     (message.includes("not allowed") || message.includes("allowlist"))
   ) {
-    return "The sign-in return URL is not allowed in Supabase Auth. Add this appâ€™s root URL to the Auth redirect URL allowlist."
+    return "The sign-in return URL is not allowed in Supabase Auth. Add this app’s root URL to the Auth redirect URL allowlist."
   }
 
   if (
@@ -824,7 +924,7 @@ function getAuthErrorMessage(
     code.includes("invalid_credentials") ||
     message.includes("invalid login credentials")
   ) {
-    return "Those sign-in details donâ€™t match. Check them and try again."
+    return "Those sign-in details don’t match. Check them and try again."
   }
 
   if (
@@ -841,7 +941,7 @@ function getAuthErrorMessage(
     message.includes("invalid otp") ||
     message.includes("invalid token")
   ) {
-    return "That verification code doesnâ€™t look right. Check it and try again."
+    return "That verification code doesn’t look right. Check it and try again."
   }
 
   if (code.includes("weak_password") || message.includes("weak password")) {
@@ -926,7 +1026,7 @@ async function postPolicyConsent(
       getApiErrorMessage(
         consentResponse.status,
 
-        "We couldnâ€™t save your policy acceptance. Please try again.",
+        "We couldn’t save your policy acceptance. Please try again.",
       ),
     )
   }
@@ -952,7 +1052,7 @@ async function fetchProfile(
       getApiErrorMessage(
         response.status,
 
-        "We couldnâ€™t load your profile. Please try again.",
+        "We couldn’t load your profile. Please try again.",
       ),
     )
   }
@@ -1025,7 +1125,7 @@ function getAdminResponseError(status: number) {
       : getApiErrorMessage(
           status,
 
-          "We couldnâ€™t load this admin data. Please try again.",
+          "We couldn’t load this admin data. Please try again.",
         ),
   )
 }
@@ -1063,10 +1163,17 @@ async function fetchAdminOverview(): Promise<AdminOverview> {
   return (await response.json()) as AdminOverview
 }
 
+async function fetchAdminAnalytics(filters: AdminAnalyticsFilters): Promise<AdminAnalyticsReport> {
+  const query = new URLSearchParams(filters)
+  const response = await adminRequest(`/v1/admin/analytics?${query.toString()}`)
+  if (!response.ok) throw getAdminResponseError(response.status)
+  return (await response.json()) as AdminAnalyticsReport
+}
+
 async function postAdminAction<T>(
   path: string,
   body: unknown,
-  method: "POST" | "PUT" = "POST",
+  method: "POST" | "PUT" | "PATCH" = "POST",
 ): Promise<T> {
   const response = await adminRequest(path, {
     method,
@@ -1076,7 +1183,10 @@ async function postAdminAction<T>(
     body: JSON.stringify(body),
   })
 
-  if (!response.ok) throw getAdminResponseError(response.status)
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(payload?.error || getAdminResponseError(response.status).message)
+  }
 
   return (await response.json()) as T
 }
@@ -1256,7 +1366,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           updateResult.error,
 
-          "We couldnâ€™t save your policy acceptance. Please try again.",
+          "We couldn’t save your policy acceptance. Please try again.",
         ),
       )
     }
@@ -1268,7 +1378,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           sessionResult.error,
 
-          "We couldnâ€™t confirm your sign-in. Please sign in again.",
+          "We couldn’t confirm your sign-in. Please sign in again.",
         ),
       )
     }
@@ -1365,7 +1475,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldnâ€™t send a verification code. Please try again shortly.",
+          "We couldn’t send a verification code. Please try again shortly.",
         )
       : null
   }
@@ -1398,7 +1508,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldnâ€™t sign you in. Please check your details and try again.",
+          "We couldn’t sign you in. Please check your details and try again.",
         )
       : null
   }
@@ -1461,7 +1571,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? getAuthErrorMessage(
             result.error,
 
-            "We couldnâ€™t create your account right now. Please try again shortly.",
+            "We couldn’t create your account right now. Please try again shortly.",
           )
         : null,
 
@@ -1484,7 +1594,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           error,
 
-          "We couldnâ€™t start sign-in with that option. Please try again.",
+          "We couldn’t start sign-in with that option. Please try again.",
         )
       : null
   }
@@ -1502,7 +1612,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           error,
 
-          "We couldnâ€™t send a reset link. Please try again shortly.",
+          "We couldn’t send a reset link. Please try again shortly.",
         )
       : null
   }
@@ -1518,7 +1628,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           error,
 
-          "We couldnâ€™t update your password. Please try again.",
+          "We couldn’t update your password. Please try again.",
         )
       : null
   }
@@ -1555,7 +1665,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldnâ€™t verify that code. Please try again.",
+          "We couldn’t verify that code. Please try again.",
         )
       : null
   }
@@ -1578,7 +1688,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? getAuthErrorMessage(
           result.error,
 
-          "We couldnâ€™t send a new verification code. Please try again.",
+          "We couldn’t send a new verification code. Please try again.",
         )
       : null
   }
@@ -1599,7 +1709,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           error,
 
-          "We couldnâ€™t confirm your sign-in. Please sign in again.",
+          "We couldn’t confirm your sign-in. Please sign in again.",
         ),
       )
     }
@@ -1645,15 +1755,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!response.ok) {
       await supabase.storage.from("provider-verification").remove([documentPath])
-      throw new Error(
-        getApiErrorMessage(
-          response.status,
-
-          "We couldnâ€™t submit your supplier application. Please try again.",
-        ),
-      )
+      const responseBody = (await response.json().catch(() => null)) as { error?: unknown } | null
+      const serverMessage = typeof responseBody?.error === "string" ? responseBody.error : "Provider application could not be submitted. Please try again."
+      throw new Error(getApiErrorMessage(response.status, serverMessage))
     }
-
     const result = (await response.json()) as ProviderApplication
     if (result.documentPath !== documentPath) {
       await supabase.storage.from("provider-verification").remove([documentPath])
@@ -1665,7 +1770,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (metadataResult.error) {
       throw new Error(
-        "Your application was received, but we couldnâ€™t finish updating your account. Please contact support if you need help.",
+        "Your application was received, but we couldn’t finish updating your account. Please contact support if you need help.",
       )
     }
 
@@ -1713,7 +1818,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
     if (!response.ok) {
       await supabase.storage.from("customer-verification").remove([documentPath])
-      throw new Error(getApiErrorMessage(response.status, "Could not submit your identity check."))
+      const responseBody = (await response.json().catch(() => null)) as { error?: unknown } | null
+      const serverMessage = typeof responseBody?.error === "string" ? responseBody.error : "Could not submit your identity check."
+      throw new Error(getApiErrorMessage(response.status, serverMessage))
     }
     return await response.json() as CustomerVerificationSummary
   }, [])
@@ -1760,7 +1867,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAuthErrorMessage(
           error,
 
-          "We couldnâ€™t sign you out. Please try again.",
+          "We couldn’t sign you out. Please try again.",
         ),
       )
     }
@@ -1783,12 +1890,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const setAdminCommissionRestriction = useCallback((userId: string, restricted: boolean, reason: string) => postAdminAction<{ restricted: boolean; reason: string | null }>(`/v1/admin/users/${encodeURIComponent(userId)}/commission-restriction`, { restricted, reason }, "PATCH"), [])
+
   const getAdminAuditEvents = useCallback(
-    (limit: number, offset: number) =>
-      fetchAdminPage<AdminAuditEvent>("audit", limit, offset),
+    async (limit: number, offset: number, filters: { search?: string; action?: string; from?: string; to?: string } = {}) => {
+      const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+      for (const [key, value] of Object.entries(filters)) if (value?.trim()) query.set(key, value.trim())
+      const response = await adminRequest(`/v1/admin/audit?${query}`)
+      if (!response.ok) throw getAdminResponseError(response.status)
+      return (await response.json()) as AdminPage<AdminAuditEvent>
+    },
 
     [],
   )
+
+  const getAdminAccess = useCallback(async () => {
+    const response = await adminRequest("/v1/admin/access")
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return (await response.json()) as AdminAccess
+  }, [])
+  const getAdminTeam = useCallback(async () => {
+    const response = await adminRequest("/v1/admin/team")
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return (await response.json()) as AdminTeamSummary
+  }, [])
+  const setAdminMemberRole = useCallback(async (userId: string, role: AdminMemberRole) => {
+    await postAdminAction<{ updated: boolean }>(`/v1/admin/team/members/${encodeURIComponent(userId)}`, { role }, "PATCH")
+  }, [])
+  const removeAdminMember = useCallback(async (userId: string) => {
+    const response = await adminRequest(`/v1/admin/team/members/${encodeURIComponent(userId)}`, { method: "DELETE" })
+    if (!response.ok) throw getAdminResponseError(response.status)
+  }, [])
+  const inviteAdminUser = useCallback((email: string, role: AdminMemberRole) => postAdminAction<AdminInvitationSummary>("/v1/admin/team/invitations", { email, role }), [])
+  const revokeAdminInvitation = useCallback(async (invitationId: string) => {
+    const response = await adminRequest(`/v1/admin/team/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" })
+    if (!response.ok) throw getAdminResponseError(response.status)
+  }, [])
+  const acceptAdminInvitation = useCallback(async (invitationId: string, token: string) => {
+    const result = await postAdminAction<{ accepted: boolean; role: AdminMemberRole; redirectTo: string }>("/v1/admin/invitations/accept", { invitationId, token })
+    return { role: result.role, redirectTo: result.redirectTo }
+  }, [])
+  const getAdminAlerts = useCallback(async (limit = 50) => {
+    const response = await adminRequest(`/v1/admin/monitoring/alerts?limit=${limit}`)
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return (await response.json()) as AdminAlertSummary[]
+  }, [])
+  const updateAdminAlert = useCallback((alertId: string, action: "acknowledge" | "assign" | "resolve", reason?: string) => postAdminAction<AdminAlertSummary>(`/v1/admin/monitoring/alerts/${encodeURIComponent(alertId)}`, { action, ...(reason ? { reason } : {}) }, "PATCH"), [])
 
   const getAdminMarketplaceActivity = useCallback(
     (limit: number, offset: number) =>
@@ -1833,6 +1980,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const getAdminOverview = useCallback(() => fetchAdminOverview(), [])
+  const getAdminAnalytics = useCallback((filters: AdminAnalyticsFilters) => fetchAdminAnalytics(filters), [])
 
   const getAdminVerifications = useCallback(
     (status: AdminVerificationStatus, limit: number, offset: number) =>
@@ -1941,8 +2089,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (await response.json()) as AdminCategory[]
   }, [])
 
+  const getMarketplaceCategories = useCallback(() => marketplaceRequest<MarketplaceServiceCategory[]>("/v1/marketplace/categories"), [])
+
   const saveAdminCategory = useCallback(
-    (category: Omit<AdminCategory, "id">) =>
+    (category: Omit<AdminCategory, "id" | "totalJobs" | "openJobs">) =>
       postAdminAction<AdminCategory>("/v1/admin/categories", category, "PUT"),
     [],
   )
@@ -2057,6 +2207,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const sendServiceListingMessage = useCallback((listingId: string, role: "consumer" | "provider", body: string) => marketplacePost<ServiceListingMessage>(`/v1/listings/${encodeURIComponent(listingId)}/messages?role=${role}`, { body }), [])
 
   const getAdminServiceListingMessages = useCallback((limit: number, offset: number, searchValue = "") => fetchAdminPage<AdminServiceListingMessage>("messages", limit, offset, undefined, searchValue), [])
+  const getAdminSupportCases = useCallback(async (search: string, status: SupportCaseStatus | "all", limit: number, offset: number) => {
+    const query = new URLSearchParams({ search, status, limit: String(limit), offset: String(offset) })
+    const response = await adminRequest(`/v1/admin/support/cases?${query}`)
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return await response.json() as AdminPage<SupportCase>
+  }, [])
+  const getAdminSupportCaseMessages = useCallback(async (caseId: string) => {
+    const response = await adminRequest(`/v1/admin/support/cases/${encodeURIComponent(caseId)}/messages`)
+    if (!response.ok) throw getAdminResponseError(response.status)
+    return await response.json() as SupportCaseMessage[]
+  }, [])
+  const sendAdminSupportMessage = useCallback((caseId: string, body: string) => postAdminAction<SupportCaseMessage>(`/v1/admin/support/cases/${encodeURIComponent(caseId)}/messages`, { body }), [])
+  const updateAdminSupportCaseStatus = useCallback((caseId: string, status: SupportCaseStatus) => postAdminAction<SupportCase>(`/v1/admin/support/cases/${encodeURIComponent(caseId)}/status`, { status }, "PATCH"), [])
 
   const getAdminJobPayments = useCallback(async (search: string, status: JobPaymentStatus | "all", limit: number, offset: number) => {
     const query = new URLSearchParams({ search, status, limit: String(limit), offset: String(offset) })
@@ -2219,6 +2382,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getSupportCases = useCallback((role: "consumer" | "provider") => marketplaceRequest<SupportCase[]>(`/v1/support/cases?role=${role}`), [])
+  const createSupportCase = useCallback((role: "consumer" | "provider", input: CreateSupportCaseInput) => marketplacePost<SupportCase>(`/v1/support/cases?role=${role}`, input), [])
+  const getSupportCaseMessages = useCallback((role: "consumer" | "provider", caseId: string) => marketplaceRequest<SupportCaseMessage[]>(`/v1/support/cases/${encodeURIComponent(caseId)}/messages?role=${role}`), [])
+  const sendSupportCaseMessage = useCallback((role: "consumer" | "provider", caseId: string, body: string) => marketplacePost<SupportCaseMessage>(`/v1/support/cases/${encodeURIComponent(caseId)}/messages?role=${role}`, { body }), [])
+
   const subscribeMarketplaceChanges = useCallback((onChange: () => void) => {
     if (!supabase) {
       throw new Error("Realtime services are not configured.")
@@ -2326,7 +2494,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         reinstateAdminUser,
 
+        setAdminCommissionRestriction,
+
         getAdminAuditEvents,
+        getAdminAccess,
+        getAdminTeam,
+        setAdminMemberRole,
+        removeAdminMember,
+        inviteAdminUser,
+        revokeAdminInvitation,
+        acceptAdminInvitation,
+        getAdminAlerts,
+        updateAdminAlert,
 
         getAdminMarketplaceActivity,
 
@@ -2337,6 +2516,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         releaseAdminServiceListing,
 
         getAdminOverview,
+        getAdminAnalytics,
 
         getAdminVerifications,
 
@@ -2358,6 +2538,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAdminMonitoringHistory,
 
         getAdminCategories,
+
+        getMarketplaceCategories,
 
         saveAdminCategory,
 
@@ -2382,6 +2564,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getServiceListingMessages,
         sendServiceListingMessage,
         getAdminServiceListingMessages,
+        getAdminSupportCases,
+        getAdminSupportCaseMessages,
+        sendAdminSupportMessage,
+        updateAdminSupportCaseStatus,
         getAdminJobPayments,
         resolveAdminJobPayment,
         recordAdminPlatformFeeReceipt,
@@ -2422,6 +2608,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         openMarketplaceConversation,
         getMarketplaceConversationMessages,
         sendMarketplaceConversationMessage,
+        getSupportCases,
+        createSupportCase,
+        getSupportCaseMessages,
+        sendSupportCaseMessage,
 
         subscribeMarketplaceChanges,
 

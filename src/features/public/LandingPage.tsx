@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { Role } from "../../demo/model"
 import "./landing.css"
 
@@ -23,6 +23,22 @@ const categories = ["Cleaning", "Plumbing", "Electrical", "Care", "Grooming", "T
 
 export default function LandingPage({ onSignIn, onLogin }: { onSignIn: () => void; onLogin: (role: Role) => void }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("landing-visible")
+          observer.unobserve(entry.target)
+        }
+      })
+    }, { threshold: 0.12, rootMargin: "0px 0px -36px 0px" })
+    document.querySelectorAll(".landing-section-heading, .landing-step, .landing-audience-card, .landing-trust-grid article, .landing-faq-list details, .landing-location-card, .landing-final-cta-inner").forEach((item) => {
+      item.classList.add("landing-reveal")
+      observer.observe(item)
+    })
+    return () => observer.disconnect()
+  }, [])
   const closeMenu = () => setMenuOpen(false)
   const goTo = (role: Role) => { closeMenu(); onLogin(role) }
 

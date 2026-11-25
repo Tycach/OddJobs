@@ -16,7 +16,7 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify"
 
-import { randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 
 import { getHeapStatistics } from "node:v8"
 
@@ -33,7 +33,12 @@ import type {
   AdminMarketplaceJobFilters,
   AdminStore,
   AdminOverview,
+  AdminAnalyticsFilters,
+  AdminMemberRole,
+  AdminAuditFilters,
   AdminPage,
+  SupportCaseStatus,
+  SupportCategory,
   AdminVerificationSummary,
   AdminVerificationStatus,
   AuthenticatedPrincipal,
@@ -69,6 +74,45 @@ type PolicyConsentInput = {
   termsVersion: string
 
   privacyVersion: string
+}
+
+const adminRolePermissions: Record<AdminMemberRole, string[]> = {
+  OWNER: ["*"],
+  ADMIN: ["access", "overview", "analytics", "monitoring", "audit", "verification", "moderation", "support", "finance", "operations", "settings"],
+  OPERATIONS_ADMIN: ["access", "overview", "analytics", "monitoring", "moderation", "operations"],
+  VERIFICATION_REVIEWER: ["access", "overview", "verification"],
+  MODERATION_REVIEWER: ["access", "overview", "moderation", "operations"],
+  SUPPORT_AGENT: ["access", "overview", "support", "operations"],
+  FINANCE_REVIEWER: ["access", "overview", "analytics", "audit", "finance"],
+  ANALYST: ["access", "overview", "analytics", "monitoring", "audit"],
+}
+
+function adminAreaForRequest(request: FastifyRequest) {
+  const path = (request.raw.url ?? request.url).split("?")[0] ?? request.url
+  if (path === "/v1/admin/access") return "access"
+  if (path.startsWith("/v1/admin/team")) return "team"
+  if (path.startsWith("/v1/admin/verification") || path.startsWith("/v1/admin/customer-verification")) return "verification"
+  if (path.startsWith("/v1/admin/moderation")) return "moderation"
+  if (path.startsWith("/v1/admin/support") || path.startsWith("/v1/admin/messages")) return "support"
+  if (path.startsWith("/v1/admin/payments") || path.startsWith("/v1/admin/providers")) return "finance"
+  if (path.startsWith("/v1/admin/analytics")) return "analytics"
+  if (path.startsWith("/v1/admin/monitoring")) return request.method === "GET" ? "monitoring" : "monitoring_manage"
+  if (path.startsWith("/v1/admin/users/") && path.endsWith("/commission-restriction")) return "finance"
+  if (path.startsWith("/v1/admin/audit")) return "audit"
+  if (path.startsWith("/v1/admin/marketplace") || path.startsWith("/v1/admin/listings")) return "operations"
+  if (path.startsWith("/v1/admin/overview")) return "overview"
+  return "settings"
+}
+
+const adminScreensByRole: Record<AdminMemberRole, string[]> = {
+  OWNER: ["overview", "analytics", "monitoring", "team", "users", "verification", "categories", "moderation", "adApprovals", "audit", "payments", "operations", "messages", "config"],
+  ADMIN: ["overview", "analytics", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "audit", "payments", "operations", "messages", "config"],
+  OPERATIONS_ADMIN: ["overview", "analytics", "monitoring", "moderation", "operations"],
+  VERIFICATION_REVIEWER: ["overview", "verification"],
+  MODERATION_REVIEWER: ["overview", "moderation", "operations"],
+  SUPPORT_AGENT: ["overview", "messages", "operations"],
+  FINANCE_REVIEWER: ["overview", "analytics", "payments", "audit"],
+  ANALYST: ["overview", "analytics", "monitoring", "audit"],
 }
 
 declare module "fastify" {
@@ -114,11 +158,17 @@ export async function buildApp({
 
   logger,
 }: BuildAppOptions): Promise<FastifyInstance> {
-  const verificationStorage = config.supabaseUrl && config.supabaseSecretKey
-    ? createClient(config.supabaseUrl, config.supabaseSecretKey, {
-        auth: { autoRefreshToken: false, persistSession: false },
-      })
+  const supabaseAdmin = config.supabaseUrl && config.supabaseSecretKey
+    ? createClient(config.supabaseUrl, config.supabaseSecretKey, { auth: { autoRefreshToken: false, persistSession: false } })
     : null
+  const requestStorage = (request: FastifyRequest) => {
+    const authorization = request.headers.authorization
+    if (!config.supabaseUrl || !config.supabaseApiKey || !authorization) return null
+    return createClient(config.supabaseUrl, config.supabaseApiKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: authorization } },
+    })
+  }
   const app = Fastify({
     ajv: { customOptions: { removeAdditional: false } },
 
@@ -322,6 +372,19 @@ export async function buildApp({
         .code(503)
         .send({ error: "Admin data storage is unavailable." })
     }
+    const assignedRole = await adminStore.getAdminMemberRole?.(request.authPrincipal.id)
+    const role = assignedRole ?? "OWNER"
+    const area = adminAreaForRequest(request)
+    const permissions = adminRolePermissions[role]
+    if (area === "team" && role !== "OWNER") {
+      return reply.code(403).send({ error: "Only an owner can manage admin invitations and access." })
+    }
+    if (area === "monitoring_manage" && !["OWNER", "ADMIN", "OPERATIONS_ADMIN"].includes(role)) {
+      return reply.code(403).send({ error: "You do not have permission to manage monitoring alerts." })
+    }
+    if (!permissions.includes("*") && !permissions.includes(area)) {
+      return reply.code(403).send({ error: "Your admin role does not have access to this area." })
+    }
   }
 
   const requireMarketplaceRole = (
@@ -358,6 +421,13 @@ export async function buildApp({
   }
 
   const requireJobPoster = requireMarketplaceRole("consumer")
+  const requireHiringAccess = async (request: FastifyRequest, reply: FastifyReply) => {
+    await requireJobPoster(request, reply)
+    if (reply.sent || !request.authPrincipal || !marketplaceStore?.hasActiveCommissionRestriction) return
+    if (await marketplaceStore.hasActiveCommissionRestriction(request.authPrincipal.id)) {
+      return reply.code(403).send({ error: "New job postings and hiring are temporarily restricted while overdue commissions are outstanding. Existing jobs, commission payments, and Support remain available." })
+    }
+  }
 
   const marketplacePathParamsSchema = {
     type: "object",
@@ -467,7 +537,7 @@ export async function buildApp({
     ],
     properties: {
       id: { type: "string", format: "uuid" },
-      jobReference: { type: "string", pattern: "^OJ-[0-9]{10}$" },
+      jobReference: { type: "string", pattern: "^OJ-(?:[0-9]{10}|[A-F0-9]{20})$" },
       customerId: { type: "string", format: "uuid" },
       title: { type: "string" },
       description: { type: "string" },
@@ -576,6 +646,27 @@ export async function buildApp({
     type: "object",
     additionalProperties: false,
     required: ["body"],
+    properties: { body: { type: "string", minLength: 1, maxLength: 5000 } },
+  } as const
+
+  const supportCasePathParamsSchema = {
+    type: "object", additionalProperties: false, required: ["caseId"],
+    properties: { caseId: { type: "string", format: "uuid" } },
+  } as const
+
+  const supportCreateSchema = {
+    type: "object", additionalProperties: false,
+    required: ["jobReference", "category", "subject", "body"],
+    properties: {
+      jobReference: { type: "string", minLength: 5, maxLength: 27 },
+      category: { type: "string", enum: ["general", "payment", "work_review", "safety", "account", "other"] },
+      subject: { type: "string", minLength: 4, maxLength: 160 },
+      body: { type: "string", minLength: 10, maxLength: 5000 },
+    },
+  } as const
+
+  const supportMessageSchema = {
+    type: "object", additionalProperties: false, required: ["body"],
     properties: { body: { type: "string", minLength: 1, maxLength: 5000 } },
   } as const
 
@@ -881,6 +972,12 @@ export async function buildApp({
     return marketplaceStore.listServiceListings(request.authPrincipal.id, query.role, query.view as "feed" | "mine")
   })
 
+  app.get("/v1/marketplace/categories", { preHandler: requireMarketplaceRole("consumer", "provider") }, async (_request, reply) => {
+    if (!marketplaceStore?.listActiveServiceCategories) return reply.code(503).send({ error: "Service categories are unavailable." })
+    reply.header("Cache-Control", "no-store")
+    return marketplaceStore.listActiveServiceCategories()
+  })
+
   app.post("/v1/listings", { preHandler: requireMarketplaceRole("provider"), schema: { body: { type: "object", additionalProperties: false, required: ["title", "description", "category", "locationLabel", "budgetMinor"], properties: { title: { type: "string", minLength: 1, maxLength: 160 }, description: { type: "string", minLength: 1, maxLength: 5000 }, category: { type: "string", minLength: 1, maxLength: 80 }, locationLabel: { type: "string", minLength: 1, maxLength: 160 }, budgetMinor: { anyOf: [{ type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER }, { type: "null" }] }, media: { type: "array", maxItems: 7, items: { type: "object", additionalProperties: false, required: ["path", "contentType", "size"], properties: { path: { type: "string", minLength: 1, maxLength: 256 }, contentType: { type: "string", enum: ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"] }, size: { type: "integer", minimum: 1, maximum: 6291456 } } } } } } } }, async (request, reply) => {
     if (!marketplaceStore?.createServiceListing || !request.authPrincipal) return reply.code(503).send({ error: "Marketplace listings are unavailable." })
     try {
@@ -981,6 +1078,57 @@ export async function buildApp({
     return adminStore.listAdminServiceListingMessages(limit, offset, search)
   })
 
+  app.get("/v1/admin/support/cases", { preHandler: requireAdmin, schema: { querystring: {
+    type: "object", additionalProperties: false,
+    properties: {
+      search: { type: "string", maxLength: 120, default: "" },
+      status: { type: "string", enum: ["all", "open", "in_progress", "waiting_on_user", "resolved"], default: "all" },
+      limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+      offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 },
+    },
+  } } }, async (request, reply) => {
+    if (!adminStore?.listAdminSupportCases || !request.authPrincipal) return reply.code(503).send({ error: "Admin support inbox is unavailable." })
+    const query = request.query as { search?: string; status?: SupportCaseStatus | "all"; limit?: number; offset?: number }
+    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.support.cases.read", targetType: "support_case", targetId: null, metadata: { search: query.search ?? "", status: query.status ?? "all", limit: query.limit ?? 50, offset: query.offset ?? 0 }, requestId: request.id })
+    reply.header("Cache-Control", "no-store")
+    return adminStore.listAdminSupportCases(query.search ?? "", query.status ?? "all", query.limit ?? 50, query.offset ?? 0)
+  })
+
+  app.get("/v1/admin/support/cases/:caseId/messages", { preHandler: requireAdmin, schema: { params: supportCasePathParamsSchema } }, async (request, reply) => {
+    if (!adminStore?.listAdminSupportCaseMessages || !request.authPrincipal) return reply.code(503).send({ error: "Support case messages are unavailable." })
+    const { caseId } = request.params as { caseId: string }
+    const messages = await adminStore.listAdminSupportCaseMessages(caseId)
+    if (!messages) return reply.code(404).send({ error: "Support case not found." })
+    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.support.case.read", targetType: "support_case", targetId: caseId, metadata: {}, requestId: request.id })
+    reply.header("Cache-Control", "no-store")
+    return messages
+  })
+
+  app.post("/v1/admin/support/cases/:caseId/messages", { preHandler: requireAdmin, schema: { params: supportCasePathParamsSchema, body: supportMessageSchema }, config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
+    if (!adminStore?.createAdminSupportCaseMessage || !request.authPrincipal) return reply.code(503).send({ error: "Support replies are unavailable." })
+    const { caseId } = request.params as { caseId: string }
+    const { body } = request.body as { body: string }
+    const message = await adminStore.createAdminSupportCaseMessage(request.authPrincipal.id, caseId, body, request.id)
+    if (!message) return reply.code(404).send({ error: "Support case not found." })
+    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.support.case.replied", targetType: "support_case", targetId: caseId, metadata: { messageId: message.id }, requestId: request.id })
+    reply.header("Cache-Control", "no-store")
+    return reply.code(201).send(message)
+  })
+
+  app.patch("/v1/admin/support/cases/:caseId/status", { preHandler: requireAdmin, schema: {
+    params: supportCasePathParamsSchema,
+    body: { type: "object", additionalProperties: false, required: ["status"], properties: { status: { type: "string", enum: ["open", "in_progress", "waiting_on_user", "resolved"] } } },
+  } }, async (request, reply) => {
+    if (!adminStore?.setAdminSupportCaseStatus || !request.authPrincipal) return reply.code(503).send({ error: "Support case updates are unavailable." })
+    const { caseId } = request.params as { caseId: string }
+    const { status } = request.body as { status: SupportCaseStatus }
+    const supportCase = await adminStore.setAdminSupportCaseStatus(request.authPrincipal.id, caseId, status, request.id)
+    if (!supportCase) return reply.code(404).send({ error: "Support case not found." })
+    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.support.case.status_changed", targetType: "support_case", targetId: caseId, metadata: { status }, requestId: request.id })
+    reply.header("Cache-Control", "no-store")
+    return supportCase
+  })
+
   app.get("/v1/reviews", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { querystring: { type: "object", additionalProperties: false, required: ["role"], properties: { role: { type: "string", enum: ["consumer", "provider"] } } } } }, async (request, reply) => {
     if (!marketplaceStore?.listServiceListingReviews || !request.authPrincipal || !profileStore) return reply.code(503).send({ error: "Reviews are unavailable." })
     const role = (request.query as { role: "consumer" | "provider" }).role
@@ -1036,7 +1184,7 @@ export async function buildApp({
               properties: {
                 id: { type: "string" }, jobId: { type: "string" }, providerId: { type: "string" }, providerName: { type: "string" },
                 amountMinor: { type: "integer" }, currency: { type: "string" }, message: { type: "string" }, availability: { type: "string" },
-                jobReference: { type: "string", pattern: "^OJ-[0-9]{10}$" }, status: { type: "string" }, createdAt: { type: "string" }, updatedAt: { type: "string" }, jobTitle: { type: "string" },
+                jobReference: { type: "string", pattern: "^OJ-(?:[0-9]{10}|[A-F0-9]{20})$" }, status: { type: "string" }, createdAt: { type: "string" }, updatedAt: { type: "string" }, jobTitle: { type: "string" },
                 jobCategory: { type: "string" }, jobLocationLabel: { type: "string" }, jobStatus: { type: "string" },
               },
             },
@@ -1101,7 +1249,7 @@ export async function buildApp({
   app.post(
     "/v1/jobs",
     {
-      preHandler: requireJobPoster,
+      preHandler: requireHiringAccess,
       schema: {
         tags: ["marketplace"],
         summary: "Create a persistent customer job.",
@@ -1119,6 +1267,10 @@ export async function buildApp({
       if (!marketplaceStore || !request.authPrincipal) return reply.code(503).send({ error: "Marketplace data storage is unavailable." })
       try {
         const input = request.body as import("./auth/types.js").CreateMarketplaceJobInput
+        const availableCategories = await marketplaceStore.listActiveServiceCategories?.()
+        if (availableCategories && !availableCategories.some((item) => item.name.toLowerCase() === input.category.trim().toLowerCase())) {
+          return reply.code(400).send({ error: "Choose an active service category before posting this job." })
+        }
         const media = input.media ?? []
         const paths = new Set<string>()
         const invalidMedia = media.length > 7 || media.filter((item) => item.contentType.startsWith("image/")).length > 6 || media.filter((item) => item.contentType.startsWith("video/")).length > 1 || media.some((item) => {
@@ -1339,10 +1491,52 @@ export async function buildApp({
     return reply.code(201).send(message)
   })
 
+  app.get("/v1/support/cases", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { querystring: marketplaceRoleQuerySchema } }, async (request, reply) => {
+    if (!marketplaceStore?.listSupportCases || !request.authPrincipal || !profileStore) return reply.code(503).send({ error: "Support inbox is unavailable." })
+    const { role } = request.query as { role: "consumer" | "provider" }
+    const profile = await profileStore.getProfile(request.authPrincipal.id)
+    if (!profile?.roles.includes(role)) return reply.code(403).send({ error: `An active ${role} role is required.` })
+    reply.header("Cache-Control", "no-store")
+    return marketplaceStore.listSupportCases(request.authPrincipal.id, role)
+  })
+
+  app.post("/v1/support/cases", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { querystring: marketplaceRoleQuerySchema, body: supportCreateSchema }, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
+    if (!marketplaceStore?.createSupportCase || !request.authPrincipal || !profileStore) return reply.code(503).send({ error: "Support inbox is unavailable." })
+    const { role } = request.query as { role: "consumer" | "provider" }
+    const profile = await profileStore.getProfile(request.authPrincipal.id)
+    if (!profile?.roles.includes(role)) return reply.code(403).send({ error: `An active ${role} role is required.` })
+    const input = request.body as { jobReference: string; category: SupportCategory; subject: string; body: string }
+    const supportCase = await marketplaceStore.createSupportCase(request.authPrincipal.id, role, input, request.id)
+    if (!supportCase) return reply.code(404).send({ error: "We could not find that job or verify that you are part of it. Check the Job ID and your account role." })
+    reply.header("Cache-Control", "no-store")
+    return reply.code(201).send(supportCase)
+  })
+
+  app.get("/v1/support/cases/:caseId/messages", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { params: supportCasePathParamsSchema, querystring: marketplaceRoleQuerySchema } }, async (request, reply) => {
+    if (!marketplaceStore?.listSupportCaseMessages || !request.authPrincipal) return reply.code(503).send({ error: "Support messages are unavailable." })
+    const { role } = request.query as { role: "consumer" | "provider" }
+    const { caseId } = request.params as { caseId: string }
+    const messages = await marketplaceStore.listSupportCaseMessages(request.authPrincipal.id, role, caseId)
+    if (!messages) return reply.code(404).send({ error: "This support case is not available to your account." })
+    reply.header("Cache-Control", "no-store")
+    return messages
+  })
+
+  app.post("/v1/support/cases/:caseId/messages", { preHandler: requireMarketplaceRole("consumer", "provider"), schema: { params: supportCasePathParamsSchema, querystring: marketplaceRoleQuerySchema, body: supportMessageSchema }, config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
+    if (!marketplaceStore?.createSupportCaseMessage || !request.authPrincipal) return reply.code(503).send({ error: "Support messages are unavailable." })
+    const { role } = request.query as { role: "consumer" | "provider" }
+    const { caseId } = request.params as { caseId: string }
+    const { body } = request.body as { body: string }
+    const message = await marketplaceStore.createSupportCaseMessage(request.authPrincipal.id, role, caseId, body, request.id)
+    if (!message) return reply.code(404).send({ error: "This support case is not available to your account." })
+    reply.header("Cache-Control", "no-store")
+    return reply.code(201).send(message)
+  })
+
   app.post(
     "/v1/jobs/:jobId/quotes/:quoteId/accept",
     {
-      preHandler: requireMarketplaceRole("consumer"),
+      preHandler: requireHiringAccess,
       schema: {
         tags: ["marketplace"],
         summary: "Accept one quote and decline competing submitted quotes.",
@@ -1546,6 +1740,10 @@ export async function buildApp({
       limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
 
       offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 },
+      search: { type: "string", maxLength: 160 },
+      action: { type: "string", maxLength: 120 },
+      from: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+      to: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
     },
   } as const
 
@@ -1589,7 +1787,7 @@ export async function buildApp({
   const adminUserResponseSchema = adminPageResponseSchema({
     type: "object",
 
-    required: ["id", "displayName", "status", "roles", "createdAt"],
+    required: ["id", "displayName", "status", "roles", "createdAt", "commissionRestricted", "commissionRestrictionReason", "overdueCommissionCount", "overdueCommissionMinor"],
 
     properties: {
       id: { type: "string", format: "uuid" },
@@ -1601,6 +1799,10 @@ export async function buildApp({
       roles: { type: "array", items: { type: "string" } },
 
       createdAt: { type: "string", format: "date-time" },
+      commissionRestricted: { type: "boolean" },
+      commissionRestrictionReason: { anyOf: [{ type: "string" }, { type: "null" }] },
+      overdueCommissionCount: { type: "integer" },
+      overdueCommissionMinor: { type: "integer" },
     },
   })
 
@@ -1611,6 +1813,8 @@ export async function buildApp({
       "id",
 
       "actorUserId",
+
+      "actorDisplayName",
 
       "action",
 
@@ -1629,6 +1833,8 @@ export async function buildApp({
       id: { type: "string", format: "uuid" },
 
       actorUserId: { type: "string", format: "uuid" },
+
+      actorDisplayName: { type: "string", nullable: true },
 
       action: { type: "string" },
 
@@ -1700,6 +1906,259 @@ export async function buildApp({
   })
 
   app.get(
+    "/v1/admin/access",
+    { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }] } },
+    async (request, reply) => {
+      if (!request.authPrincipal || !adminStore) return reply.code(503).send({ error: "Admin access is unavailable." })
+      const role = await adminStore.getAdminMemberRole?.(request.authPrincipal.id) ?? "OWNER"
+      reply.header("Cache-Control", "no-store")
+      return { role, screens: adminScreensByRole[role] }
+    },
+  )
+
+  app.get(
+    "/v1/admin/team",
+    { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }] } },
+    async (_request, reply) => {
+      if (!adminStore?.listAdminTeam) return reply.code(503).send({ error: "Admin team data is unavailable." })
+      reply.header("Cache-Control", "no-store")
+      return adminStore.listAdminTeam()
+    },
+  )
+
+  app.post(
+    "/v1/admin/team/invitations",
+    {
+      preHandler: requireAdmin,
+      config: { rateLimit: { max: 10, timeWindow: "1 hour" } },
+      schema: {
+        tags: ["admin"], security: [{ bearerAuth: [] }],
+        body: {
+          type: "object", additionalProperties: false, required: ["email", "role"],
+          properties: {
+            email: { type: "string", format: "email", maxLength: 320 },
+            role: { type: "string", enum: ["OWNER", "ADMIN", "OPERATIONS_ADMIN", "VERIFICATION_REVIEWER", "MODERATION_REVIEWER", "SUPPORT_AGENT", "FINANCE_REVIEWER", "ANALYST"] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!adminStore?.createAdminInvitation || !request.authPrincipal) return reply.code(503).send({ error: "Admin invitations are unavailable." })
+      if (!supabaseAdmin) return reply.code(503).send({ error: "Admin invitations need the server-side Supabase service key." })
+      const body = request.body as { email: string; role: AdminMemberRole }
+      const invitationId = randomUUID()
+      const token = randomBytes(32).toString("base64url")
+      const tokenHash = createHash("sha256").update(token).digest("hex")
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      try {
+        const invitation = await adminStore.createAdminInvitation({
+          id: invitationId, email: body.email, role: body.role, tokenHash, invitedBy: request.authPrincipal.id, expiresAt,
+        })
+        const redirect = new URL("/consumer/adminInviteAccept", config.webOrigin)
+        redirect.searchParams.set("invitationId", invitationId)
+        redirect.searchParams.set("token", token)
+        const { error } = await supabaseAdmin.auth.admin.inviteUserByEmail(invitation.email, {
+          redirectTo: redirect.toString(),
+          data: { admin_invitation_id: invitationId },
+        })
+        if (error) {
+          await adminStore.revokeAdminInvitation?.(invitationId, request.authPrincipal.id)
+          const providerError = error as { code?: string; status?: number; message?: string }
+          const providerCode = providerError.code ?? "unknown"
+          const detail = (providerError.message ?? "").toLowerCase()
+          app.log.warn({ providerCode, providerStatus: providerError.status }, "Supabase rejected an administrator invitation")
+          if (/redirect|redirect_to|not allowed/.test(detail)) {
+            return reply.code(400).send({ error: `Supabase rejected the invitation redirect. Add ${redirect.origin}/consumer/adminInviteAccept to Authentication > URL Configuration > Redirect URLs, then retry.` })
+          }
+          if (/already registered|already exists|user already/.test(detail)) {
+            return reply.code(409).send({ error: "That email already has a Supabase account, and Supabase cannot send a new-account invitation to it. Use a new email address for this invitation." })
+          }
+          if (/rate limit|too many|email.*limit/.test(detail) || providerError.status === 429) {
+            return reply.code(429).send({ error: "Supabase’s email rate limit was reached. Wait before sending another administrator invitation." })
+          }
+          if (providerError.status === 401 || providerError.status === 403) {
+            return reply.code(503).send({ error: "Supabase rejected the server admin key. Check SUPABASE_SECRET_KEY in the API environment and restart the API." })
+          }
+          if (/email|smtp|mail/.test(detail)) {
+            return reply.code(502).send({ error: "Supabase could not deliver the invitation email. Check Authentication > SMTP Settings and the Supabase Auth email logs." })
+          }
+          return reply.code(502).send({ error: `Supabase could not send the invitation (provider code: ${providerCode}). Check Authentication > URL Configuration and Auth email logs.` })
+        }
+        await adminStore.recordAdminAuditEvent({
+          actorUserId: request.authPrincipal.id, action: "admin.invitation.sent", targetType: "admin_invitation",
+          targetId: invitationId, metadata: { email: invitation.email, role: invitation.role }, requestId: request.id,
+        })
+        reply.header("Cache-Control", "no-store")
+        return reply.code(201).send(invitation)
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+        throw error
+      }
+    },
+  )
+
+  app.delete(
+    "/v1/admin/team/invitations/:invitationId",
+    {
+      preHandler: requireAdmin,
+      schema: { tags: ["admin"], security: [{ bearerAuth: [] }], params: { type: "object", additionalProperties: false, required: ["invitationId"], properties: { invitationId: { type: "string", format: "uuid" } } } },
+    },
+    async (request, reply) => {
+      if (!adminStore?.revokeAdminInvitation || !request.authPrincipal) return reply.code(503).send({ error: "Admin invitations are unavailable." })
+      const { invitationId } = request.params as { invitationId: string }
+      const revoked = await adminStore.revokeAdminInvitation(invitationId, request.authPrincipal.id)
+      if (!revoked) return reply.code(404).send({ error: "Pending invitation not found." })
+      return { revoked: true }
+    },
+  )
+
+  app.patch(
+    "/v1/admin/team/members/:userId",
+    { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }], params: { type: "object", additionalProperties: false, required: ["userId"], properties: { userId: { type: "string", format: "uuid" } } }, body: { type: "object", additionalProperties: false, required: ["role"], properties: { role: { type: "string", enum: ["OWNER", "ADMIN", "OPERATIONS_ADMIN", "VERIFICATION_REVIEWER", "MODERATION_REVIEWER", "SUPPORT_AGENT", "FINANCE_REVIEWER", "ANALYST"] } } } } },
+    async (request, reply) => {
+      if (!adminStore?.setAdminMemberRole || !request.authPrincipal) return reply.code(503).send({ error: "Admin roles are unavailable." })
+      const { userId } = request.params as { userId: string }
+      const { role } = request.body as { role: AdminMemberRole }
+      if (userId === request.authPrincipal.id && role !== "OWNER") return reply.code(409).send({ error: "You cannot downgrade your own owner access." })
+      try {
+        if (!await adminStore.setAdminMemberRole({ userId, role, actorUserId: request.authPrincipal.id })) return reply.code(404).send({ error: "Managed admin member not found. Legacy owners cannot be changed here." })
+        return { updated: true }
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+        throw error
+      }
+    },
+  )
+
+  app.delete(
+    "/v1/admin/team/members/:userId",
+    { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }], params: { type: "object", additionalProperties: false, required: ["userId"], properties: { userId: { type: "string", format: "uuid" } } } } },
+    async (request, reply) => {
+      if (!adminStore?.removeAdminMember || !request.authPrincipal) return reply.code(503).send({ error: "Admin team management is unavailable." })
+      const { userId } = request.params as { userId: string }
+      if (userId === request.authPrincipal.id) return reply.code(409).send({ error: "You cannot remove your own admin access." })
+      try {
+        if (!await adminStore.removeAdminMember({ userId, actorUserId: request.authPrincipal.id })) return reply.code(404).send({ error: "Managed admin member not found. Legacy owners cannot be removed here." })
+        return { removed: true }
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+        throw error
+      }
+    },
+  )
+
+  app.post(
+    "/v1/admin/invitations/accept",
+    {
+      preHandler: requireAuth,
+      schema: {
+        tags: ["admin"], security: [{ bearerAuth: [] }],
+        body: {
+          type: "object", additionalProperties: false, required: ["invitationId", "token"],
+          properties: { invitationId: { type: "string", format: "uuid" }, token: { type: "string", minLength: 32, maxLength: 160 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!adminStore?.acceptAdminInvitation || !profileStore || !request.authPrincipal?.email) return reply.code(503).send({ error: "Invitation acceptance is unavailable for this account." })
+      const { invitationId, token } = request.body as { invitationId: string; token: string }
+      await profileStore.bootstrapProfile(request.authPrincipal)
+      const role = await adminStore.acceptAdminInvitation({
+        invitationId,
+        email: request.authPrincipal.email,
+        tokenHash: createHash("sha256").update(token).digest("hex"),
+        userId: request.authPrincipal.id,
+        displayName: request.authPrincipal.displayName ?? request.authPrincipal.email,
+      })
+      if (!role) return reply.code(400).send({ error: "This invitation is invalid, expired, revoked, or belongs to another email." })
+      reply.header("Cache-Control", "no-store")
+      return { accepted: true, role, redirectTo: "/admin/overview" }
+    },
+  )
+
+  app.get(
+    "/v1/admin/monitoring/alerts",
+    { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }], querystring: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 50 } } } } },
+    async (request, reply) => {
+      if (!adminStore?.listAdminAlerts) return reply.code(503).send({ error: "Managed alerts are unavailable." })
+      const query = request.query as { limit?: number }
+      reply.header("Cache-Control", "no-store")
+      return adminStore.listAdminAlerts(query.limit ?? 50)
+    },
+  )
+
+  app.patch(
+    "/v1/admin/monitoring/alerts/:alertId",
+    {
+      preHandler: requireAdmin,
+      schema: {
+        tags: ["admin"], security: [{ bearerAuth: [] }],
+        params: { type: "object", additionalProperties: false, required: ["alertId"], properties: { alertId: { type: "string", format: "uuid" } } },
+        body: {
+          type: "object", additionalProperties: false, required: ["action"],
+          properties: {
+            action: { type: "string", enum: ["acknowledge", "assign", "resolve"] },
+            assignedAdminId: { type: "string", format: "uuid", nullable: true },
+            reason: { type: "string", minLength: 5, maxLength: 1000 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!adminStore?.updateAdminAlert || !request.authPrincipal) return reply.code(503).send({ error: "Alert actions are unavailable." })
+      const { alertId } = request.params as { alertId: string }
+      const body = request.body as { action: "acknowledge" | "assign" | "resolve"; assignedAdminId?: string | null; reason?: string }
+      try {
+        const alert = await adminStore.updateAdminAlert({ actorUserId: request.authPrincipal.id, alertId, ...body, ...(body.action === "assign" && !body.assignedAdminId ? { assignedAdminId: request.authPrincipal.id } : {}) })
+        if (!alert) return reply.code(404).send({ error: "Open alert not found." })
+        reply.header("Cache-Control", "no-store")
+        return alert
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+        throw error
+      }
+    },
+  )
+
+  app.get(
+    "/v1/admin/analytics",
+    {
+      preHandler: requireAdmin,
+      schema: {
+        tags: ["admin"],
+        summary: "Read date-filtered marketplace and commission analytics.",
+        security: [{ bearerAuth: [] }],
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          required: ["from", "to"],
+          properties: {
+            from: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+            to: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+            category: { type: "string", maxLength: 80, default: "all" },
+            status: { type: "string", enum: ["all", "open", "hired", "completed", "cancelled", "disputed"], default: "all" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!adminStore?.getAdminAnalytics) return reply.code(503).send({ error: "Analytics data is unavailable." })
+      const filters = request.query as AdminAnalyticsFilters
+      const isDate = (value: string) => {
+        const parsed = new Date(`${value}T00:00:00Z`)
+        return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+      }
+      if (!isDate(filters.from) || !isDate(filters.to) || filters.from > filters.to) {
+        return reply.code(400).send({ error: "Choose a valid date range." })
+      }
+      const days = (Date.parse(`${filters.to}T00:00:00Z`) - Date.parse(`${filters.from}T00:00:00Z`)) / 86_400_000
+      if (days > 365) return reply.code(400).send({ error: "Choose a date range of 366 days or fewer." })
+      reply.header("Cache-Control", "no-store")
+      return adminStore.getAdminAnalytics(filters)
+    },
+  )
+
+  app.get(
     "/v1/admin/overview",
 
     {
@@ -1761,20 +2220,6 @@ export async function buildApp({
           .send({ error: "Admin data storage is unavailable." })
       }
 
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal!.id,
-
-        action: "admin.overview.read",
-
-        targetType: "marketplace_overview",
-
-        targetId: null,
-
-        metadata: {},
-
-        requestId: request.id,
-      })
-
       reply.header("Cache-Control", "no-store")
 
       const overview: AdminOverview = await adminStore.getAdminOverview()
@@ -1831,20 +2276,6 @@ export async function buildApp({
 
       const { status, limit, offset } = request.query
 
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-
-        action: "admin.verification.read",
-
-        targetType: "provider_verification",
-
-        targetId: null,
-
-        metadata: { status, limit, offset },
-
-        requestId: request.id,
-      })
-
       reply.header("Cache-Control", "no-store")
 
       const page: AdminPage<AdminVerificationSummary> =
@@ -1871,12 +2302,13 @@ export async function buildApp({
       },
     },
     async (request: FastifyRequest<{ Params: { profileId: string } }>, reply) => {
-      if (!adminStore || !request.authPrincipal || !verificationStorage) {
+      const storage = requestStorage(request)
+      if (!adminStore || !request.authPrincipal || !storage) {
         return reply.code(503).send({ error: "Private verification document access is not configured." })
       }
       const path = await adminStore.getAdminVerificationDocument?.(request.params.profileId)
       if (!path) return reply.code(404).send({ error: "No identity document is attached to this application." })
-      const { data, error } = await verificationStorage.storage
+      const { data, error } = await storage.storage
         .from("provider-verification")
         .createSignedUrl(path, 60)
       if (error || !data?.signedUrl) {
@@ -1899,17 +2331,17 @@ export async function buildApp({
   app.get("/v1/admin/customer-verification", { preHandler: requireAdmin, schema: { querystring: adminVerificationQuerySchema } }, async (request, reply) => {
     if (!adminStore?.listAdminCustomerVerifications || !request.authPrincipal) return reply.code(503).send({ error: "Admin data storage is unavailable." })
     const { status = "in_review", limit = 25, offset = 0 } = request.query as { status?: AdminVerificationStatus; limit?: number; offset?: number }
-    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.customer_verification.read", targetType: "customer_identity_verification", targetId: null, metadata: { status, limit, offset }, requestId: request.id })
     reply.header("Cache-Control", "no-store")
     return adminStore.listAdminCustomerVerifications(status, limit, offset)
   })
 
   app.get("/v1/admin/customer-verification/:verificationId/document", { preHandler: requireAdmin, schema: { params: { type: "object", additionalProperties: false, required: ["verificationId"], properties: { verificationId: { type: "string", format: "uuid" } } } } }, async (request, reply) => {
-    if (!adminStore || !request.authPrincipal || !verificationStorage) return reply.code(503).send({ error: "Private customer documents are unavailable." })
+    const storage = requestStorage(request)
+    if (!adminStore || !request.authPrincipal || !storage) return reply.code(503).send({ error: "Private customer documents are unavailable." })
     const { verificationId } = request.params as { verificationId: string }
     const path = await adminStore.getAdminCustomerVerificationDocument?.(verificationId)
     if (!path) return reply.code(404).send({ error: "No customer identity document was found." })
-    const { data, error } = await verificationStorage.storage.from("customer-verification").createSignedUrl(path, 60)
+    const { data, error } = await storage.storage.from("customer-verification").createSignedUrl(path, 60)
     if (error || !data?.signedUrl) return reply.code(503).send({ error: "The customer identity document is temporarily unavailable." })
     await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.customer_verification.document.read", targetType: "customer_identity_verification", targetId: verificationId, metadata: { expiresInSeconds: 60 }, requestId: request.id })
     reply.header("Cache-Control", "no-store")
@@ -2288,20 +2720,6 @@ export async function buildApp({
 
       const { status, limit, offset, search } = request.query
 
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-
-        action: "admin.moderation.read",
-
-        targetType: "moderation_report",
-
-        targetId: null,
-
-        metadata: { status, limit, offset, search },
-
-        requestId: request.id,
-      })
-
       reply.header("Cache-Control", "no-store")
 
       return adminStore.listAdminModerationReports(status, limit, offset, search)
@@ -2487,6 +2905,27 @@ export async function buildApp({
     },
   )
 
+  app.patch("/v1/admin/users/:userId/commission-restriction", {
+    preHandler: requireAdmin,
+    schema: {
+      tags: ["admin"], security: [{ bearerAuth: [] }],
+      params: { type: "object", required: ["userId"], additionalProperties: false, properties: { userId: { type: "string", format: "uuid" } } },
+      body: { type: "object", additionalProperties: false, required: ["restricted", "reason"], properties: { restricted: { type: "boolean" }, reason: { type: "string", minLength: 10, maxLength: 1000, pattern: "\\S" } } },
+    },
+  }, async (request, reply) => {
+    if (!adminStore?.setAdminCommissionRestriction || !request.authPrincipal) return reply.code(503).send({ error: "Commission restriction controls are unavailable." })
+    const { restricted, reason } = request.body as { restricted: boolean; reason: string }
+    try {
+      const result = await adminStore.setAdminCommissionRestriction({ actorUserId: request.authPrincipal.id, userId: (request.params as { userId: string }).userId, restricted, reason, requestId: request.id })
+      if (!result) return reply.code(404).send({ error: "Consumer account not found or not eligible for a commission restriction." })
+      reply.header("Cache-Control", "no-store")
+      return { userId: (request.params as { userId: string }).userId, ...result }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("no overdue commissions")) return reply.code(409).send({ error: error.message })
+      throw error
+    }
+  })
+
   app.get(
     "/v1/admin/users",
 
@@ -2516,7 +2955,7 @@ export async function buildApp({
 
     async (
       request: FastifyRequest<{
-        Querystring: { limit: number; offset: number }
+        Querystring: { limit: number; offset: number; search?: string; action?: string; from?: string; to?: string }
       }>,
 
       reply,
@@ -2527,21 +2966,9 @@ export async function buildApp({
           .send({ error: "Admin data storage is unavailable." })
       }
 
-      const { limit, offset } = request.query
-
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-
-        action: "admin.users.read",
-
-        targetType: "user_directory",
-
-        targetId: null,
-
-        metadata: { limit, offset },
-
-        requestId: request.id,
-      })
+      const { limit, offset, search = "", action = "", from = "", to = "" } = request.query
+      const isValidDay = (value: string) => !value || (!Number.isNaN(Date.parse(value + "T00:00:00Z")) && new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value)
+      if (!isValidDay(from) || !isValidDay(to) || (from && to && from > to)) return reply.code(400).send({ error: "Choose a valid audit date range." })
 
       reply.header("Cache-Control", "no-store")
 
@@ -2578,7 +3005,7 @@ export async function buildApp({
 
     async (
       request: FastifyRequest<{
-        Querystring: { limit: number; offset: number }
+        Querystring: { limit: number; offset: number; search?: string; action?: string; from?: string; to?: string }
       }>,
 
       reply,
@@ -2589,25 +3016,11 @@ export async function buildApp({
           .send({ error: "Admin data storage is unavailable." })
       }
 
-      const { limit, offset } = request.query
-
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-
-        action: "admin.audit.read",
-
-        targetType: "admin_audit_event",
-
-        targetId: null,
-
-        metadata: { limit, offset },
-
-        requestId: request.id,
-      })
+      const { limit, offset, search = "", action = "", from = "", to = "" } = request.query
 
       reply.header("Cache-Control", "no-store")
 
-      return adminStore.listAdminAuditEvents(limit, offset)
+      return adminStore.listAdminAuditEvents(limit, offset, { search, action, from, to })
     },
   )
 
@@ -2679,14 +3092,6 @@ export async function buildApp({
       }
 
       const { limit, offset } = request.query
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-        action: "admin.marketplace_activity.read",
-        targetType: "marketplace_activity_event",
-        targetId: null,
-        metadata: { limit, offset },
-        requestId: request.id,
-      })
       reply.header("Cache-Control", "no-store")
       return adminStore.listAdminMarketplaceActivity(limit, offset)
     },
@@ -2838,14 +3243,6 @@ export async function buildApp({
       if (!adminStore.listAdminMarketplaceJobs) {
         return reply.code(503).send({ error: "Admin marketplace operations are unavailable." })
       }
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-        action: "admin.marketplace_jobs.read",
-        targetType: "marketplace_jobs",
-        targetId: null,
-        metadata: { ...filters, limit, offset },
-        requestId: request.id,
-      })
       const page = await adminStore.listAdminMarketplaceJobs({ filters, limit, offset })
       reply.header("Cache-Control", "no-store")
       return page
@@ -2995,8 +3392,9 @@ export async function buildApp({
     }
     const profile = await profileStore.updateProfile(request.authPrincipal.id, displayName, avatarPath)
     if (!profile) return reply.code(404).send({ error: "Profile not found." })
-    if (avatarPath && currentProfile?.avatarPath && currentProfile.avatarPath !== avatarPath && verificationStorage) {
-      await verificationStorage.storage.from("account-avatars").remove([currentProfile.avatarPath])
+    const storage = requestStorage(request)
+    if (avatarPath && currentProfile?.avatarPath && currentProfile.avatarPath !== avatarPath && storage) {
+      await storage.storage.from("account-avatars").remove([currentProfile.avatarPath])
     }
     reply.header("Cache-Control", "no-store")
     return profile
@@ -3154,11 +3552,13 @@ export async function buildApp({
     const body = request.body as { documentType: "national_id" | "passport"; documentPath: string; identityDisclosureAccepted: boolean }
     if (!body.documentPath.startsWith(`${request.authPrincipal.id}/`)) return reply.code(400).send({ error: "Upload your own identity document before submitting." })
     if (body.identityDisclosureAccepted !== true) return reply.code(400).send({ error: "Confirm the identity-document disclosure before submitting." })
-    if (!verificationStorage) return reply.code(503).send({ error: "Private identity document services are not configured." })
-    const [ownerFolder, ...fileParts] = body.documentPath.split("/")
-    const fileName = fileParts.join("/")
-    const { data: storedFiles, error: storageError } = await verificationStorage.storage.from("customer-verification").list(ownerFolder, { search: fileName, limit: 10 })
-    if (storageError || !storedFiles?.some((file) => file.name === fileName)) return reply.code(400).send({ error: "The uploaded identity document could not be verified. Upload it again." })
+    const storage = requestStorage(request)
+    if (!storage) return reply.code(503).send({ error: "Private identity document services are not configured." })
+    const { data: storedDocument, error: storageError } = await storage.storage.from("customer-verification").createSignedUrl(body.documentPath, 60)
+    if (storageError || !storedDocument?.signedUrl) {
+      request.log.warn({ err: storageError }, "Customer identity document is not available in private storage")
+      return reply.code(400).send({ error: "The uploaded identity document could not be found in private storage. Upload it again." })
+    }
     try {
       const result = await profileStore.submitCustomerVerification(request.authPrincipal.id, body.documentType, body.documentPath)
       await adminStore?.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "customer.identity_verification.submitted", targetType: "customer_identity_verification", targetId: request.authPrincipal.id, metadata: { documentType: body.documentType }, requestId: request.id })
@@ -3301,16 +3701,16 @@ export async function buildApp({
         return reply.code(400).send({ error: "Confirm the identity-document disclosure before submitting." })
       }
       if (request.body.documentPath) {
-        if (!verificationStorage) {
+        const storage = requestStorage(request)
+        if (!storage) {
           return reply.code(503).send({ error: "Private identity document services are not configured." })
         }
-        const [ownerFolder, ...fileParts] = request.body.documentPath.split("/")
-        const fileName = fileParts.join("/")
-        const { data: storedFiles, error: storageError } = await verificationStorage.storage
+        const { data: storedDocument, error: storageError } = await storage.storage
           .from("provider-verification")
-          .list(ownerFolder, { search: fileName, limit: 10 })
-        if (storageError || !storedFiles?.some((file) => file.name === fileName)) {
-          return reply.code(400).send({ error: "The uploaded identity document could not be verified. Upload it again." })
+          .createSignedUrl(request.body.documentPath, 60)
+        if (storageError || !storedDocument?.signedUrl) {
+          request.log.warn({ err: storageError }, "Provider identity document is not available in private storage")
+          return reply.code(400).send({ error: "The uploaded identity document could not be found in private storage. Upload it again." })
         }
       }
 
@@ -3368,14 +3768,6 @@ export async function buildApp({
         return reply.code(503).send({ error: "Admin data storage is unavailable." })
       }
       const categories = await adminStore.listAdminCategories()
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-        action: "admin.categories.read",
-        targetType: "service_category",
-        targetId: null,
-        metadata: { count: categories.length },
-        requestId: request.id,
-      })
       reply.header("Cache-Control", "no-store")
       return categories
     },
@@ -3407,16 +3799,18 @@ export async function buildApp({
       if (!adminStore || !request.authPrincipal) {
         return reply.code(503).send({ error: "Admin data storage is unavailable." })
       }
-      const category = await adminStore.saveAdminCategory({
-        actorUserId: request.authPrincipal.id,
-        category: {
-          ...request.body,
-          name: request.body.name.trim(),
-        },
-        requestId: request.id,
-      })
-      reply.header("Cache-Control", "no-store")
-      return category
+      try {
+        const category = await adminStore.saveAdminCategory({
+          actorUserId: request.authPrincipal.id,
+          category: { ...request.body, name: request.body.name.trim() },
+          requestId: request.id,
+        })
+        reply.header("Cache-Control", "no-store")
+        return category
+      } catch (error) {
+        if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+        throw error
+      }
     },
   )
 
@@ -3428,14 +3822,6 @@ export async function buildApp({
         return reply.code(503).send({ error: "Admin data storage is unavailable." })
       }
       const settings = await adminStore.getAdminSettings()
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-        action: "admin.system_settings.read",
-        targetType: "admin_setting",
-        targetId: "marketplace",
-        metadata: {},
-        requestId: request.id,
-      })
       reply.header("Cache-Control", "no-store")
       return settings
     },
@@ -3563,14 +3949,6 @@ export async function buildApp({
       }
       const status = request.query.status ?? "pending"
       const campaigns = await adminStore.listAdminAdCampaigns(status)
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-        action: "admin.ads.read",
-        targetType: "ad_campaign",
-        targetId: null,
-        metadata: { status, count: campaigns.length },
-        requestId: request.id,
-      })
       reply.header("Cache-Control", "no-store")
       return campaigns
     },
@@ -3643,14 +4021,6 @@ export async function buildApp({
         return reply.code(503).send({ error: "Admin data storage is unavailable." })
       }
       const history = await adminStore.listAdminMonitoringHistory(request.query.limit ?? 50)
-      await adminStore.recordAdminAuditEvent({
-        actorUserId: request.authPrincipal.id,
-        action: "admin.monitoring_history.read",
-        targetType: "service_health",
-        targetId: null,
-        metadata: { count: history.length },
-        requestId: request.id,
-      })
       reply.header("Cache-Control", "no-store")
       return history
     },
@@ -3684,9 +4054,19 @@ export async function buildApp({
 
               "database",
 
+              "databaseLatencyMs",
+
               "pendingVerifications",
 
+              "pendingCustomerVerifications",
+
               "openReports",
+
+              "openSupportCases",
+
+              "overdueCommissionCount",
+
+              "overdueCommissionMinor",
 
               "alerts",
             ],
@@ -3702,9 +4082,19 @@ export async function buildApp({
 
               database: { type: "string", enum: ["ok", "unavailable"] },
 
+              databaseLatencyMs: { type: "number" },
+
               pendingVerifications: { type: "integer" },
 
+              pendingCustomerVerifications: { type: "integer" },
+
               openReports: { type: "integer" },
+
+              openSupportCases: { type: "integer" },
+
+              overdueCommissionCount: { type: "integer" },
+
+              overdueCommissionMinor: { type: "integer" },
 
               alerts: {
                 type: "array",
@@ -3743,21 +4133,27 @@ export async function buildApp({
       }
 
       let databaseStatus: "ok" | "unavailable" = "ok"
-
+      let databaseLatencyMs = 0
       let pendingVerifications = 0
-
+      let pendingCustomerVerifications = 0
       let openReports = 0
+      let openSupportCases = 0
+      let overdueCommissionCount = 0
+      let overdueCommissionMinor = 0
 
       try {
         if (!database) throw new Error("Database is not configured.")
 
+        const checkStartedAt = performance.now()
         await database.check()
-
+        databaseLatencyMs = Math.round(performance.now() - checkStartedAt)
         const snapshot = await adminStore.getAdminMonitoringSnapshot()
-
         pendingVerifications = snapshot.pendingVerifications
-
+        pendingCustomerVerifications = snapshot.pendingCustomerVerifications
         openReports = snapshot.openReports
+        openSupportCases = snapshot.openSupportCases
+        overdueCommissionCount = snapshot.overdueCommissionCount
+        overdueCommissionMinor = snapshot.overdueCommissionMinor
       } catch {
         databaseStatus = "unavailable"
       }
@@ -3804,6 +4200,38 @@ export async function buildApp({
         })
       }
 
+      if (pendingCustomerVerifications >= 20) {
+        alerts.push({
+          severity: "warning",
+          code: "customer_verification_backlog",
+          message: pendingCustomerVerifications + " hirer identity checks are waiting for review.",
+        })
+      }
+
+      if (openSupportCases >= 20) {
+        alerts.push({
+          severity: "warning",
+          code: "support_backlog",
+          message: openSupportCases + " support cases are still active.",
+        })
+      }
+
+      if (overdueCommissionCount > 0) {
+        alerts.push({
+          severity: "warning",
+          code: "overdue_commissions",
+          message: overdueCommissionCount + " hirer commission payments are overdue.",
+        })
+      }
+
+      if (databaseLatencyMs >= 1000) {
+        alerts.push({
+          severity: "warning",
+          code: "database_latency",
+          message: "Database health check took " + databaseLatencyMs + " ms.",
+        })
+      }
+
       if (memory.heapUsed / heapLimitBytes >= 0.9) {
         alerts.push({
           severity: "warning",
@@ -3825,42 +4253,21 @@ export async function buildApp({
 
         database: databaseStatus,
 
+        databaseLatencyMs,
+
         pendingVerifications,
+
+        pendingCustomerVerifications,
 
         openReports,
 
+        openSupportCases,
+
+        overdueCommissionCount,
+
+        overdueCommissionMinor,
+
         alerts,
-      }
-
-      if (databaseStatus === "ok") {
-        await adminStore.recordAdminMonitoringSnapshot({
-          database: databaseStatus,
-          pendingVerifications,
-          openReports,
-          heapUsedBytes: memory.heapUsed,
-          heapLimitBytes,
-          alerts,
-        })
-
-        await adminStore.recordAdminAuditEvent({
-          actorUserId: request.authPrincipal.id,
-
-          action: "admin.monitoring.read",
-
-          targetType: "service_health",
-
-          targetId: null,
-
-          metadata: {
-            database: databaseStatus,
-
-            pendingVerifications,
-
-            openReports,
-          },
-
-          requestId: request.id,
-        })
       }
 
       reply.header("Cache-Control", "no-store")

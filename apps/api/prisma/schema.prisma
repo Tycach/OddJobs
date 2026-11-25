@@ -28,6 +28,36 @@ enum AppRole {
   @@map("app_role")
 }
 
+enum AdminMemberRole {
+  OWNER
+  ADMIN
+  OPERATIONS_ADMIN
+  VERIFICATION_REVIEWER
+  MODERATION_REVIEWER
+  SUPPORT_AGENT
+  FINANCE_REVIEWER
+  ANALYST
+
+  @@map("admin_member_role")
+}
+
+enum AdminInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+
+  @@map("admin_invitation_status")
+}
+
+enum AdminAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+
+  @@map("admin_alert_status")
+}
+
 enum AuthProvider {
   PHONE
   EMAIL
@@ -126,6 +156,32 @@ enum PlatformFeeStatus {
   @@map("platform_fee_status")
 }
 
+enum SupportCategory {
+  GENERAL
+  PAYMENT
+  WORK_REVIEW
+  SAFETY
+  ACCOUNT
+  OTHER
+
+  @@map("support_category")
+}
+
+enum SupportCaseStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_USER
+  RESOLVED
+
+  @@map("support_case_status")
+}
+
+enum AccountRestrictionType {
+  COMMISSION
+
+  @@map("account_restriction_type")
+}
+
 model User {
   id                String               @id @default(uuid()) @db.Uuid
   displayName       String               @map("display_name") @db.VarChar(120)
@@ -133,6 +189,14 @@ model User {
   status            UserStatus           @default(PENDING)
   identities        AuthIdentity[]
   roleAssignments   UserRoleAssignment[]
+  adminMembership AdminMember?
+  adminMembersGranted AdminMember[] @relation("AdminMemberGrantor")
+  adminInvitationsSent AdminInvitation[] @relation("AdminInvitationInviter")
+  adminInvitationsAccepted AdminInvitation[] @relation("AdminInvitationAccepter")
+  adminAlertsAssigned AdminAlert[] @relation("AdminAlertAssignee")
+  adminAlertsAcknowledged AdminAlert[] @relation("AdminAlertAcknowledger")
+  adminAlertsResolved AdminAlert[] @relation("AdminAlertResolver")
+  adminAlertEvents AdminAlertEvent[] @relation("AdminAlertEventActor")
   sessions          Session[]
   providerProfile   ProviderProfile?
   customerVerification CustomerIdentityVerification?
@@ -155,6 +219,12 @@ model User {
   enforcementActions AdminUserEnforcement[]
   marketplaceActivityEvents MarketplaceActivityEvent[]
   notifications     MarketplaceNotification[]
+  supportCasesRequested SupportCase[] @relation("SupportCaseRequester")
+  supportCasesAssigned SupportCase[] @relation("SupportCaseAssignee")
+  supportMessages SupportMessage[]
+  accountRestrictions AccountRestriction[] @relation("AccountRestrictionSubject")
+  restrictionsPlaced AccountRestriction[] @relation("AccountRestrictionActor")
+  restrictionsReleased AccountRestriction[] @relation("AccountRestrictionReleaser")
   savedProviders    SavedProvider[]         @relation("SavedProviders")
   createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -176,7 +246,7 @@ enum ListingStatus {
 
 model ServiceListing {
   id                   String        @id @default(uuid()) @db.Uuid
-  publicReference      String        @unique(map: "service_listings_job_reference_key") @default(dbgenerated("('OJ-'::text || lpad(nextval('job_reference_seq'::regclass)::text, 10, '0'::text))")) @map("job_reference") @db.VarChar(13)
+  publicReference      String        @unique(map: "service_listings_job_reference_key") @default(dbgenerated("('OJ-'::text || upper(substr(replace(gen_random_uuid()::text, '-'::text, ''::text), 1, 20)))")) @map("job_reference") @db.VarChar(23)
   providerId           String        @map("provider_id") @db.Uuid
   claimedByCustomerId  String?       @map("claimed_by_customer_id") @db.Uuid
   title                String        @db.VarChar(160)
@@ -480,9 +550,85 @@ model AdminMonitoringSnapshot {
   @@map("admin_monitoring_snapshots")
 }
 
+model AdminMember {
+  id           String          @id @default(uuid()) @db.Uuid
+  userId       String          @unique @map("user_id") @db.Uuid
+  role         AdminMemberRole
+  assignedBy   String          @map("assigned_by") @db.Uuid
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grantor      User            @relation("AdminMemberGrantor", fields: [assignedBy], references: [id], onDelete: Restrict)
+
+  @@index([role, createdAt])
+  @@map("admin_members")
+}
+
+model AdminInvitation {
+  id             String                @id @default(uuid()) @db.Uuid
+  email          String                @db.VarChar(320)
+  role           AdminMemberRole
+  status         AdminInvitationStatus @default(PENDING)
+  tokenHash      String                @unique @map("token_hash") @db.Char(64)
+  invitedBy      String                @map("invited_by") @db.Uuid
+  acceptedBy     String?               @map("accepted_by") @db.Uuid
+  expiresAt      DateTime              @map("expires_at") @db.Timestamptz(3)
+  acceptedAt     DateTime?             @map("accepted_at") @db.Timestamptz(3)
+  revokedAt      DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  inviter        User                  @relation("AdminInvitationInviter", fields: [invitedBy], references: [id], onDelete: Restrict)
+  acceptor       User?                 @relation("AdminInvitationAccepter", fields: [acceptedBy], references: [id], onDelete: SetNull)
+
+  @@index([email, status, createdAt])
+  @@index([status, expiresAt])
+  @@map("admin_invitations")
+}
+
+model AdminAlert {
+  id                 String           @id @default(uuid()) @db.Uuid
+  code               String           @db.VarChar(100)
+  dedupeKey          String?          @unique @map("dedupe_key") @db.VarChar(180)
+  severity           String           @db.VarChar(20)
+  message            String           @db.VarChar(500)
+  status             AdminAlertStatus @default(OPEN)
+  firstSeenAt        DateTime         @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt         DateTime         @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  acknowledgedAt     DateTime?        @map("acknowledged_at") @db.Timestamptz(3)
+  acknowledgedBy     String?          @map("acknowledged_by") @db.Uuid
+  assignedAdminId    String?          @map("assigned_admin_id") @db.Uuid
+  resolvedAt         DateTime?        @map("resolved_at") @db.Timestamptz(3)
+  resolvedBy         String?          @map("resolved_by") @db.Uuid
+  resolutionNote     String?          @map("resolution_note") @db.VarChar(1000)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  acknowledger       User?            @relation("AdminAlertAcknowledger", fields: [acknowledgedBy], references: [id], onDelete: SetNull)
+  assignee           User?            @relation("AdminAlertAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  resolver           User?            @relation("AdminAlertResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+  events             AdminAlertEvent[]
+
+  @@index([status, severity, lastSeenAt])
+  @@index([assignedAdminId, status])
+  @@map("admin_alerts")
+}
+
+model AdminAlertEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  alertId   String   @map("alert_id") @db.Uuid
+  actorId   String   @map("actor_id") @db.Uuid
+  action    String   @db.VarChar(40)
+  reason    String?  @db.VarChar(1000)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  alert     AdminAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  actor     User     @relation("AdminAlertEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([alertId, createdAt])
+  @@map("admin_alert_events")
+}
+
 model Job {
   id            String    @id @default(uuid()) @db.Uuid
-  publicReference String  @unique(map: "jobs_job_reference_key") @default(dbgenerated("('OJ-'::text || lpad(nextval('job_reference_seq'::regclass)::text, 10, '0'::text))")) @map("job_reference") @db.VarChar(13)
+  publicReference String  @unique(map: "jobs_job_reference_key") @default(dbgenerated("('OJ-'::text || upper(substr(replace(gen_random_uuid()::text, '-'::text, ''::text), 1, 20)))")) @map("job_reference") @db.VarChar(23)
   customerId    String    @map("customer_id") @db.Uuid
   title         String    @db.VarChar(160)
   description   String    @db.VarChar(5000)
@@ -500,6 +646,7 @@ model Job {
   locationLongitude Float? @map("location_longitude")
   shareExactLocationWithProvider Boolean @default(false) @map("share_exact_location_with_provider")
   completionNote String? @map("completion_note") @db.VarChar(5000)
+  completionSubmittedAt DateTime? @map("completion_submitted_at") @db.Timestamptz(3)
   revisionNote String? @map("revision_note") @db.VarChar(2000)
   media         Json      @default("[]")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -509,6 +656,7 @@ model Job {
   payment       JobPayment?
   messages      Message[]
   conversations JobConversation[]
+  supportCases SupportCase[]
 
   @@index([customerId, createdAt])
   @@index([status, category, createdAt])
@@ -563,6 +711,7 @@ model JobPayment {
   platformFeeStatus    PlatformFeeStatus @default(DUE) @map("platform_fee_status")
   platformFeeReportedByUserId String?    @map("platform_fee_reported_by_user_id") @db.Uuid
   platformFeeReportedAt DateTime?        @map("platform_fee_reported_at") @db.Timestamptz(3)
+  platformFeeDueAt DateTime?             @map("platform_fee_due_at") @db.Timestamptz(3)
   platformFeePaymentReference String?    @map("platform_fee_payment_reference") @db.VarChar(120)
   platformFeeReceivedAt DateTime?        @map("platform_fee_received_at") @db.Timestamptz(3)
   platformFeeReceiptReference String?   @map("platform_fee_receipt_reference") @db.VarChar(120)
@@ -671,6 +820,62 @@ model MarketplaceNotification {
   @@index([userId, createdAt, id])
   @@index([userId, readAt, createdAt])
   @@map("marketplace_notifications")
+}
+
+model SupportCase {
+  id          String @id @default(uuid()) @db.Uuid
+  caseReference String @unique @default(dbgenerated("('SUP-'::text || upper(substr(replace(gen_random_uuid()::text, '-'::text, ''::text), 1, 16)))")) @map("case_reference") @db.VarChar(20)
+  jobId       String @map("job_id") @db.Uuid
+  requesterId String @map("requester_id") @db.Uuid
+  requesterRole AppRole @map("requester_role")
+  category    SupportCategory
+  subject     String @db.VarChar(160)
+  status      SupportCaseStatus @default(OPEN)
+  assignedAdminId String? @map("assigned_admin_id") @db.Uuid
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  job Job @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  requester User @relation("SupportCaseRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  assignedAdmin User? @relation("SupportCaseAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  messages SupportMessage[]
+
+  @@index([requesterId, updatedAt])
+  @@index([status, updatedAt])
+  @@index([jobId, createdAt])
+  @@map("support_cases")
+}
+
+model SupportMessage {
+  id String @id @default(uuid()) @db.Uuid
+  caseId String @map("case_id") @db.Uuid
+  senderId String @map("sender_id") @db.Uuid
+  senderRole AppRole @map("sender_role")
+  body String @db.VarChar(5000)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  supportCase SupportCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sender User @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([caseId, createdAt])
+  @@map("support_messages")
+}
+
+model AccountRestriction {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  type AccountRestrictionType @default(COMMISSION)
+  reason String @db.VarChar(1000)
+  actorUserId String @map("actor_user_id") @db.Uuid
+  releasedByUserId String? @map("released_by_user_id") @db.Uuid
+  releaseReason String? @map("release_reason") @db.VarChar(1000)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  releasedAt DateTime? @map("released_at") @db.Timestamptz(3)
+  user User @relation("AccountRestrictionSubject", fields: [userId], references: [id], onDelete: Restrict)
+  actor User @relation("AccountRestrictionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  releasedBy User? @relation("AccountRestrictionReleaser", fields: [releasedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([userId, releasedAt, createdAt])
+  @@map("account_restrictions")
 }
 
 model OutboxEvent {

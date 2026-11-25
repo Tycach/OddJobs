@@ -61,6 +61,8 @@ export type Screen =
   | "listingCreate"
   | "hiringAnalytics"
   | "hiringGuide"
+  | "team"
+  | "adminInviteAccept"
 
 export type DemoBid = {
   provider: string

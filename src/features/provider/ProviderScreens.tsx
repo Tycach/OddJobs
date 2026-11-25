@@ -45,7 +45,7 @@ function ProviderDashboard({ go }: { go: (s: Screen) => void }) {
   const nextOpportunity = customerJobs.find((item) => item.status === "open") ?? null
   const loading = proposalsLoading || awardedLoading || feedLoading
   const dashboardError = [proposalsError, awardedError, feedError].filter(Boolean).join(" ")
-  const metric = (value: number) => loading ? "..." : dashboardError ? "â€”" : String(value)
+  const metric = (value: number) => loading ? "..." : dashboardError ? "—" : String(value)
   const activeProposals = proposals.filter((proposal) => proposal.status === "submitted").length
   const activeWork = awardedJobs.filter((job) => ["accepted", "in_progress", "completion_pending"].includes(job.status)).length
   return (
@@ -76,7 +76,7 @@ function ProviderDashboard({ go }: { go: (s: Screen) => void }) {
             </div>
             <div>
               <strong>{currentWork?.title ?? nextOpportunity?.title ?? (dashboardError ? "Live job data unavailable" : "No active work yet")}</strong>
-              <span>{currentWork ? `${currentWork.locationLabel} Â· ${currentWork.status.replace(/_/g, " ")}` : nextOpportunity ? `${nextOpportunity.locationLabel} Â· ${nextOpportunity.quoteCount} proposal${nextOpportunity.quoteCount === 1 ? "" : "s"} received` : dashboardError ? "Refresh after the marketplace connection is restored" : "Browse jobs and send a proposal to get started"}</span>
+              <span>{currentWork ? `${currentWork.locationLabel} · ${currentWork.status.replace(/_/g, " ")}` : nextOpportunity ? `${nextOpportunity.locationLabel} · ${nextOpportunity.quoteCount} proposal${nextOpportunity.quoteCount === 1 ? "" : "s"} received` : dashboardError ? "Refresh after the marketplace connection is restored" : "Browse jobs and send a proposal to get started"}</span>
             </div>
           </div>
           <div className="card-actions">
@@ -101,7 +101,7 @@ function JobCard({ job, number, onClick }: JobCardProps) {
   return (
     <button className="job-card" onClick={onClick}>
       <div>
-        <Badge tone="slate">Job #{number ?? "â€”"}</Badge>
+        <Badge tone="slate">Job #{number ?? "—"}</Badge>
         <span>{job[4] ?? "Open job"}</span>
       </div>
       <h3>{job[0]}</h3>
@@ -111,7 +111,7 @@ function JobCard({ job, number, onClick }: JobCardProps) {
         {job[1]}
       </p>
       <strong>{job[2]}</strong>
-      <span>Open budget Â· View details</span>
+      <span>Open budget · View details</span>
     </button>
   )
 }
@@ -184,7 +184,7 @@ function JobFeed({ go }: { go: (screen: Screen) => void }) {
                 ? "Open budget"
                 : `KES ${(job.budgetMinor / 100).toLocaleString()}`,
               `${job.quoteCount} proposals`,
-              job.status === "open" ? "Open for proposals" : `Taken Â· ${job.status.replace(/_/g, " ")}`,
+              job.status === "open" ? "Open for proposals" : `Taken · ${job.status.replace(/_/g, " ")}`,
               `Job ID ${job.jobReference}`,
             ]}
             onClick={() => {
@@ -194,7 +194,7 @@ function JobFeed({ go }: { go: (screen: Screen) => void }) {
           />
         ))}
       </div>
-      {loading && <p className="center-note">Loading open jobsâ€¦</p>}
+      {loading && <p className="center-note">Loading open jobs…</p>}
       {!loading && !error && jobs.length > 0 && filteredJobs.length === 0 && <EmptyState title="No matching jobs" detail="Try another search term, category, or distance range." />}
       {!loading && !error && !jobs.length && (
         <EmptyState
@@ -282,7 +282,7 @@ function ProviderOnboarding() {
   return (
     <div className="content narrow">
       <PageHeader
-        eyebrow="Worker setup Â· 1 of 1"
+        eyebrow="Worker setup · 1 of 1"
         title="Create your service profile"
         description="Tell Nairobi customers what you can help with."
       />
@@ -448,7 +448,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
       setMessage(caught instanceof Error ? caught.message : "Could not open this job conversation.")
     }
   }
-  const ownQuote = quotes.find((quote) => quote.status === "accepted") ?? quotes.find((quote) => quote.status === "submitted") ?? quotes[quotes.length - 1]
+  const ownQuote = quotes.find((quote) => quote.status === "accepted") ?? quotes.find((quote) => quote.status === "submitted") ?? quotes[quotes.length - 1] ?? null
 
   useEffect(() => {
     const timer = window.setInterval(() => void refresh(), 15000)
@@ -489,14 +489,14 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
       setMessage(
         requestError instanceof Error
           ? requestError.message
-          : "We couldnâ€™t submit your quote. Please try again.",
+          : "We couldn’t submit your quote. Please try again.",
       )
     } finally {
       setSubmitting(false)
     }
   }
 
-  if (loading) return <p className="center-note">Loading job detailsâ€¦</p>
+  if (loading) return <p className="center-note">Loading job details…</p>
 
   if (error || !job) {
     return (
@@ -516,10 +516,10 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
         eyebrow={`Job ID ${job.jobReference}`}
         title={job.title}
         action={<Button variant="secondary" onClick={() => go("settings")}>Edit my profile</Button>}
-        description={`${job.category} Â· ${job.locationLabel}${
+        description={`${job.category} · ${job.locationLabel}${
           job.budgetMinor === null
             ? ""
-            : ` Â· Budget up to KES ${(job.budgetMinor / 100).toLocaleString()}`
+            : ` · Budget up to KES ${(job.budgetMinor / 100).toLocaleString()}`
         }`}
       />
       <section className="card">
@@ -544,7 +544,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
             <h2>Your proposal</h2>
             <p>{ownQuote.message}</p>
             <p>
-              KES {(ownQuote.amountMinor / 100).toLocaleString()} Â·{" "}
+              KES {(ownQuote.amountMinor / 100).toLocaleString()} ·{" "}
               {ownQuote.availability}
             </p>
             {ownQuote.status === "submitted" && job.status === "open" && <Button variant="secondary" onClick={() => { setPrice(String(ownQuote.amountMinor / 100)); setTiming(ownQuote.availability); setPitch(ownQuote.message); setEditingQuote(true) }}>Edit proposal</Button>}
@@ -580,7 +580,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
               />
             </label>
             <Button disabled={submitting} onClick={() => void submitQuote()}>
-              {submitting ? "Sending proposalâ€¦" : ownQuote ? "Update proposal" : "Place a bid"}
+              {submitting ? "Sending proposal…" : ownQuote ? "Update proposal" : "Place a bid"}
             </Button>
             {message && (
               <p className={message.startsWith("Your quote") ? "" : "form-error"} role="status">
@@ -617,7 +617,7 @@ function JobManagement({ go }: { go: (screen: Screen) => void }) {
       setActionError(
         requestError instanceof Error
           ? requestError.message
-          : "We couldnâ€™t update this job. Please try again.",
+          : "We couldn’t update this job. Please try again.",
       )
     }
   }
@@ -647,7 +647,7 @@ function JobManagement({ go }: { go: (screen: Screen) => void }) {
             <Badge>{job.status.replace(/_/g, " ")}</Badge>
             <h2>{job.title}</h2>
             <p>
-              {job.locationLabel} Â· Job ID {job.jobReference}
+              {job.locationLabel} · Job ID {job.jobReference}
             </p>
             {job.dueAt && <p className="caption">Work due {new Date(job.dueAt).toLocaleString()}</p>}
             {job.completionNote && job.status === "completion_pending" && (
@@ -680,7 +680,7 @@ function JobManagement({ go }: { go: (screen: Screen) => void }) {
             </div>
           </section>
         ))}
-        {loading && <p className="center-note">Loading your awarded jobsâ€¦</p>}
+        {loading && <p className="center-note">Loading your awarded jobs…</p>}
         {!loading && !error && !jobs.length && (
           <EmptyState
             title="No jobs awarded yet"
@@ -809,7 +809,7 @@ function ListingCreate({ go }: { go: (screen: Screen) => void }) {
   return (
     <div className="content narrow">
       <PageHeader title="Publish a service profile" description="Show customers your services. Customers hire through job posts and reviewed provider proposals." />
-      <p className="demo-notice" role="status">{limitLoading ? "Checking your provider listing allowanceâ€¦" : verificationStatus === "verified" ? "ID approved: you can publish unlimited service listings." : `${verificationStatus === "in_review" ? "ID review pending" : "ID verification not submitted"}: ${listingCount ?? 0} of 10 listings used. Approval unlocks unlimited listings.`}</p>
+      <p className="demo-notice" role="status">{limitLoading ? "Checking your provider listing allowance…" : verificationStatus === "verified" ? "ID approved: you can publish unlimited service listings." : `${verificationStatus === "in_review" ? "ID review pending" : "ID verification not submitted"}: ${listingCount ?? 0} of 10 listings used. Approval unlocks unlimited listings.`}</p>
       {!limitLoading && verificationStatus !== "verified" && listingCount !== null && listingCount >= listingLimit && <div className="card-actions">{verificationStatus === "in_review" ? <p role="status">Your identity review is pending. Approval will unlock unlimited listings.</p> : <Button onClick={() => go("providerVerification")}>Submit identity verification</Button>}</div>}
       <section className="form-card listing-create-form">
         <label>Title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
@@ -818,7 +818,7 @@ function ListingCreate({ go }: { go: (screen: Screen) => void }) {
         <label>Service area<input value={form.locationLabel} onChange={(event) => setForm({ ...form, locationLabel: event.target.value })} /></label>
         <label>Price (KES, optional)<input inputMode="decimal" value={form.budget} onChange={(event) => setForm({ ...form, budget: event.target.value })} /></label>
         <div className="listing-media-upload">
-          <div><strong>Photos and video</strong><p>Add up to 6 photos and 1 short video. JPG, PNG, WebP, MP4, or WebM Â· up to 6 MB each.</p></div>
+          <div><strong>Photos and video</strong><p>Add up to 6 photos and 1 short video. JPG, PNG, WebP, MP4, or WebM · up to 6 MB each.</p></div>
           <label className="listing-media-picker">
             <input
               type="file"
@@ -831,14 +831,14 @@ function ListingCreate({ go }: { go: (screen: Screen) => void }) {
                 void addFiles(files)
               }}
             />
-            {uploading ? "Uploadingâ€¦" : "Choose photos or video"}
+            {uploading ? "Uploading…" : "Choose photos or video"}
           </label>
           <p className="listing-media-privacy">Listing media is visible to customers. Only upload images or videos you own, and avoid showing private addresses, contact details, or people without their permission.</p>
           {mediaError && <p className="form-error" role="alert">{mediaError}</p>}
-          {!!media.length && <div className="listing-media-gallery listing-media-previews">{media.map((item) => <div className="listing-media-preview" key={item.previewUrl}>{item.contentType.startsWith("video/") ? <video className="listing-media-item" src={item.previewUrl} controls playsInline preload="metadata" /> : <img className="listing-media-item" src={item.previewUrl} alt="Preview of listing media" />}{item.uploading && <span className="listing-media-status">Uploadingâ€¦</span>}<button type="button" className="listing-media-remove" disabled={item.uploading} onClick={() => removeMedia(item)} aria-label="Remove attached media">Remove</button></div>)}</div>}
+          {!!media.length && <div className="listing-media-gallery listing-media-previews">{media.map((item) => <div className="listing-media-preview" key={item.previewUrl}>{item.contentType.startsWith("video/") ? <video className="listing-media-item" src={item.previewUrl} controls playsInline preload="metadata" /> : <img className="listing-media-item" src={item.previewUrl} alt="Preview of listing media" />}{item.uploading && <span className="listing-media-status">Uploading…</span>}<button type="button" className="listing-media-remove" disabled={item.uploading} onClick={() => removeMedia(item)} aria-label="Remove attached media">Remove</button></div>)}</div>}
         </div>
         {error && <p className="form-error" role="alert">{error}</p>}
-        <Button disabled={saving || uploading || limitLoading || listingLimitReached || media.some((item) => !item.path)} onClick={() => void submit()}>{saving ? "Publishingâ€¦" : "Publish listing"}</Button>
+        <Button disabled={saving || uploading || limitLoading || listingLimitReached || media.some((item) => !item.path)} onClick={() => void submit()}>{saving ? "Publishing…" : "Publish listing"}</Button>
       </section>
     </div>
   )
@@ -858,7 +858,7 @@ function ProviderListings({ go }: { go: (screen: Screen) => void }) {
     return () => { unsubscribe?.(); window.clearInterval(poll) }
   }, [auth.subscribeMarketplaceChanges])
   const transition = async (id: string, action: "start" | "submit-completion" | "close") => { try { await auth.transitionServiceListing(id, action); await refresh() } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update listing."); await refresh() } }
-  return <div className="content"><PageHeader title="My service profiles and legacy bookings" description="Customers can browse these service profiles. New work starts with a customer job post and provider proposals; existing bookings remain available below." action={<Button onClick={() => go("listingCreate")}>Publish a service profile</Button>} />{error && <p className="form-error" role="alert">{error}</p>}{loading ? <p role="status">Loading your service profilesâ€¦</p> : listings.length ? <div className="job-list">{listings.map((item) => <section className="card job-summary" key={item.id}><Badge>{item.status.replace(/_/g, " ")}</Badge><h2>{item.title}</h2><p>{item.category} Â· {item.locationLabel}</p><ListingMediaGallery media={item.media ?? []} /><p>{item.customerName ? `Existing booking with ${item.customerName}` : "Service profile â€” new customers engage by posting a job and reviewing proposals."}</p>{item.claimExpiresAt && <p className="caption">Existing booking start deadline: {new Date(item.claimExpiresAt).toLocaleString()}</p>}<div className="card-actions">{item.status === "open" && <Button variant="secondary" onClick={() => void transition(item.id, "close")}>Unpublish service</Button>}{item.status === "claimed" && <Button onClick={() => void transition(item.id, "start")}>Start existing booking</Button>}{item.status === "in_progress" && <Button onClick={() => void transition(item.id, "submit-completion")}>Submit completion</Button>}</div></section>)}</div> : <EmptyState title="No service profiles yet" detail="Publish your services so customers can view your profile. They will hire by posting a job and reviewing proposals." />}</div>
+  return <div className="content"><PageHeader title="My service profiles and legacy bookings" description="Customers can browse these service profiles. New work starts with a customer job post and provider proposals; existing bookings remain available below." action={<Button onClick={() => go("listingCreate")}>Publish a service profile</Button>} />{error && <p className="form-error" role="alert">{error}</p>}{loading ? <p role="status">Loading your service profiles…</p> : listings.length ? <div className="job-list">{listings.map((item) => <section className="card job-summary" key={item.id}><Badge>{item.status.replace(/_/g, " ")}</Badge><h2>{item.title}</h2><p>{item.category} · {item.locationLabel}</p><ListingMediaGallery media={item.media ?? []} /><p>{item.customerName ? `Existing booking with ${item.customerName}` : "Service profile — new customers engage by posting a job and reviewing proposals."}</p>{item.claimExpiresAt && <p className="caption">Existing booking start deadline: {new Date(item.claimExpiresAt).toLocaleString()}</p>}<div className="card-actions">{item.status === "open" && <Button variant="secondary" onClick={() => void transition(item.id, "close")}>Unpublish service</Button>}{item.status === "claimed" && <Button onClick={() => void transition(item.id, "start")}>Start existing booking</Button>}{item.status === "in_progress" && <Button onClick={() => void transition(item.id, "submit-completion")}>Submit completion</Button>}</div></section>)}</div> : <EmptyState title="No service profiles yet" detail="Publish your services so customers can view your profile. They will hire by posting a job and reviewing proposals." />}</div>
 }
 
 function Wallet() {
@@ -929,11 +929,11 @@ function Reputation() {
       <div className="reputation-hero">
         <div>
           <span>Your rating</span>
-          <strong>{average === null ? "â€”" : average.toFixed(1)}</strong>
-          <div className="rating">{reviewPage ? reviewPage.received.length + " completed-job reviews" : "Loading reviewsâ€¦"}</div>
+          <strong>{average === null ? "—" : average.toFixed(1)}</strong>
+          <div className="rating">{reviewPage ? reviewPage.received.length + " completed-job reviews" : "Loading reviews…"}</div>
         </div>
         <div className="score-ring">
-          <strong>{reviewPage ? reviewPage.received.length : "â€”"}</strong>
+          <strong>{reviewPage ? reviewPage.received.length : "—"}</strong>
           <span>Completed jobs</span>
         </div>
       </div>
@@ -941,7 +941,7 @@ function Reputation() {
         <section className="card">
           <h2>Reviews about you</h2>
           {error && <p className="form-error" role="alert">{error}</p>}
-          {!reviewPage ? <p role="status">Loading reviewsâ€¦</p> : reviewPage.received.length === 0 ? <p>No customer reviews yet.</p> : reviewPage.received.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} Â· {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"â˜…".repeat(review.rating)}{"â˜†".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}
+          {!reviewPage ? <p role="status">Loading reviews…</p> : reviewPage.received.length === 0 ? <p>No customer reviews yet.</p> : reviewPage.received.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} · {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"â˜…".repeat(review.rating)}{"â˜†".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}
 </section>
         <section className="card tips">
           <h2>Review customers</h2>
@@ -1001,7 +1001,7 @@ function Training() {
           <section className="card course-card" key={x}>
             <span>0{i + 1}</span>
             <h3>{x}</h3>
-            <p>Short practical lessons Â· {20 + i * 5} min</p>
+            <p>Short practical lessons · {20 + i * 5} min</p>
             <Badge tone="slate">
               {store.completedLessons.includes(x)
                 ? "Certificate earned"
@@ -1042,16 +1042,16 @@ function Plans() {
       </DemoNotice>
       <div className="course-grid">
         {[
-          ["Basic", "KES 0", "Standard listing Â· 5 bids per month"],
+          ["Basic", "KES 0", "Standard listing · 5 bids per month"],
           [
             "Pro",
             "KES 499 / month",
-            "More bids Â· profile insights Â· priority support",
+            "More bids · profile insights · priority support",
           ],
           [
             "Elite",
             "KES 1,499 / month",
-            "Featured placement Â· advanced analytics Â· boosts",
+            "Featured placement · advanced analytics · boosts",
           ],
         ].map(([name, price, detail]) => (
           <section className="card course-card" key={name}>
@@ -1164,7 +1164,7 @@ function AdCreator() {
         </section>
         <aside>
           <div className="eyebrow">
-            Customer preview Â· approved placement only
+            Customer preview · approved placement only
           </div>
           <Sponsored />
           <p className="caption">

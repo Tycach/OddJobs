@@ -44,8 +44,8 @@ export const roleScreens: Record<Role, readonly Screen[]> = {
     "notifications", "chat", "settings",
   ],
   admin: [
-    "login", "overview", "users", "verification", "categories", "moderation",
-    "adApprovals", "audit", "payments", "operations", "config", "monitoring", "messages", "settings",
+    "login", "overview", "team", "users", "verification", "categories", "moderation",
+    "adApprovals", "audit", "payments", "operations", "config", "monitoring", "messages", "settings", "analytics",
   ],
   support: ["login", "disputes", "inbox", "knowledgeBase", "settings"],
   partner: ["login", "programmes", "impact", "builder", "settings"],
@@ -53,6 +53,7 @@ export const roleScreens: Record<Role, readonly Screen[]> = {
 
 export const navigation: Record<Role, { label: string; icon: string; screen: Screen }[]> = {
   consumer: [
+    "adminInviteAccept",
     { label: "Dashboard", icon: "grid", screen: "home" },
     { label: "Find workers", icon: "search", screen: "workFeed" },
     { label: "Saved workers", icon: "star", screen: "saved" },
@@ -81,6 +82,8 @@ export const navigation: Record<Role, { label: string; icon: string; screen: Scr
   ],
   admin: [
     { label: "Overview", icon: "grid", screen: "overview" },
+    { label: "Admin team", icon: "users", screen: "team" },
+    { label: "Analytics", icon: "chart", screen: "analytics" },
     { label: "Monitoring", icon: "chart", screen: "monitoring" },
     { label: "Users & roles", icon: "users", screen: "users" },
     { label: "Verification", icon: "shield", screen: "verification" },
@@ -126,7 +129,7 @@ export function getAuthenticatedRoute(
   authenticatedRoles: Role[],
 ): WorkspaceRoute {
   const requested = getWorkspaceRoute(pathname)
-  const isPublicScreen = ["welcome", "workspace", "login"].includes(requested.screen)
+  const isPublicScreen = ["welcome", "workspace", "login", "adminInviteAccept"].includes(requested.screen)
 
   if (authenticatedRoles.length === 0) {
     return isPublicScreen
