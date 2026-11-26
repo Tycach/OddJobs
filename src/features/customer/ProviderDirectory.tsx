@@ -1,26 +1,24 @@
 import { useEffect, useState } from "react"
 import { useAuth, type MarketplaceProvider, type ServiceListing, type ServiceListingReview } from "../../auth/AuthProvider"
 import { useMarketplaceProviders } from "../marketplace/hooks"
-import { Avatar, Badge } from "../../shared/components/WorkspaceUi"
+import { Avatar, Badge, Button } from "../../shared/components/WorkspaceUi"
 import ListingMediaGallery from "../marketplace/ListingMediaGallery"
 import { useDemoStore } from "../../demo/context"
 
-export default function ProviderDirectory({
-  onOpenProvider,
-}: {
-  onOpenProvider: (providerId: string) => void
-}) {
+export default function ProviderDirectory() {
   const [search, setSearch] = useState("")
   const [region, setRegion] = useState("")
   const [offset, setOffset] = useState(0)
+  const [viewingProviderId, setViewingProviderId] = useState<string | null>(null)
   const pageSize = 25
+  const { getProfileAvatarUrl } = useAuth()
   const { providers, total, loading, error, refresh } = useMarketplaceProviders(search, region, pageSize, offset)
 
   return (
     <div className="content">
       <header className="page-header">
         <div>
-          <span className="eyebrow">Approved worker directory</span>
+      <span className="eyebrow">Verified worker directory</span>
           <h1>Find trusted workers</h1>
           <p>Browse public profiles for approved OddJobs workers.</p>
         </div>
@@ -44,7 +42,7 @@ export default function ProviderDirectory({
           />
         </label>
       </div>
-      <p className="caption">{total} approved {total === 1 ? "worker" : "workers"}</p>
+      <p className="caption">{total} verified {total === 1 ? "worker profile" : "worker profiles"}</p>
       {error && (
         <p className="form-error" role="alert">
           {error} <button type="button" onClick={() => void refresh()}>Retry</button>
@@ -53,15 +51,7 @@ export default function ProviderDirectory({
       {loading ? (
         <p className="center-note" role="status">Finding approved workers…</p>
       ) : providers.length ? (
-        <div className="provider-directory-grid">
-          {providers.map((provider) => (
-            <ProviderDirectoryCard
-              key={provider.id}
-              provider={provider}
-              onClick={() => onOpenProvider(provider.id)}
-            />
-          ))}
-        </div>
+        <section className="card table-card provider-directory-table"><div className="table-wrap"><table><thead><tr><th>#</th><th>Worker</th><th>Service area</th><th>About</th><th></th></tr></thead><tbody>{providers.map((provider, index) => <tr key={provider.id}><td>{offset + index + 1}</td><td><div className="provider-table-person"><Avatar src={getProfileAvatarUrl(provider.avatarPath)} name={provider.publicName} /><div><strong>{provider.publicName}</strong><small><Badge tone="green">Verified worker</Badge></small></div></div></td><td>{provider.region || "Not listed"}</td><td className="provider-table-bio">{provider.bio || "No profile description yet."}</td><td><Button variant="secondary" onClick={() => setViewingProviderId(provider.id)}>View profile</Button></td></tr>)}</tbody></table></div></section>
       ) : !error ? (
         <section className="card">
           <h2>No workers found</h2>
@@ -78,9 +68,11 @@ export default function ProviderDirectory({
       <p className="caption">
         Contact details are not shown here. Post a job and review proposals from workers.
       </p>
+      {viewingProviderId && <ProviderProfileModal providerId={viewingProviderId} onClose={() => setViewingProviderId(null)} />}
     </div>
   )
 }
+
 
 export function ProviderDirectoryCard({
   provider,
@@ -106,10 +98,12 @@ export function ProviderProfile({
   providerId,
   onPostJob,
   isOwnProfile = false,
+  showPostJobAction = true,
 }: {
   providerId: string | null
   onPostJob: () => void
   isOwnProfile?: boolean
+  showPostJobAction?: boolean
 }) {
   const { store } = useDemoStore()
   const { getMarketplaceProvider, getPublicProviderReviews, getProfileAvatarUrl, getServiceListings, getSavedProviders, saveProvider, removeSavedProvider } = useAuth()
@@ -206,8 +200,12 @@ export function ProviderProfile({
           {reviews.length === 0 ? <p>No completed-job reviews yet.</p> : <><p className="rating">{(reviews.reduce((sum, item) => sum + item.rating, 0) / reviews.length).toFixed(1)} / 5 · {reviews.length} verified {reviews.length === 1 ? "review" : "reviews"}</p>{reviews.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} · {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}</>}
         </section>
         <p className="caption">Private contact details stay hidden. Message this worker through the conversation attached to your job.</p>
-        <button className="btn btn-primary" onClick={onPostJob}>{isOwnProfile ? "Back to worker dashboard" : "Post a job"}</button>
+        {showPostJobAction && <button className="btn btn-primary" onClick={onPostJob}>{isOwnProfile ? "Back to worker dashboard" : "Post a job"}</button>}
       </section>
     </div>
   )
+}
+
+export function ProviderProfileModal({ providerId, onClose }: { providerId: string; onClose: () => void }) {
+  return <div className="provider-profile-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="provider-profile-dialog" role="dialog" aria-modal="true" aria-labelledby="worker-profile-modal-title"><div className="provider-profile-dialog-heading"><div><span className="eyebrow">Approved worker</span><h2 id="worker-profile-modal-title">Worker profile</h2></div><button type="button" className="notification-modal-close" onClick={onClose} aria-label="Close worker profile">×</button></div><ProviderProfile providerId={providerId} onPostJob={onClose} showPostJobAction={false} /></section></div>
 }

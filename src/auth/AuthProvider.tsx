@@ -97,6 +97,7 @@ export type MarketplaceJob = {
   shareExactLocationWithProvider?: boolean
   distanceKm?: number | null
   completionNote?: string | null
+  completionMedia?: ServiceListingMedia[]
   revisionNote?: string | null
   media?: ServiceListingMedia[]
   createdAt: string
@@ -213,21 +214,24 @@ export type MarketplaceProviderQuote = MarketplaceQuote & {
 
 export type JobPaymentMethod = "cash" | "manual_transfer"
 export type JobPaymentStatus = "awaiting_payment" | "reported" | "paid" | "disputed" | "refunded"
+export type PlatformFeeStatus = "due" | "reported" | "received" | "disputed" | "needs_correction"
 export type JobPaymentRecord = {
   id: string; paymentReference: string; jobId: string; jobReference: string; jobTitle: string; jobStatus: string; quoteId: string
   customerId: string; customerName: string; providerId: string; providerName: string
   grossAmountMinor: number; commissionBasisPoints: number; commissionAmountMinor: number; providerAmountMinor: number
   currency: string; method: JobPaymentMethod | null; status: JobPaymentStatus
   reportedByUserId: string | null; reportedAt: string | null; confirmedByUserId: string | null; confirmedAt: string | null
-  platformFeeStatus: "due" | "reported" | "received" | "disputed"
+  platformFeeStatus: PlatformFeeStatus
   platformFeeReportedByUserId: string | null; platformFeeReportedAt: string | null; platformFeeDueAt: string | null; platformFeePaymentReference: string | null
   platformFeeReceivedAt: string | null; platformFeeReceiptReference: string | null
+  platformFeeCorrectionReason: string | null; platformFeeReminderCycle: number
+  platformFeeEvents: { action: string; actorId: string | null; metadata: Record<string, string | number | boolean | null>; createdAt: string }[]
   disputeReason: string | null; resolutionNote: string | null; resolvedAt: string | null
   payoutHoldAt?: string | null; payoutHoldReason?: string | null; createdAt: string; updatedAt: string
   commissionOverdue?: boolean; customerCommissionRestricted?: boolean; customerRestrictionReason?: string | null
 }
 export type AdminJobPaymentPage = AdminPage<JobPaymentRecord> & {
-  summary: { paidGrossMinor: number; commissionMinor: number; providerNetMinor: number; commissionDueMinor: number; disputedCount: number }
+  summary: { paidGrossMinor: number; providerNetMinor: number; commissionDueMinor: number; commissionReportedMinor: number; commissionReceivedMinor: number; commissionDisputedMinor: number; disputedCount: number }
   workers: Array<{ providerId: string; providerName: string; paidJobs: number; grossMinor: number; commissionMinor: number; netMinor: number; payoutHeld: boolean }>
 }
 export type ProviderWalletPayment = Pick<JobPaymentRecord, "id" | "paymentReference" | "jobId" | "jobReference" | "jobTitle" | "customerName" | "currency" | "method" | "status" | "reportedByUserId" | "reportedAt" | "confirmedAt" | "disputeReason" | "createdAt" | "updatedAt"> & { earningsMinor: number }
@@ -327,7 +331,8 @@ export type AdminAuditEvent = {
 
 export type AdminMemberRole = "OWNER" | "ADMIN" | "OPERATIONS_ADMIN" | "VERIFICATION_REVIEWER" | "MODERATION_REVIEWER" | "SUPPORT_AGENT" | "FINANCE_REVIEWER" | "ANALYST"
 export type AdminMemberSummary = { userId: string; displayName: string; role: AdminMemberRole; legacyOwner: boolean; joinedAt: string }
-export type AdminInvitationSummary = { id: string; email: string; role: AdminMemberRole; status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"; invitedByName: string; createdAt: string; expiresAt: string }
+export type AdminInvitationSummary = { id: string; email: string; role: AdminMemberRole; status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"; invitedByName: string; createdAt: string; expiresAt: string; acceptedAt: string | null; revokedAt: string | null }
+export type AdminInvitationLink = AdminInvitationSummary & { inviteUrl: string }
 export type AdminTeamSummary = { members: AdminMemberSummary[]; invitations: AdminInvitationSummary[] }
 export type AdminAlertSummary = { id: string; code: string; severity: "critical" | "warning"; message: string; status: "open" | "acknowledged" | "resolved"; firstSeenAt: string; lastSeenAt: string; acknowledgedAt: string | null; assignedAdminId: string | null; assignedAdminName: string | null; resolvedAt: string | null; resolutionNote: string | null }
 export type AdminAccess = { role: AdminMemberRole; screens: string[] }
@@ -499,6 +504,14 @@ export type AdminAdCampaign = {
   placement: string
   destinationUrl: string | null
   status: "pending" | "approved" | "rejected"
+  imageUrl?: string | null
+  startAt?: string | null
+  endAt?: string | null
+  priceMinor?: number | null
+  paymentStatus?: "pending" | "received"
+  paymentReference?: string | null
+  impressions?: number
+  clicks?: number
   decisionReason: string | null
   createdAt: string
 }
@@ -562,7 +575,7 @@ type AuthContextValue = {
 
     identifier: string,
 
-    signup?: { displayName: string; intent: "customer" | "supplier" },
+    signup?: { displayName: string; intent: "customer" | "supplier"; emailRedirectTo?: string },
   ) => Promise<string | null>
 
   signInWithPassword: (
@@ -583,6 +596,7 @@ type AuthContextValue = {
     displayName: string,
 
     intent: "customer" | "supplier",
+    emailRedirectTo?: string,
   ) => Promise<{ error: string | null; needsVerification: boolean }>
 
   signInWithOAuth: (provider: OAuthProvider, role?: "consumer" | "provider") => Promise<string | null>
@@ -630,7 +644,7 @@ type AuthContextValue = {
   getAdminTeam: () => Promise<AdminTeamSummary>
   setAdminMemberRole: (userId: string, role: AdminMemberRole) => Promise<void>
   removeAdminMember: (userId: string) => Promise<void>
-  inviteAdminUser: (email: string, role: AdminMemberRole) => Promise<AdminInvitationSummary>
+  inviteAdminUser: (email: string, role: AdminMemberRole) => Promise<AdminInvitationLink>
   revokeAdminInvitation: (invitationId: string) => Promise<void>
   acceptAdminInvitation: (invitationId: string, token: string) => Promise<{ role: AdminMemberRole; redirectTo: string }>
   getAdminAlerts: (limit?: number) => Promise<AdminAlertSummary[]>
@@ -719,12 +733,15 @@ type AuthContextValue = {
   saveAdminSettings: (settings: AdminSystemSettings) => Promise<AdminSystemSettings>
 
   getAdminAdCampaigns: (status: "all" | "pending" | "approved" | "rejected") => Promise<AdminAdCampaign[]>
+  createAdminAdCampaign: (input: { advertiserName: string; title: string; description: string; placement: "customer_landing" | "customer_dashboard"; destinationUrl?: string; imageUrl?: string; startAt?: string; endAt?: string; priceMinor?: number }) => Promise<AdminAdCampaign>
+  createAdCampaign: (input: { title: string; description: string; placement: "customer_landing" | "customer_dashboard"; destinationUrl?: string; imageUrl?: string; startAt?: string; endAt?: string; priceMinor?: number }) => Promise<AdminAdCampaign>
 
   decideAdminAdCampaign: (
     campaignId: string,
     decision: "approved" | "rejected",
     reason?: string,
   ) => Promise<AdminAdCampaign>
+  markAdminAdCampaignPaid: (campaignId: string, reference: string) => Promise<AdminAdCampaign>
 
   getMarketplaceJobs: (
     view: "consumer" | "provider" | "feed",
@@ -752,6 +769,7 @@ type AuthContextValue = {
     jobId: string,
     role: "consumer" | "provider",
   ) => Promise<MarketplaceJob>
+  getJobHirerSummary: (jobId: string) => Promise<{ displayName: string; memberSince: string; verified: boolean; completedJobs: number }>
   getJobPayments: (role: "consumer" | "provider") => Promise<JobPaymentRecord[]>
   getProviderWalletPayments: () => Promise<ProviderWalletPayment[]>
   reportJobPayment: (jobId: string, method: JobPaymentMethod) => Promise<JobPaymentRecord>
@@ -781,7 +799,7 @@ type AuthContextValue = {
   transitionMarketplaceJob: (
     jobId: string,
     transition: MarketplaceJobTransition,
-    details?: { note: string },
+    details?: { note: string; media?: ServiceListingMedia[] },
   ) => Promise<MarketplaceJob>
 
   getMarketplaceConversations: (role: "consumer" | "provider") => Promise<MarketplaceConversation[]>
@@ -809,9 +827,11 @@ type AuthContextValue = {
   getAdminSupportCaseMessages: (caseId: string) => Promise<SupportCaseMessage[]>
   sendAdminSupportMessage: (caseId: string, body: string) => Promise<SupportCaseMessage>
   updateAdminSupportCaseStatus: (caseId: string, status: SupportCaseStatus) => Promise<SupportCase>
-  getAdminJobPayments: (search: string, status: JobPaymentStatus | "all", limit: number, offset: number) => Promise<AdminJobPaymentPage>
+  getAdminJobPayments: (search: string, status: JobPaymentStatus | "all", commissionStatus: PlatformFeeStatus | "overdue" | "all", limit: number, offset: number) => Promise<AdminJobPaymentPage>
   resolveAdminJobPayment: (paymentId: string, resolution: "paid" | "refunded", reason: string) => Promise<JobPaymentRecord>
   recordAdminPlatformFeeReceipt: (paymentId: string, receiptReference: string) => Promise<JobPaymentRecord>
+  requestAdminPlatformFeeCorrection: (paymentId: string, reason: string) => Promise<JobPaymentRecord>
+  sendAdminPlatformFeeReminder: (paymentId: string, note: string) => Promise<JobPaymentRecord>
   setAdminProviderPayoutHold: (providerId: string, held: boolean, reason: string) => Promise<void>
 
   subscribeMarketplaceChanges: (onChange: () => void) => () => void
@@ -828,6 +848,20 @@ const supabaseApiKey =
 const apiUrl = (import.meta.env.VITE_API_URL || "http://127.0.0.1:3000")
 
   .replace(/\/$/, "")
+
+export async function checkApiReadiness(): Promise<boolean> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 5000)
+  try {
+    const response = await fetch(`${apiUrl}/health/ready`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+    return response.ok
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
 
 type AuthHotData = {
   rememberSessionState?: { current: boolean }
@@ -1434,7 +1468,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     identifier: string,
 
-    signup?: { displayName: string; intent: "customer" | "supplier" },
+    signup?: { displayName: string; intent: "customer" | "supplier"; emailRedirectTo?: string },
   ) => {
     if (!supabase) {
       return "Account services are temporarily unavailable. Please try again later."
@@ -1455,6 +1489,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               ? { account_intent: signup.intent }
               : {}),
           },
+          ...(signup.emailRedirectTo ? { emailRedirectTo: signup.emailRedirectTo } : {}),
         }
       : { shouldCreateUser: false }
 
@@ -1523,6 +1558,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     displayName: string,
 
     intent: "customer" | "supplier",
+    emailRedirectTo?: string,
   ) => {
     if (!supabase) {
       return {
@@ -1544,7 +1580,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...(intent === "supplier" ? { account_intent: intent } : {}),
       },
 
-      emailRedirectTo: `${window.location.origin}/${intent === "supplier" ? "provider" : "consumer"}/login`,
+      emailRedirectTo: emailRedirectTo ?? `${window.location.origin}/${intent === "supplier" ? "provider" : "consumer"}/login`,
     }
 
     const result =
@@ -1921,7 +1957,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const response = await adminRequest(`/v1/admin/team/members/${encodeURIComponent(userId)}`, { method: "DELETE" })
     if (!response.ok) throw getAdminResponseError(response.status)
   }, [])
-  const inviteAdminUser = useCallback((email: string, role: AdminMemberRole) => postAdminAction<AdminInvitationSummary>("/v1/admin/team/invitations", { email, role }), [])
+  const inviteAdminUser = useCallback((email: string, role: AdminMemberRole) => postAdminAction<AdminInvitationLink>("/v1/admin/team/invitations", { email, role }), [])
   const revokeAdminInvitation = useCallback(async (invitationId: string) => {
     const response = await adminRequest(`/v1/admin/team/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" })
     if (!response.ok) throw getAdminResponseError(response.status)
@@ -2119,6 +2155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (await response.json()) as AdminAdCampaign[]
   }, [])
 
+  const createAdminAdCampaign = useCallback((input: { advertiserName: string; title: string; description: string; placement: "customer_landing" | "customer_dashboard"; destinationUrl?: string; imageUrl?: string; startAt?: string; endAt?: string; priceMinor?: number }) => postAdminAction<AdminAdCampaign>("/v1/admin/ads", input), [])
+
+  const createAdCampaign = useCallback((input: { title: string; description: string; placement: "customer_landing" | "customer_dashboard"; destinationUrl?: string; imageUrl?: string; startAt?: string; endAt?: string; priceMinor?: number }) => marketplacePost<AdminAdCampaign>("/v1/ads", input), [])
+
   const decideAdminAdCampaign = useCallback(
     (
       campaignId: string,
@@ -2131,6 +2171,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ),
     [],
   )
+
+  const markAdminAdCampaignPaid = useCallback((campaignId: string, reference: string) => postAdminAction<AdminAdCampaign>(`/v1/admin/ads/${encodeURIComponent(campaignId)}/payment`, { reference }), [])
 
   const getMarketplaceJobs = useCallback(
     (view: "consumer" | "provider" | "feed") =>
@@ -2170,7 +2212,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       contentType: file.type,
       upsert: false,
     })
-    if (error) throw new Error("Could not upload this file. Check your connection and try again.")
+    if (error) {
+      const message = error.message.toLowerCase()
+      if (message.includes("row-level security") || message.includes("not authorized")) {
+        throw new Error("We couldn’t upload your photo or video. Please sign out and back in, then try again. If it still doesn’t work, contact support.")
+      }
+      if (message.includes("mime") || message.includes("content type")) {
+        throw new Error("This file format is not accepted. Use a JPG, PNG, WebP, MP4, or WebM file.")
+      }
+      if (message.includes("size") || message.includes("large")) {
+        throw new Error("This file is over the 6 MB limit. Choose a smaller file.")
+      }
+      throw new Error(`Could not upload this file: ${error.message}`)
+    }
     return { path, contentType: file.type, size: file.size }
   }, [])
 
@@ -2221,14 +2275,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const sendAdminSupportMessage = useCallback((caseId: string, body: string) => postAdminAction<SupportCaseMessage>(`/v1/admin/support/cases/${encodeURIComponent(caseId)}/messages`, { body }), [])
   const updateAdminSupportCaseStatus = useCallback((caseId: string, status: SupportCaseStatus) => postAdminAction<SupportCase>(`/v1/admin/support/cases/${encodeURIComponent(caseId)}/status`, { status }, "PATCH"), [])
 
-  const getAdminJobPayments = useCallback(async (search: string, status: JobPaymentStatus | "all", limit: number, offset: number) => {
-    const query = new URLSearchParams({ search, status, limit: String(limit), offset: String(offset) })
+  const getAdminJobPayments = useCallback(async (search: string, status: JobPaymentStatus | "all", commissionStatus: PlatformFeeStatus | "overdue" | "all", limit: number, offset: number) => {
+    const query = new URLSearchParams({ search, status, commissionStatus, limit: String(limit), offset: String(offset) })
     const response = await adminRequest(`/v1/admin/payments?${query}`)
     if (!response.ok) throw getAdminResponseError(response.status)
     return await response.json() as AdminJobPaymentPage
   }, [])
   const resolveAdminJobPayment = useCallback((paymentId: string, resolution: "paid" | "refunded", reason: string) => postAdminAction<JobPaymentRecord>(`/v1/admin/payments/${encodeURIComponent(paymentId)}/resolve`, { resolution, reason }), [])
   const recordAdminPlatformFeeReceipt = useCallback((paymentId: string, receiptReference: string) => postAdminAction<JobPaymentRecord>(`/v1/admin/payments/${encodeURIComponent(paymentId)}/platform-fee/confirm`, { receiptReference }), [])
+  const requestAdminPlatformFeeCorrection = useCallback((paymentId: string, reason: string) => postAdminAction<JobPaymentRecord>(`/v1/admin/payments/${encodeURIComponent(paymentId)}/platform-fee/correction`, { reason }), [])
+  const sendAdminPlatformFeeReminder = useCallback((paymentId: string, note: string) => postAdminAction<JobPaymentRecord>(`/v1/admin/payments/${encodeURIComponent(paymentId)}/platform-fee/remind`, { note }), [])
   const setAdminProviderPayoutHold = useCallback(async (providerId: string, held: boolean, reason: string) => {
     const response = await adminRequest(`/v1/admin/providers/${encodeURIComponent(providerId)}/payout-hold`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ held, reason }) })
     if (!response.ok) throw getAdminResponseError(response.status)
@@ -2307,6 +2363,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const getJobHirerSummary = useCallback((jobId: string) => marketplaceRequest<{ displayName: string; memberSince: string; verified: boolean; completedJobs: number }>(`/v1/jobs/${encodeURIComponent(jobId)}/hirer-summary?role=provider`), [])
+
   const getJobPayments = useCallback((role: "consumer" | "provider") => marketplaceRequest<JobPaymentRecord[]>(`/v1/me/payments?role=${role}`), [])
   const getProviderWalletPayments = useCallback(() => marketplaceRequest<ProviderWalletPayment[]>("/v1/me/payments?role=provider"), [])
   const reportJobPayment = useCallback((jobId: string, method: JobPaymentMethod) => marketplacePost<JobPaymentRecord>(`/v1/jobs/${encodeURIComponent(jobId)}/payment/report`, { method }), [])
@@ -2351,7 +2409,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const transitionMarketplaceJob = useCallback(
-    (jobId: string, transition: MarketplaceJobTransition, details?: { note: string }) =>
+    (jobId: string, transition: MarketplaceJobTransition, details?: { note: string; media?: ServiceListingMedia[] }) =>
       marketplacePost<MarketplaceJob>(
         `/v1/jobs/${encodeURIComponent(jobId)}/${transition}`,
         details ?? {},
@@ -2548,8 +2606,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         saveAdminSettings,
 
         getAdminAdCampaigns,
+        createAdminAdCampaign,
+        createAdCampaign,
 
         decideAdminAdCampaign,
+        markAdminAdCampaignPaid,
 
         getMarketplaceJobs,
         getServiceListings,
@@ -2571,6 +2632,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getAdminJobPayments,
         resolveAdminJobPayment,
         recordAdminPlatformFeeReceipt,
+        requestAdminPlatformFeeCorrection,
+        sendAdminPlatformFeeReminder,
         setAdminProviderPayoutHold,
 
         getMarketplaceProviders,
@@ -2587,6 +2650,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         markMarketplaceNotificationRead,
 
         getMarketplaceJob,
+        getJobHirerSummary,
 
         getMarketplaceQuotes,
         getMyMarketplaceQuotes,

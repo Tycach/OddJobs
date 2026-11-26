@@ -259,8 +259,9 @@ limits. Do not run load, brute-force, or destructive tests against production.
 - Only an owner can invite administrators, revoke pending invitations, assign
   scoped roles, or remove invited administrators. Existing admin accounts are
   treated as protected legacy owners until explicitly managed.
-- Invitations are sent through Supabase Auth and expire after seven days.
-  Configure `SUPABASE_SECRET_KEY` on the API only, and allow the local and
-  production `/consumer/adminInviteAccept` URLs in Supabase Auth redirect URLs.
+- Owners generate a one-time link and share it directly. Only a SHA-256 token
+  hash is stored; the clear token is returned once for copying. Links expire
+  after 72 hours and are bound to the email selected by the owner. The recipient
+  can create an account or sign in, then redeem the link once.
 - Team changes, invitations, alert actions, and other admin decisions are
   recorded in the audit log. Routine dashboard reads are not logged.

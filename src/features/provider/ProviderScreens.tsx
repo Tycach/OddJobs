@@ -438,6 +438,19 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
   const [message, setMessage] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [editingQuote, setEditingQuote] = useState(false)
+  const [hirerSummary, setHirerSummary] = useState<{ displayName: string; memberSince: string; verified: boolean; completedJobs: number } | null>(null)
+  const [hirerProfileOpen, setHirerProfileOpen] = useState(false)
+  const [hirerProfileLoading, setHirerProfileLoading] = useState(false)
+  const [hirerProfileError, setHirerProfileError] = useState("")
+  const openHirerProfile = async () => {
+    if (!job) return
+    setHirerProfileOpen(true)
+    setHirerProfileLoading(true)
+    setHirerProfileError("")
+    try { setHirerSummary(await auth.getJobHirerSummary(job.id)) }
+    catch (caught) { setHirerProfileError(caught instanceof Error ? caught.message : "Hirer details could not be loaded.") }
+    finally { setHirerProfileLoading(false) }
+  }
   const openConversation = async () => {
     if (!job) return
     try {
@@ -475,6 +488,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
       setMessage("Enter a valid quote and a short message.")
       return
     }
+    const isUpdate = Boolean(ownQuote)
     setSubmitting(true)
     try {
       await auth.submitMarketplaceQuote(job.id, {
@@ -482,7 +496,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
         availability: timing.trim(),
         message: pitch.trim(),
       })
-      setMessage("Your quote was sent to the customer.")
+      setMessage(isUpdate ? "Your proposal was updated for the customer." : "Your proposal was sent to the customer.")
       setEditingQuote(false)
       await refresh()
     } catch (requestError) {
@@ -515,7 +529,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
       <PageHeader
         eyebrow={`Job ID ${job.jobReference}`}
         title={job.title}
-        action={<Button variant="secondary" onClick={() => go("settings")}>Edit my profile</Button>}
+        action={<Button variant="secondary" onClick={() => void openHirerProfile()}>View hirer</Button>}
         description={`${job.category} · ${job.locationLabel}${
           job.budgetMinor === null
             ? ""
@@ -583,7 +597,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
               {submitting ? "Sending proposal…" : ownQuote ? "Update proposal" : "Place a bid"}
             </Button>
             {message && (
-              <p className={message.startsWith("Your quote") ? "" : "form-error"} role="status">
+              <p className={message.startsWith("Your proposal") ? "" : "form-error"} role="status">
                 {message}
               </p>
             )}
@@ -594,6 +608,7 @@ function ProviderJobDetail({ go }: { go: (screen: Screen) => void }) {
           Back to job feed
         </Button>
       </section>
+      {hirerProfileOpen && <div className="notification-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setHirerProfileOpen(false) }}><section className="notification-modal" role="dialog" aria-modal="true" aria-labelledby="hirer-profile-title"><div className="notification-modal-heading"><div><p className="eyebrow">Job hirer</p><h2 id="hirer-profile-title">Hirer profile</h2></div><button className="notification-modal-close" type="button" onClick={() => setHirerProfileOpen(false)} aria-label="Close">×</button></div>{hirerProfileLoading ? <p>Loading details…</p> : hirerProfileError ? <p className="form-error" role="alert">{hirerProfileError}</p> : hirerSummary ? <><h3>{hirerSummary.displayName} {hirerSummary.verified && <Badge>Identity checked</Badge>}</h3><div className="review-facts"><span><small>Member since</small><b>{new Date(hirerSummary.memberSince).toLocaleDateString(undefined, { month: "short", year: "numeric" })}</b></span><span><small>Completed hires</small><b>{hirerSummary.completedJobs}</b></span></div><p className="caption">Contact details and exact address stay private. Use the job conversation to contact the hirer.</p></> : null}<Button variant="secondary" onClick={() => setHirerProfileOpen(false)}>Close</Button></section></div>}
     </div>
   )
 }
@@ -604,22 +619,51 @@ function JobManagement({ go }: { go: (screen: Screen) => void }) {
   const { jobs, loading, error, refresh } = useMarketplaceJobs("provider")
   const [actionError, setActionError] = useState("")
   const [workNotes, setWorkNotes] = useState<Record<string, string>>({})
+  const [workFiles, setWorkFiles] = useState<Record<string, File[]>>({})
+  const [workFileErrors, setWorkFileErrors] = useState<Record<string, string>>({})
+  const [workNoteErrors, setWorkNoteErrors] = useState<Record<string, string>>({})
+  const [busyJobId, setBusyJobId] = useState("")
   const transition = async (
     jobId: string,
     action: "start" | "submit-completion",
     note?: string,
+    files: File[] = [],
   ) => {
+    const uploaded: ServiceListingMedia[] = []
+    if (action === "submit-completion" && (note ?? "").trim().length < 10) {
+      setWorkNoteErrors((current) => ({ ...current, [jobId]: "Please add at least 10 characters about the work you completed." }))
+      return
+    }
     try {
+      setBusyJobId(jobId)
       setActionError("")
-      await auth.transitionMarketplaceJob(jobId, action, note ? { note } : undefined)
+      setWorkNoteErrors((current) => ({ ...current, [jobId]: "" }))
+      if (action === "submit-completion") {
+        for (const file of files) uploaded.push(await auth.uploadServiceListingMedia(file))
+        await auth.transitionMarketplaceJob(jobId, action, note ? { note, media: uploaded } : undefined)
+        setWorkFiles((current) => ({ ...current, [jobId]: [] }))
+      } else {
+        await auth.transitionMarketplaceJob(jobId, action)
+      }
       await refresh()
     } catch (requestError) {
+      if (uploaded.length) await Promise.allSettled(uploaded.map((item) => auth.deleteServiceListingMedia(item.path)))
       setActionError(
         requestError instanceof Error
           ? requestError.message
           : "We couldn’t update this job. Please try again.",
       )
+    } finally {
+      setBusyJobId("")
     }
+  }
+  const chooseWorkFiles = (jobId: string, files: File[]) => {
+    const allowed = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"])
+    const images = files.filter((file) => file.type.startsWith("image/"))
+    const videos = files.filter((file) => file.type.startsWith("video/"))
+    const invalid = files.length > 7 || images.length > 6 || videos.length > 1 || files.some((file) => !allowed.has(file.type) || file.size < 1 || file.size > 6 * 1024 * 1024)
+    setWorkFileErrors((current) => ({ ...current, [jobId]: invalid ? "Choose up to six photos and one video. Each file must be 6 MB or smaller." : "" }))
+    if (!invalid) setWorkFiles((current) => ({ ...current, [jobId]: files }))
   }
   const openConversation = async (jobId: string) => {
     try {
@@ -650,13 +694,11 @@ function JobManagement({ go }: { go: (screen: Screen) => void }) {
               {job.locationLabel} · Job ID {job.jobReference}
             </p>
             {job.dueAt && <p className="caption">Work due {new Date(job.dueAt).toLocaleString()}</p>}
-            {job.completionNote && job.status === "completion_pending" && (
-              <div className="safe-note"><span><strong>Work submitted</strong><br />{job.completionNote}</span></div>
-            )}
+            {job.completionNote && job.status === "completion_pending" && <><div className="safe-note"><span><strong>Work submitted</strong><br />{job.completionNote}</span></div><ListingMediaGallery media={job.completionMedia ?? []} /></>}
             {job.revisionNote && job.status === "revision_requested" && (
               <div className="safe-note"><span><strong>Customer requested a revision</strong><br />{job.revisionNote}</span></div>
             )}
-            <div className="card-actions">
+            <div className="card-actions job-management-actions">
               {job.status === "awarded" && (
                 <Button icon="play" onClick={() => void transition(job.id, "start")}>
                   Start work
@@ -664,11 +706,15 @@ function JobManagement({ go }: { go: (screen: Screen) => void }) {
               )}
               {job.status !== "open" && <Button variant="secondary" icon="message" onClick={() => void openConversation(job.id)}>Message customer</Button>}
               {(job.status === "in_progress" || job.status === "revision_requested") && (
-                <div className="form-card">
+                <div className="form-card work-submission-form">
                   <label>{job.status === "revision_requested" ? "Describe the revised work" : "Describe the work you completed"}
-                    <textarea rows={4} minLength={10} maxLength={5000} value={workNotes[job.id] ?? ""} onChange={(event) => setWorkNotes((current) => ({ ...current, [job.id]: event.target.value }))} placeholder="Summarize the completed work and anything the customer should know." />
+                    <textarea rows={4} maxLength={5000} aria-describedby={`work-note-help-${job.id}`} aria-invalid={Boolean(workNoteErrors[job.id])} value={workNotes[job.id] ?? ""} onChange={(event) => { setWorkNotes((current) => ({ ...current, [job.id]: event.target.value })); setWorkNoteErrors((current) => ({ ...current, [job.id]: "" })) }} placeholder="Summarize the completed work and anything the customer should know." />
                   </label>
-                  <Button disabled={(workNotes[job.id] ?? "").trim().length < 10} onClick={() => void transition(job.id, "submit-completion", workNotes[job.id]?.trim())}>{job.status === "revision_requested" ? "Submit revised work" : "Submit work for review"}</Button>
+                  <small id={`work-note-help-${job.id}`} className={workNoteErrors[job.id] ? "form-error" : "caption"} role={workNoteErrors[job.id] ? "alert" : undefined}>{workNoteErrors[job.id] || `${(workNotes[job.id] ?? "").trim().length} / 10 characters minimum`}</small>
+                  <label className="work-media-picker"><strong>Add photos or video</strong><small>Optional · up to 6 photos and 1 video, 6 MB each</small><input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple onChange={(event) => { chooseWorkFiles(job.id, Array.from(event.target.files ?? [])); event.target.value = "" }} /></label>
+                  {(workFiles[job.id] ?? []).length > 0 && <ul className="work-media-file-list">{workFiles[job.id].map((file) => <li key={`${file.name}-${file.size}`}>{file.name} <small>{(file.size / 1024 / 1024).toFixed(1)} MB</small></li>)}</ul>}
+                  {workFileErrors[job.id] && <p className="form-error" role="alert">{workFileErrors[job.id]}</p>}
+                  <Button disabled={busyJobId === job.id || Boolean(workFileErrors[job.id])} onClick={() => void transition(job.id, "submit-completion", workNotes[job.id]?.trim(), workFiles[job.id] ?? [])}>{busyJobId === job.id ? "Uploading and sending…" : job.status === "revision_requested" ? "Submit revised work" : "Submit work for review"}</Button>
                 </div>
               )}
               {job.status === "completion_pending" && (
@@ -1103,64 +1149,52 @@ function ProviderAnalytics() {
 }
 
 function AdCreator() {
-  const [submitted, setSubmitted] = useState(false)
+  const auth = useAuth()
+  const [title, setTitle] = useState("")
+  const [description, setDescription] = useState("")
+  const [placement, setPlacement] = useState<"customer_landing" | "customer_dashboard">("customer_landing")
+  const [destinationUrl, setDestinationUrl] = useState("")
+  const [imageUrl, setImageUrl] = useState("")
+  const [startAt, setStartAt] = useState("")
+  const [endAt, setEndAt] = useState("")
+  const [price, setPrice] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState("")
+  const submit = async () => {
+    setBusy(true); setMessage("")
+    try {
+      await auth.createAdCampaign({ title: title.trim(), description: description.trim(), placement, ...(destinationUrl.trim() ? { destinationUrl: destinationUrl.trim() } : {}), ...(imageUrl.trim() ? { imageUrl: imageUrl.trim() } : {}), ...(startAt ? { startAt: new Date(startAt).toISOString() } : {}), ...(endAt ? { endAt: new Date(endAt).toISOString() } : {}), ...(price ? { priceMinor: Math.round(Number(price) * 100) } : {}) })
+      setMessage("Your campaign was submitted. It will appear after review and payment confirmation.")
+      setTitle(""); setDescription(""); setDestinationUrl(""); setImageUrl(""); setStartAt(""); setEndAt(""); setPrice("")
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "The campaign could not be submitted.") }
+    finally { setBusy(false) }
+  }
   return (
     <div className="content">
       <PageHeader
         title="Promote your service"
         description="Create a clearly labelled campaign for approved consumer placements."
       />
-      <DemoNotice>
-        Ad submission is simulated. This prototype never renders provider ads in
-        the dashboard.
-      </DemoNotice>
       <div className="builder-grid">
         <section className="form-card">
           <label>
             Short headline
-            <input defaultValue="Reliable plumbing, available today" />
+            <input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label>
-            Target category
-            <select>
-              <option>Plumbing</option>
-              <option>Cleaning</option>
-              <option>Repairs</option>
-            </select>
+            Campaign description
+            <textarea rows={3} maxLength={500} value={description} onChange={(event) => setDescription(event.target.value)} />
           </label>
-          <div className="field-pair">
-            <label>
-              Location
-              <input defaultValue="Nairobi" />
-            </label>
-            <label>
-              Daily budget (KES)
-              <input inputMode="numeric" defaultValue="500" />
-            </label>
-          </div>
           <label>
-            Duration
-            <select>
-              <option>7 days</option>
-              <option>14 days</option>
-              <option>30 days</option>
-            </select>
+            Where should your ad appear?
+            <select value={placement} onChange={(event) => setPlacement(event.target.value as typeof placement)}><option value="customer_landing">OddJobs home page</option><option value="customer_dashboard">Hirer workspace</option></select>
           </label>
-          <label className="upload">
-            <Icon name="plus" />
-            <span>
-              Upload creative
-              <input type="file" accept="image/*" />
-            </span>
-          </label>
-          <Button onClick={() => setSubmitted(true)}>
-            Submit for demo review
-          </Button>
-          {submitted && (
-            <DemoNotice>
-              Your sample campaign was submitted locally for approval.
-            </DemoNotice>
-          )}
+          <label>Destination link (optional)<input type="url" placeholder="https://example.com" value={destinationUrl} onChange={(event) => setDestinationUrl(event.target.value)} /></label>
+          <label>Image link (optional)<input type="url" placeholder="https://example.com/image.jpg" value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} /></label>
+          <div className="field-pair"><label>Start date (optional)<input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label><label>End date (optional)<input type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} /></label></div>
+          <label>Agreed campaign fee (KES)<input type="number" min="1" step="1" value={price} onChange={(event) => setPrice(event.target.value)} /></label>
+          <Button disabled={busy || !title.trim() || !description.trim()} onClick={() => void submit()}>{busy ? "Submitting…" : "Submit for review"}</Button>
+          {message && <p role="status" className={message.startsWith("Your campaign") ? "safe-note" : "form-error"}>{message}</p>}
         </section>
         <aside>
           <div className="eyebrow">
@@ -1168,8 +1202,7 @@ function AdCreator() {
           </div>
           <Sponsored />
           <p className="caption">
-            Ads are shown only on login/landing and consumer dashboard slots;
-            never in job, search or payment flows.
+            Your campaign appears only after approval, confirmed payment, and its scheduled start date.
           </p>
         </aside>
       </div>

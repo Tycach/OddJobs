@@ -39,6 +39,7 @@ import type {
   AdminAnalyticsReport,
   AdminPage,
   AdminJobPaymentPage,
+  AdminCommissionFilter,
   AdminStore,
   AdminVerificationDecision,
   AdminVerificationSummary,
@@ -123,6 +124,7 @@ const jobPaymentRelations = {
   job: { select: { id: true, publicReference: true, title: true, status: true } },
   customer: { select: { id: true, displayName: true } },
   provider: { select: { id: true, displayName: true, providerProfile: { select: { payoutHoldAt: true, payoutHoldReason: true } } } },
+  events: { select: { action: true, actorId: true, metadata: true, createdAt: true }, orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }] },
 } satisfies Prisma.JobPaymentInclude
 
 type HydratedJobPayment = Prisma.JobPaymentGetPayload<{ include: typeof jobPaymentRelations }>
@@ -182,6 +184,9 @@ function mapJobPayment(row: HydratedJobPayment): JobPaymentRecord {
     platformFeePaymentReference: row.platformFeePaymentReference,
     platformFeeReceivedAt: row.platformFeeReceivedAt?.toISOString() ?? null,
     platformFeeReceiptReference: row.platformFeeReceiptReference,
+    platformFeeCorrectionReason: row.platformFeeCorrectionReason,
+    platformFeeReminderCycle: row.platformFeeReminderCycle,
+    platformFeeEvents: row.events.map((event) => ({ action: event.action, actorId: event.actorId, metadata: event.metadata as Record<string, string | number | boolean | null>, createdAt: event.createdAt.toISOString() })),
     disputeReason: row.disputeReason,
     resolutionNote: row.resolutionNote,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
@@ -1184,7 +1189,7 @@ export class PrismaDatabase
     const ids = users.map((user) => user.id)
     const [restrictions, overdue] = ids.length ? await Promise.all([
       this.client.accountRestriction.findMany({ where: { userId: { in: ids }, type: "COMMISSION", releasedAt: null }, select: { userId: true, reason: true } }),
-      this.client.jobPayment.groupBy({ by: ["customerId"], where: { customerId: { in: ids }, status: "PAID", platformFeeStatus: { not: "RECEIVED" }, platformFeeDueAt: { lte: new Date() } }, _count: { _all: true }, _sum: { commissionAmountMinor: true } }),
+      this.client.jobPayment.groupBy({ by: ["customerId"], where: { customerId: { in: ids }, status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { lte: new Date() } }, _count: { _all: true }, _sum: { commissionAmountMinor: true } }),
     ]) : [[], []]
     const activeRestrictions = new Map(restrictions.map((item) => [item.userId, item.reason]))
     const overdueFees = new Map(overdue.map((item) => [item.customerId, { count: item._count._all, amount: Number(item._sum.commissionAmountMinor ?? 0n) }]))
@@ -1307,7 +1312,7 @@ export class PrismaDatabase
         select: { commissionAmountMinor: true, platformFeeReceivedAt: true },
       }),
       this.client.jobPayment.findMany({
-        where: { status: { not: "REFUNDED" }, platformFeeStatus: { in: ["DUE", "REPORTED", "DISPUTED"] }, platformFeeDueAt: { lt: new Date() }, ...(hasPaymentJobFilter ? { job: paymentJobFilter } : {}) },
+        where: { status: { not: "REFUNDED" }, platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { lt: new Date() }, ...(hasPaymentJobFilter ? { job: paymentJobFilter } : {}) },
         select: { commissionAmountMinor: true },
       }),
       this.client.jobPayment.aggregate({
@@ -1948,6 +1953,7 @@ export class PrismaDatabase
       where: status === "all" ? {} : { status: status.toUpperCase() as "PENDING" | "APPROVED" | "REJECTED" },
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     })
+    const eventCounts = rows.length ? await this.client.adCampaignEvent.groupBy({ by: ["campaignId", "eventType"], where: { campaignId: { in: rows.map((row) => row.id) } }, _count: true }) : []
     return rows.map((row) => ({
       id: row.id,
       advertiserName: row.advertiserName,
@@ -1958,16 +1964,28 @@ export class PrismaDatabase
       status: row.status.toLowerCase() as AdminAdCampaign["status"],
       decisionReason: row.decisionReason,
       createdAt: row.createdAt.toISOString(),
+      imageUrl: row.imageUrl,
+      startAt: row.startAt?.toISOString() ?? null,
+      endAt: row.endAt?.toISOString() ?? null,
+      priceMinor: row.priceMinor === null ? null : Number(row.priceMinor),
+      paymentStatus: row.paymentStatus as "pending" | "received",
+      paymentReference: row.paymentReference,
+      impressions: eventCounts.find((event) => event.campaignId === row.id && event.eventType === "impression")?._count ?? 0,
+      clicks: eventCounts.find((event) => event.campaignId === row.id && event.eventType === "click")?._count ?? 0,
     }))
   }
 
   async createAdCampaign(input: {
-    advertiserId: string
+    advertiserId: string | null
     advertiserName: string
     title: string
     description: string
     placement: string
     destinationUrl: string | null
+    imageUrl?: string | null
+    startAt?: Date | null
+    endAt?: Date | null
+    priceMinor?: bigint | null
   }): Promise<AdminAdCampaign> {
     const row = await this.client.adCampaign.create({ data: input })
     return {
@@ -1980,6 +1998,14 @@ export class PrismaDatabase
       status: row.status.toLowerCase() as AdminAdCampaign["status"],
       decisionReason: row.decisionReason,
       createdAt: row.createdAt.toISOString(),
+      imageUrl: row.imageUrl,
+      startAt: row.startAt?.toISOString() ?? null,
+      endAt: row.endAt?.toISOString() ?? null,
+      priceMinor: row.priceMinor === null ? null : Number(row.priceMinor),
+      paymentStatus: row.paymentStatus as "pending" | "received",
+      paymentReference: row.paymentReference,
+      impressions: 0,
+      clicks: 0,
     }
   }
 
@@ -2024,7 +2050,47 @@ export class PrismaDatabase
         status: row.status.toLowerCase() as AdminAdCampaign["status"],
         decisionReason: row.decisionReason,
         createdAt: row.createdAt.toISOString(),
+        imageUrl: row.imageUrl,
+        startAt: row.startAt?.toISOString() ?? null,
+        endAt: row.endAt?.toISOString() ?? null,
+        priceMinor: row.priceMinor === null ? null : Number(row.priceMinor),
+        paymentStatus: row.paymentStatus as "pending" | "received",
+        paymentReference: row.paymentReference,
+        impressions: 0,
+        clicks: 0,
       }
+    })
+  }
+
+  async listLiveAds(placement: string) {
+    const now = new Date()
+    return this.client.adCampaign.findMany({
+      where: { placement, status: "APPROVED", paymentStatus: "received", AND: [
+        { OR: [{ startAt: null }, { startAt: { lte: now } }] },
+        { OR: [{ endAt: null }, { endAt: { gt: now } }] },
+      ] },
+      select: { id: true, title: true, description: true, advertiserName: true, imageUrl: true, destinationUrl: true },
+      orderBy: [{ reviewedAt: "desc" }, { createdAt: "desc" }], take: 3,
+    })
+  }
+
+  async recordAdCampaignEvent(campaignId: string, eventType: "impression" | "click") {
+    const now = new Date()
+    const campaign = await this.client.adCampaign.findFirst({ where: { id: campaignId, status: "APPROVED", paymentStatus: "received", AND: [{ OR: [{ startAt: null }, { startAt: { lte: now } }] }, { OR: [{ endAt: null }, { endAt: { gt: now } }] }] }, select: { id: true } })
+    if (!campaign) return false
+    await this.client.adCampaignEvent.create({ data: { campaignId, eventType } })
+    return true
+  }
+
+  async markAdCampaignPaid(input: { actorUserId: string; campaignId: string; reference: string; requestId: string }): Promise<AdminAdCampaign | null> {
+    return this.client.$transaction(async (transaction) => {
+      const updated = await transaction.adCampaign.updateMany({ where: { id: input.campaignId, status: "APPROVED" }, data: { paymentStatus: "received", paymentReference: input.reference } })
+      if (!updated.count) return null
+      await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: "admin.ad.payment_received", targetType: "ad_campaign", targetId: input.campaignId, metadata: { reference: input.reference }, requestId: input.requestId } })
+      const row = await transaction.adCampaign.findUnique({ where: { id: input.campaignId } })
+      if (!row) return null
+      const events = await transaction.adCampaignEvent.groupBy({ by: ["eventType"], where: { campaignId: row.id }, _count: true })
+      return { id: row.id, advertiserName: row.advertiserName, title: row.title, description: row.description, placement: row.placement, destinationUrl: row.destinationUrl, status: row.status.toLowerCase() as AdminAdCampaign["status"], decisionReason: row.decisionReason, createdAt: row.createdAt.toISOString(), imageUrl: row.imageUrl, startAt: row.startAt?.toISOString() ?? null, endAt: row.endAt?.toISOString() ?? null, priceMinor: row.priceMinor === null ? null : Number(row.priceMinor), paymentStatus: row.paymentStatus as "pending" | "received", paymentReference: row.paymentReference, impressions: events.find((event) => event.eventType === "impression")?._count ?? 0, clicks: events.find((event) => event.eventType === "click")?._count ?? 0 }
     })
   }
 
@@ -2088,7 +2154,7 @@ export class PrismaDatabase
       }),
       this.client.supportCase.count({ where: { status: { not: "RESOLVED" } } }),
       this.client.jobPayment.aggregate({
-        where: { status: "PAID", platformFeeStatus: { not: "RECEIVED" }, platformFeeDueAt: { lte: new Date() } },
+        where: { status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { lte: new Date() } },
         _count: { _all: true },
         _sum: { commissionAmountMinor: true },
       }),
@@ -2165,23 +2231,27 @@ export class PrismaDatabase
         invitedByName: invite.inviter.displayName,
         createdAt: invite.createdAt.toISOString(),
         expiresAt: invite.expiresAt.toISOString(),
+        acceptedAt: invite.acceptedAt?.toISOString() ?? null,
+        revokedAt: invite.revokedAt?.toISOString() ?? null,
       })),
     }
   }
 
   async createAdminInvitation(input: { id: string; email: string; role: AdminMemberRole; tokenHash: string; invitedBy: string; expiresAt: Date }): Promise<AdminInvitationSummary> {
     const email = input.email.trim().toLowerCase()
-    const existing = await this.client.adminInvitation.findFirst({ where: { email, status: "PENDING", expiresAt: { gt: new Date() } }, select: { id: true } })
-    if (existing) throw new MarketplaceConflictError("A pending invitation already exists for this email.")
-    const inviter = await this.client.user.findUnique({ where: { id: input.invitedBy }, select: { displayName: true } })
-    if (!inviter) throw new MarketplaceConflictError("The inviting administrator could not be found.")
-    const invite = await this.client.adminInvitation.create({
-      data: { id: input.id, email, role: input.role, tokenHash: input.tokenHash, invitedBy: input.invitedBy, expiresAt: input.expiresAt },
+    return this.client.$transaction(async (transaction) => {
+      const existing = await transaction.adminInvitation.findFirst({ where: { email, status: "PENDING", expiresAt: { gt: new Date() } }, select: { id: true } })
+      if (existing) throw new MarketplaceConflictError("A pending invitation already exists for this email.")
+      const inviter = await transaction.user.findUnique({ where: { id: input.invitedBy }, select: { displayName: true } })
+      if (!inviter) throw new MarketplaceConflictError("The inviting administrator could not be found.")
+      const invite = await transaction.adminInvitation.create({
+        data: { id: input.id, email, role: input.role, tokenHash: input.tokenHash, invitedBy: input.invitedBy, expiresAt: input.expiresAt },
+      })
+      await transaction.adminAuditEvent.create({
+        data: { actorUserId: input.invitedBy, action: "admin.invitation.created", targetType: "admin_invitation", targetId: invite.id, metadata: { email, role: input.role }, requestId: "admin-invite:" + invite.id },
+      })
+      return { id: invite.id, email: invite.email, role: invite.role, status: invite.status, invitedByName: inviter.displayName, createdAt: invite.createdAt.toISOString(), expiresAt: invite.expiresAt.toISOString(), acceptedAt: null, revokedAt: null }
     })
-    await this.client.adminAuditEvent.create({
-      data: { actorUserId: input.invitedBy, action: "admin.invitation.created", targetType: "admin_invitation", targetId: invite.id, metadata: { email, role: input.role }, requestId: "admin-invite:" + invite.id },
-    })
-    return { id: invite.id, email: invite.email, role: invite.role, status: invite.status, invitedByName: inviter.displayName, createdAt: invite.createdAt.toISOString(), expiresAt: invite.expiresAt.toISOString() }
   }
 
   async revokeAdminInvitation(invitationId: string, actorUserId: string): Promise<boolean> {
@@ -2239,6 +2309,11 @@ export class PrismaDatabase
         where: { id: input.invitationId, email: input.email.trim().toLowerCase(), tokenHash: input.tokenHash, status: "PENDING", expiresAt: { gt: now } },
       })
       if (!invite) return null
+      const consumed = await transaction.adminInvitation.updateMany({
+        where: { id: invite.id, status: "PENDING", tokenHash: input.tokenHash, expiresAt: { gt: now } },
+        data: { status: "ACCEPTED", acceptedBy: input.userId, acceptedAt: now, tokenHash: "accepted-" + invite.id.replaceAll("-", "") },
+      })
+      if (consumed.count !== 1) return null
       await transaction.userRoleAssignment.upsert({
         where: { userId_role: { userId: input.userId, role: "ADMIN" } },
         create: { userId: input.userId, role: "ADMIN" },
@@ -2249,7 +2324,6 @@ export class PrismaDatabase
         create: { userId: input.userId, role: invite.role, assignedBy: invite.invitedBy },
         update: { role: invite.role, assignedBy: invite.invitedBy },
       })
-      await transaction.adminInvitation.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedBy: input.userId, acceptedAt: now, tokenHash: "accepted-" + invite.id.replaceAll("-", "") } })
       await transaction.adminAuditEvent.create({
         data: { actorUserId: input.userId, action: "admin.invitation.accepted", targetType: "admin_member", targetId: input.userId, metadata: { email: invite.email, role: invite.role, invitedBy: invite.invitedBy }, requestId: "admin-invite-accept:" + invite.id },
       })
@@ -2708,6 +2782,7 @@ export class PrismaDatabase
       locationLongitude: number | null
       shareExactLocationWithProvider: boolean
       completionNote: string | null
+      completionMedia: Prisma.JsonValue
       revisionNote: string | null
       media: Prisma.JsonValue
       createdAt: Date
@@ -2742,6 +2817,7 @@ export class PrismaDatabase
       shareExactLocationWithProvider: job.shareExactLocationWithProvider,
       distanceKm: options.distanceKm ?? null,
       completionNote: job.completionNote,
+      completionMedia: Array.isArray(job.completionMedia) ? job.completionMedia as ServiceListingMedia[] : [],
       revisionNote: job.revisionNote,
       media: Array.isArray(job.media) ? job.media as ServiceListingMedia[] : [],
       createdAt: job.createdAt.toISOString(),
@@ -3130,6 +3206,20 @@ export class PrismaDatabase
     return this.mapMarketplaceJob(job, { includePreciseLocation: Boolean(accepted && job.shareExactLocationWithProvider), distanceKm })
   }
 
+  async getJobHirerSummary(providerUserId: string, jobId: string) {
+    const now = new Date()
+    const job = await this.client.job.findFirst({
+      where: { id: jobId, customerId: { not: providerUserId }, OR: [
+        { status: { in: ["AWARDED", "IN_PROGRESS", "COMPLETION_PENDING", "REVISION_REQUESTED"] } },
+        { status: "OPEN", OR: [{ applicationDeadlineAt: null }, { applicationDeadlineAt: { gt: now } }] },
+        { quotes: { some: { providerId: providerUserId } } },
+      ] },
+      select: { customer: { select: { displayName: true, createdAt: true, customerVerification: { select: { status: true } }, _count: { select: { customerJobs: { where: { status: "COMPLETED" } } } } } } },
+    })
+    if (!job) return null
+    return { displayName: job.customer.displayName, memberSince: job.customer.createdAt.toISOString(), verified: job.customer.customerVerification?.status === "VERIFIED", completedJobs: job.customer._count.customerJobs }
+  }
+
   async listQuotes(
     userId: string,
     role: "consumer" | "provider",
@@ -3292,13 +3382,8 @@ export class PrismaDatabase
 
         const existingQuote = await transaction.quote.findFirst({
           where: { jobId, providerId: userId, status: "SUBMITTED" },
-          select: { id: true },
+          select: { id: true, revision: true },
         })
-        if (existingQuote) {
-          throw new MarketplaceConflictError(
-            "You have already submitted a quote for this job.",
-          )
-        }
 
         const jobRow = await transaction.job.findUnique({
           where: { id: jobId },
@@ -3334,23 +3419,28 @@ export class PrismaDatabase
           where: { jobId, providerId: userId },
           _max: { revision: true },
         })
-        const quote = await transaction.quote.create({
-          data: {
-            jobId,
-            providerId: userId,
-            revision: (latestQuote._max.revision ?? 0) + 1,
-            amountMinor: BigInt(input.amountMinor),
-            currency: "KES",
-            message: input.message,
-            availability: input.availability,
-          },
-          include: { provider: { select: { displayName: true } } },
-        })
+        const quoteData = {
+          revision: (latestQuote._max.revision ?? 0) + 1,
+          amountMinor: BigInt(input.amountMinor),
+          currency: "KES",
+          message: input.message,
+          availability: input.availability,
+        }
+        const quote = existingQuote
+          ? await transaction.quote.update({
+              where: { id: existingQuote.id },
+              data: quoteData,
+              include: { provider: { select: { displayName: true } } },
+            })
+          : await transaction.quote.create({
+              data: { jobId, providerId: userId, ...quoteData },
+              include: { provider: { select: { displayName: true } } },
+            })
         await transaction.marketplaceActivityEvent.create({
           data: {
             actorUserId: userId,
             actorRole: "provider",
-            action: "quote.submitted",
+            action: existingQuote ? "quote.updated" : "quote.submitted",
             jobId,
             quoteId: quote.id,
             metadata: { amountMinor: input.amountMinor },
@@ -3363,13 +3453,13 @@ export class PrismaDatabase
           jobId,
           quoteId: quote.id,
           recipientUserId: jobRow.customerId,
-          title: "A worker submitted a proposal",
-          body: `${quote.provider.displayName} submitted a proposal for your job.`,
+          title: existingQuote ? "A worker updated their proposal" : "A worker submitted a proposal",
+          body: existingQuote ? `${quote.provider.displayName} updated their proposal for your job.` : `${quote.provider.displayName} submitted a proposal for your job.`,
           payload: { amountMinor: input.amountMinor },
         })
 
         return this.mapMarketplaceQuote(quote)
-      })
+      }, { maxWait: 10000, timeout: 20000 })
     } catch (error) {
       if (
         typeof error === "object" &&
@@ -3514,7 +3604,7 @@ export class PrismaDatabase
     jobId: string,
     transition: "start" | "submit_completion" | "confirm_completion" | "request_revision" | "cancel",
     requestId: string,
-    details?: { note: string },
+    details?: { note: string; media?: ServiceListingMedia[] },
   ): Promise<MarketplaceJob | null> {
     const providerTransition = transition === "start" || transition === "submit_completion"
     const where =
@@ -3540,6 +3630,13 @@ export class PrismaDatabase
       },
     })
     if (!job) return null
+
+    // Confirming completion is safe to retry. A double click or a delayed
+    // response can otherwise turn the second, already-satisfied request into
+    // a misleading conflict for the hirer.
+    if (transition === "confirm_completion" && job.status === "COMPLETED") {
+      return this.mapMarketplaceJob(job, { includePreciseLocation: job.customerId === userId || job.shareExactLocationWithProvider })
+    }
 
     const expectedStatus = transition === "start"
       ? "AWARDED"
@@ -3571,7 +3668,7 @@ export class PrismaDatabase
         data: {
           status: nextStatus,
           ...(transition === "submit_completion"
-            ? { completionNote: details?.note.trim() || null, revisionNote: null, completionSubmittedAt: new Date() }
+            ? { completionNote: details?.note.trim() || null, completionMedia: details?.media ?? [], revisionNote: null, completionSubmittedAt: new Date() }
             : transition === "request_revision"
               ? { revisionNote: details?.note.trim() || null, completionSubmittedAt: null }
             : {}),
@@ -3667,7 +3764,13 @@ export class PrismaDatabase
       include: jobPaymentRelations,
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     })
-    return rows.map(mapJobPayment)
+    const now = new Date()
+    return rows.map((row) => ({
+      ...mapJobPayment(row),
+      commissionOverdue: row.status === "PAID"
+        && (row.platformFeeStatus === "DUE" || row.platformFeeStatus === "NEEDS_CORRECTION")
+        && Boolean(row.platformFeeDueAt && row.platformFeeDueAt <= now),
+    }))
   }
 
   /** Idempotent hourly safety net for hirer review and commission reminders. */
@@ -3696,8 +3799,8 @@ export class PrismaDatabase
     }
 
     const duePayments = await this.client.jobPayment.findMany({
-      where: { status: "PAID", platformFeeStatus: "DUE", platformFeeDueAt: { not: null } },
-      select: { id: true, jobId: true, customerId: true, paymentReference: true, currency: true, commissionAmountMinor: true, platformFeeDueAt: true, job: { select: { publicReference: true, title: true } } },
+      where: { status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { not: null } },
+      select: { id: true, jobId: true, customerId: true, paymentReference: true, currency: true, commissionAmountMinor: true, platformFeeDueAt: true, platformFeeReminderCycle: true, job: { select: { publicReference: true, title: true } } },
     })
     const feeStages = [
       { key: "due-soon", offsetHours: -24, title: "OddJobs commission due tomorrow" },
@@ -3710,22 +3813,24 @@ export class PrismaDatabase
       const dueAt = payment.platformFeeDueAt
       if (!dueAt) continue
       const eligible = feeStages.filter((stage) => now.getTime() >= dueAt.getTime() + stage.offsetHours * 3_600_000)
-      if (!eligible.length) continue
+      const stage = eligible.at(-1)
+      if (!stage) continue
       const amount = new Intl.NumberFormat("en-KE", { style: "currency", currency: payment.currency.trim() }).format(Number(payment.commissionAmountMinor) / 100)
       const deadline = dueAt.toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Nairobi" })
-      const notifications = eligible.map((stage) => ({
-        userId: payment.customerId, type: "payment.platform_fee_reminder", title: stage.title,
-        body: `Job ${payment.job.publicReference}: ${amount} for ${payment.job.title} was due by ${deadline}. Pay OddJobs and report the transfer reference in Payment history.`,
-        jobId: payment.jobId, dedupeKey: `commission-reminder:${payment.id}:${stage.key}:${payment.customerId}`.slice(0, 180),
-      }))
-      const events = eligible.map((stage) => ({
-        paymentId: payment.id, actorId: null, action: `platform_fee.reminder.${stage.key}`,
-        metadata: { amountMinor: Number(payment.commissionAmountMinor), dueAt: dueAt.toISOString(), stage: stage.key },
-        requestId: `fee-reminder:${payment.id}:${stage.key}`.slice(0, 80),
-      }))
       const created = await this.client.$transaction(async (transaction) => {
-        const notificationResult = await transaction.marketplaceNotification.createMany({ data: notifications, skipDuplicates: true })
-        await transaction.jobPaymentEvent.createMany({ data: events, skipDuplicates: true })
+        const current = await transaction.jobPayment.findFirst({ where: { id: payment.id, status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] } }, select: { id: true } })
+        if (!current) return 0
+        const key = `commission-reminder:${payment.id}:${payment.platformFeeReminderCycle}:${stage.key}:${payment.customerId}`.slice(0, 180)
+        const notificationResult = await transaction.marketplaceNotification.createMany({ data: [{
+          userId: payment.customerId, type: "payment.platform_fee_reminder", title: stage.title,
+          body: `Job ${payment.job.publicReference}: ${amount} for ${payment.job.title} was due by ${deadline}. Pay OddJobs and report the transfer reference in Payment history.`,
+          jobId: payment.jobId, dedupeKey: key,
+        }], skipDuplicates: true })
+        if (notificationResult.count) await transaction.jobPaymentEvent.create({ data: {
+          paymentId: payment.id, actorId: null, action: `platform_fee.reminder.${stage.key}`,
+          metadata: { amountMinor: Number(payment.commissionAmountMinor), dueAt: dueAt.toISOString(), stage: stage.key, cycle: payment.platformFeeReminderCycle },
+          requestId: `fee-reminder:${payment.id}:${payment.platformFeeReminderCycle}:${stage.key}`.slice(0, 80),
+        } })
         return notificationResult.count
       })
       commissions += created
@@ -3758,9 +3863,9 @@ export class PrismaDatabase
 
   async reportPlatformFee(userId: string, jobId: string, paymentReference: string, requestId: string): Promise<JobPaymentRecord | null> {
     return this.client.$transaction(async (transaction) => {
-      const payment = await transaction.jobPayment.findFirst({ where: { jobId, customerId: userId, status: "PAID", job: { status: "COMPLETED" } } })
+      const payment = await transaction.jobPayment.findFirst({ where: { jobId, customerId: userId, status: "PAID", job: { status: "COMPLETED" } }, include: { job: { select: { publicReference: true } }, customer: { select: { displayName: true } } } })
       if (!payment) return null
-      if (payment.platformFeeStatus !== "DUE") {
+      if (payment.platformFeeStatus !== "DUE" && payment.platformFeeStatus !== "NEEDS_CORRECTION") {
         if (payment.platformFeeReportedByUserId === userId && payment.platformFeePaymentReference === paymentReference.trim()) {
           const current = await transaction.jobPayment.findUnique({ where: { id: payment.id }, include: jobPaymentRelations })
           return current ? mapJobPayment(current) : null
@@ -3769,10 +3874,75 @@ export class PrismaDatabase
       }
       const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: {
         platformFeeStatus: "REPORTED", platformFeeReportedByUserId: userId,
-        platformFeeReportedAt: new Date(), platformFeePaymentReference: paymentReference.trim(),
+        platformFeeReportedAt: new Date(), platformFeePaymentReference: paymentReference.trim(), platformFeeCorrectionReason: null,
       } })
       await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: userId, action: "platform_fee.reported", metadata: { paymentReference: paymentReference.trim(), amountMinor: Number(payment.commissionAmountMinor) }, requestId } })
+      await transaction.marketplaceNotification.updateMany({
+        where: { userId, jobId: payment.jobId, type: { in: ["payment.platform_fee_reminder", "payment.platform_fee_manual_reminder"] } },
+        data: { readAt: new Date(), title: "Payment reported — reminder closed", body: `You reported the OddJobs fee for Job ${payment.job.publicReference}. This reminder is closed while OddJobs reviews your payment reference.` },
+      })
+      const administrators = await transaction.userRoleAssignment.findMany({ where: { role: "ADMIN" }, select: { userId: true } })
+      if (administrators.length) await transaction.marketplaceNotification.createMany({
+        data: [...new Set(administrators.map((item) => item.userId))].map((adminId) => ({
+          userId: adminId, type: "payment.platform_fee_reported", title: "Commission receipt needs review",
+          body: `${payment.customer.displayName} reported a fee payment for ${payment.job.publicReference}. Verify the reference in Payments & wallets.`,
+          jobId: payment.jobId, dedupeKey: `commission-reported:${payment.id}:${adminId}`.slice(0, 180),
+        })), skipDuplicates: true,
+      })
       const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async requestAdminPlatformFeeCorrection(input: { actorUserId: string; paymentId: string; reason: string; requestId: string }): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findFirst({ where: { id: input.paymentId, platformFeeStatus: "REPORTED" }, include: { job: { select: { publicReference: true } } } })
+      if (!payment) return null
+      const reason = input.reason.trim()
+      if (reason.length < 10) throw new MarketplaceConflictError("Provide a clear correction reason of at least 10 characters.")
+      const nextCycle = payment.platformFeeReminderCycle + 1
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: {
+        platformFeeStatus: "NEEDS_CORRECTION", platformFeeCorrectionReason: reason,
+        platformFeeReminderCycle: nextCycle,
+      } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: input.actorUserId, action: "platform_fee.correction_requested", metadata: { reason, cycle: nextCycle }, requestId: input.requestId } })
+      await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: "admin.platform_fee.correction_requested", targetType: "job_payment", targetId: payment.id, metadata: { jobId: payment.jobId, reason }, requestId: input.requestId } })
+      await transaction.marketplaceNotification.create({ data: {
+        userId: payment.customerId, type: "payment.platform_fee_correction", title: "Action needed: update your commission payment reference",
+        body: `Job ${payment.job.publicReference}: OddJobs could not verify your payment reference. ${reason} Please update the reference in Payments & fees.`,
+        jobId: payment.jobId, dedupeKey: `commission-correction:${payment.id}:${nextCycle}`.slice(0, 180),
+      } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: updated.id }, include: jobPaymentRelations })
+      return hydrated ? mapJobPayment(hydrated) : null
+    })
+  }
+
+  async sendAdminPlatformFeeReminder(input: { actorUserId: string; paymentId: string; note: string; requestId: string }): Promise<JobPaymentRecord | null> {
+    return this.client.$transaction(async (transaction) => {
+      const payment = await transaction.jobPayment.findFirst({
+        where: { id: input.paymentId, status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] } },
+        include: { job: { select: { publicReference: true } }, customer: { select: { displayName: true } } },
+      })
+      if (!payment) return null
+      if (!payment.platformFeeDueAt || payment.platformFeeDueAt > new Date()) {
+        throw new MarketplaceConflictError("Manual reminders can only be sent after the commission deadline.")
+      }
+      const recent = await transaction.jobPaymentEvent.findFirst({
+        where: { paymentId: payment.id, action: "platform_fee.reminder.manual", createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { createdAt: true },
+      })
+      if (recent) throw new MarketplaceConflictError(`A manual reminder was sent ${Math.ceil((Date.now() - recent.createdAt.getTime()) / 3_600_000)} hours ago. You can send another after 24 hours.`)
+      const note = input.note.trim()
+      const amount = new Intl.NumberFormat("en-KE", { style: "currency", currency: payment.currency.trim() }).format(Number(payment.commissionAmountMinor) / 100)
+      const due = payment.platformFeeDueAt?.toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Nairobi" }) ?? "the stated deadline"
+      const body = `Admin reminder: ${amount} for Job ${payment.job.publicReference} was due by ${due}. Please report the payment reference in Payments & fees.${note ? ` Note: ${note}` : ""}`
+      await transaction.marketplaceNotification.create({ data: {
+        userId: payment.customerId, type: "payment.platform_fee_manual_reminder", title: "Reminder: OddJobs commission payment needed",
+        body, jobId: payment.jobId, dedupeKey: `commission-manual:${payment.id}:${randomUUID()}`.slice(0, 180),
+      } })
+      await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: input.actorUserId, action: "platform_fee.reminder.manual", metadata: { note, cycle: payment.platformFeeReminderCycle }, requestId: input.requestId } })
+      await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: "admin.commission.reminder_sent", targetType: "job_payment", targetId: payment.id, metadata: { jobId: payment.jobId, note }, requestId: input.requestId } })
+      const hydrated = await transaction.jobPayment.findUnique({ where: { id: payment.id }, include: jobPaymentRelations })
       return hydrated ? mapJobPayment(hydrated) : null
     })
   }
@@ -3816,24 +3986,30 @@ export class PrismaDatabase
     })
   }
 
-  async listAdminJobPayments(search: string, status: JobPaymentStatus | "all", limit: number, offset: number): Promise<AdminJobPaymentPage> {
+  async listAdminJobPayments(search: string, status: JobPaymentStatus | "all", commissionStatus: AdminCommissionFilter, limit: number, offset: number): Promise<AdminJobPaymentPage> {
     const needle = search.trim()
-    const where = {
+    const isPaymentUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(needle)
+    const where: Prisma.JobPaymentWhereInput = {
       ...(status === "all" ? {} : { status: status.toUpperCase() as "AWAITING_PAYMENT" | "REPORTED" | "PAID" | "DISPUTED" | "REFUNDED" }),
+      ...(commissionStatus === "all" ? {} : commissionStatus === "overdue"
+        ? { status: "PAID" as const, platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { lte: new Date() } }
+        : { platformFeeStatus: commissionStatus.toUpperCase() as "DUE" | "REPORTED" | "RECEIVED" | "DISPUTED" | "NEEDS_CORRECTION" }),
       ...(needle ? { OR: [
-        { id: { contains: needle, mode: "insensitive" as const } },
+        ...(isPaymentUuid ? [{ id: { equals: needle } }, { jobId: { equals: needle } }] : []),
         { paymentReference: { contains: needle, mode: "insensitive" as const } },
-        { jobId: { contains: needle, mode: "insensitive" as const } },
         { job: { publicReference: { contains: needle, mode: "insensitive" as const } } },
         { provider: { displayName: { contains: needle, mode: "insensitive" as const } } },
         { customer: { displayName: { contains: needle, mode: "insensitive" as const } } },
       ] } : {}),
     }
-    const [rows, total, paid, commissionOutstanding, disputedCount, groups] = await Promise.all([
+    const [rows, total, paid, commissionOutstanding, commissionReported, commissionReceived, commissionDisputed, disputedCount, groups] = await Promise.all([
       this.client.jobPayment.findMany({ where, include: jobPaymentRelations, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: offset, take: limit }),
       this.client.jobPayment.count({ where }),
       this.client.jobPayment.aggregate({ where: { status: "PAID" }, _sum: { grossAmountMinor: true, commissionAmountMinor: true, providerAmountMinor: true } }),
-      this.client.jobPayment.aggregate({ where: { status: "PAID", job: { status: "COMPLETED" }, platformFeeStatus: { not: "RECEIVED" } }, _sum: { commissionAmountMinor: true } }),
+      this.client.jobPayment.aggregate({ where: { status: "PAID", job: { status: "COMPLETED" }, platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] } }, _sum: { commissionAmountMinor: true } }),
+      this.client.jobPayment.aggregate({ where: { platformFeeStatus: "REPORTED" }, _sum: { commissionAmountMinor: true } }),
+      this.client.jobPayment.aggregate({ where: { platformFeeStatus: "RECEIVED" }, _sum: { commissionAmountMinor: true } }),
+      this.client.jobPayment.aggregate({ where: { platformFeeStatus: "DISPUTED" }, _sum: { commissionAmountMinor: true } }),
       this.client.jobPayment.count({ where: { status: "DISPUTED" } }),
       this.client.jobPayment.groupBy({ by: ["providerId"], where: { status: "PAID" }, _count: { _all: true }, _sum: { grossAmountMinor: true, commissionAmountMinor: true, providerAmountMinor: true } }),
     ])
@@ -3848,12 +4024,14 @@ export class PrismaDatabase
     const userNames = new Map(users.map((item) => [item.id, item.displayName]))
     const heldProviders = new Set(profiles.filter((item) => item.payoutHoldAt).map((item) => item.userId))
     return {
-      items: rows.map((row) => ({ ...mapJobPayment(row), commissionOverdue: row.status === "PAID" && row.platformFeeStatus !== "RECEIVED" && Boolean(row.platformFeeDueAt && row.platformFeeDueAt <= new Date()), customerCommissionRestricted: restrictionByCustomer.has(row.customerId), customerRestrictionReason: restrictionByCustomer.get(row.customerId) ?? null })), total, limit, offset,
+      items: rows.map((row) => ({ ...mapJobPayment(row), commissionOverdue: row.status === "PAID" && ["DUE", "NEEDS_CORRECTION"].includes(row.platformFeeStatus) && Boolean(row.platformFeeDueAt && row.platformFeeDueAt <= new Date()), customerCommissionRestricted: restrictionByCustomer.has(row.customerId), customerRestrictionReason: restrictionByCustomer.get(row.customerId) ?? null })), total, limit, offset,
       summary: {
         paidGrossMinor: Number(paid._sum.grossAmountMinor ?? 0n),
-        commissionMinor: Number(paid._sum.commissionAmountMinor ?? 0n),
         providerNetMinor: Number(paid._sum.providerAmountMinor ?? 0n),
         commissionDueMinor: Number(commissionOutstanding._sum.commissionAmountMinor ?? 0n),
+        commissionReportedMinor: Number(commissionReported._sum.commissionAmountMinor ?? 0n),
+        commissionReceivedMinor: Number(commissionReceived._sum.commissionAmountMinor ?? 0n),
+        commissionDisputedMinor: Number(commissionDisputed._sum.commissionAmountMinor ?? 0n),
         disputedCount,
       },
       workers: groups.map((item) => ({ providerId: item.providerId, providerName: userNames.get(item.providerId) ?? "Worker", paidJobs: item._count._all, grossMinor: Number(item._sum.grossAmountMinor ?? 0n), commissionMinor: Number(item._sum.commissionAmountMinor ?? 0n), netMinor: Number(item._sum.providerAmountMinor ?? 0n), payoutHeld: heldProviders.has(item.providerId) })),
@@ -3879,12 +4057,18 @@ export class PrismaDatabase
 
   async recordAdminPlatformFeeReceipt(input: { actorUserId: string; paymentId: string; receiptReference: string; requestId: string }): Promise<JobPaymentRecord | null> {
     return this.client.$transaction(async (transaction) => {
-      const payment = await transaction.jobPayment.findFirst({ where: { id: input.paymentId, platformFeeStatus: "REPORTED" } })
+      const payment = await transaction.jobPayment.findFirst({ where: { id: input.paymentId, platformFeeStatus: "REPORTED" }, include: { job: { select: { publicReference: true } } } })
       if (!payment) return null
-      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: { platformFeeStatus: "RECEIVED", platformFeeReceivedAt: new Date(), platformFeeReceiptReference: input.receiptReference.trim() } })
+      const receivedAt = new Date()
+      const updated = await transaction.jobPayment.update({ where: { id: payment.id }, data: { platformFeeStatus: "RECEIVED", platformFeeReceivedAt: receivedAt, platformFeeReceiptReference: input.receiptReference.trim(), platformFeeCorrectionReason: null } })
       await transaction.jobPaymentEvent.create({ data: { paymentId: payment.id, actorId: input.actorUserId, action: "platform_fee.received", metadata: { receiptReference: input.receiptReference.trim(), amountMinor: Number(payment.commissionAmountMinor) }, requestId: input.requestId } })
       await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: "admin.platform_fee.received", targetType: "job_payment", targetId: payment.id, metadata: { receiptReference: input.receiptReference.trim(), amountMinor: Number(payment.commissionAmountMinor) }, requestId: input.requestId } })
-      const overdue = await transaction.jobPayment.count({ where: { customerId: payment.customerId, status: "PAID", platformFeeStatus: { not: "RECEIVED" }, platformFeeDueAt: { lte: new Date() } } })
+      await transaction.marketplaceNotification.create({ data: {
+        userId: payment.customerId, type: "payment.platform_fee_verified", title: "OddJobs commission verified",
+        body: `Your OddJobs commission of ${new Intl.NumberFormat("en-KE", { style: "currency", currency: payment.currency.trim() }).format(Number(payment.commissionAmountMinor) / 100)} for Job ${payment.job.publicReference} has been verified.`,
+        jobId: payment.jobId, dedupeKey: `commission-verified:${payment.id}`.slice(0, 180),
+      } })
+      const overdue = await transaction.jobPayment.count({ where: { customerId: payment.customerId, status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { lte: new Date() } } })
       if (overdue === 0) {
         const restriction = await transaction.accountRestriction.findFirst({ where: { userId: payment.customerId, type: "COMMISSION", releasedAt: null } })
         if (restriction) {
@@ -3905,7 +4089,7 @@ export class PrismaDatabase
       if (!user || user.status !== "ACTIVE" || !user.roleAssignments.some((role) => role.role === "CONSUMER")) return null
       const active = await transaction.accountRestriction.findFirst({ where: { userId: input.userId, type: "COMMISSION", releasedAt: null } })
       if (input.restricted) {
-        const overdue = await transaction.jobPayment.count({ where: { customerId: input.userId, status: "PAID", platformFeeStatus: { not: "RECEIVED" }, platformFeeDueAt: { lte: new Date() } } })
+        const overdue = await transaction.jobPayment.count({ where: { customerId: input.userId, status: "PAID", platformFeeStatus: { in: ["DUE", "NEEDS_CORRECTION"] }, platformFeeDueAt: { lte: new Date() } } })
         if (overdue === 0) throw new Error("This hirer has no overdue commissions to restrict.")
         if (!active) await transaction.accountRestriction.create({ data: { userId: input.userId, type: "COMMISSION", reason: input.reason.trim(), actorUserId: input.actorUserId } })
         await transaction.adminAuditEvent.create({ data: { actorUserId: input.actorUserId, action: "admin.commission.restriction_placed", targetType: "user", targetId: input.userId, metadata: { reason: input.reason.trim() }, requestId: input.requestId } })

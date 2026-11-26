@@ -1,4 +1,29 @@
-import type { ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
+
+const adApi = import.meta.env.VITE_API_URL || "http://127.0.0.1:3000"
+type LiveAd = { id: string; title: string; description: string; advertiserName: string; imageUrl: string | null; destinationUrl: string | null }
+
+export function SponsoredAd({ placement }: { placement: "customer_landing" | "customer_dashboard" }) {
+  const [ads, setAds] = useState<LiveAd[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void fetch(`${adApi}/v1/ads/live?placement=${placement}`).then(async (response) => response.ok ? await response.json() as LiveAd[] : []).then((items) => { if (!cancelled) setAds(items) }).catch(() => { if (!cancelled) setAds([]) })
+    return () => { cancelled = true }
+  }, [placement])
+  useEffect(() => {
+    if (!ads.length) return
+    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
+      if (!entry.isIntersecting) return
+      const id = (entry.target as HTMLElement).dataset.adId
+      if (id) void fetch(`${adApi}/v1/ads/${encodeURIComponent(id)}/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "impression" }) }).catch(() => undefined)
+      observer.unobserve(entry.target)
+    }), { threshold: 0.5 })
+    document.querySelectorAll("[data-ad-id]").forEach((item) => observer.observe(item))
+    return () => observer.disconnect()
+  }, [ads])
+  if (!ads.length) return null
+  return <div className="live-sponsored-list" aria-label="Sponsored listings">{ads.map((ad) => <article className="live-sponsored" data-ad-id={ad.id} key={ad.id}><Badge tone="amber">Sponsored</Badge>{ad.imageUrl && <img src={ad.imageUrl} alt="" loading="lazy" />}<div><strong>{ad.title}</strong><span>{ad.description}</span><small>{ad.advertiserName}</small></div>{ad.destinationUrl && <a href={ad.destinationUrl} target="_blank" rel="noopener noreferrer" aria-label={`Visit ${ad.advertiserName}`} onClick={() => { void fetch(`${adApi}/v1/ads/${encodeURIComponent(ad.id)}/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "click" }), keepalive: true }).catch(() => undefined) }}>Learn more <Icon name="arrow" size={16} /></a>}</article>)}</div>
+}
 
 export function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -98,9 +123,7 @@ export function Metric({ label, value, delta }: { label: string; value: string; 
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong>{delta && <small>{delta}</small>}</div>
 }
 
-export function Sponsored() {
-  return <div className="sponsored"><Badge tone="amber">Sponsored</Badge><div><strong>20% off quality cleaning supplies</strong><span>Jumia Home · Nairobi</span></div><Icon name="arrow" size={18} /></div>
-}
+export function Sponsored() { return <SponsoredAd placement="customer_dashboard" /> }
 
 export function DataTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
   return (

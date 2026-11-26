@@ -152,6 +152,7 @@ enum PlatformFeeStatus {
   REPORTED
   RECEIVED
   DISPUTED
+  NEEDS_CORRECTION
 
   @@map("platform_fee_status")
 }
@@ -509,15 +510,34 @@ model AdCampaign {
   description    String           @db.VarChar(500)
   placement      String           @db.VarChar(40)
   destinationUrl String?          @map("destination_url") @db.VarChar(2048)
+  imageUrl       String?          @map("image_url") @db.VarChar(2048)
+  startAt        DateTime?        @map("start_at") @db.Timestamptz(3)
+  endAt          DateTime?        @map("end_at") @db.Timestamptz(3)
+  priceMinor     BigInt?          @map("price_minor")
+  paymentStatus  String           @default("pending") @map("payment_status") @db.VarChar(20)
+  paymentReference String?        @map("payment_reference") @db.VarChar(120)
   status         AdCampaignStatus @default(PENDING)
   decisionReason String?          @map("decision_reason") @db.VarChar(1000)
   reviewedBy     String?          @map("reviewed_by") @db.Uuid
   reviewedAt     DateTime?        @map("reviewed_at") @db.Timestamptz(3)
+  events         AdCampaignEvent[]
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([status, createdAt])
+  @@index([placement, status, startAt, endAt, paymentStatus])
   @@map("ad_campaigns")
+}
+
+model AdCampaignEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  campaignId String   @map("campaign_id") @db.Uuid
+  eventType  String   @map("event_type") @db.VarChar(12)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, eventType, createdAt])
+  @@map("ad_campaign_events")
 }
 
 model AdminUserEnforcement {
@@ -646,6 +666,7 @@ model Job {
   locationLongitude Float? @map("location_longitude")
   shareExactLocationWithProvider Boolean @default(false) @map("share_exact_location_with_provider")
   completionNote String? @map("completion_note") @db.VarChar(5000)
+  completionMedia Json @default("[]") @map("completion_media") @db.JsonB
   completionSubmittedAt DateTime? @map("completion_submitted_at") @db.Timestamptz(3)
   revisionNote String? @map("revision_note") @db.VarChar(2000)
   media         Json      @default("[]")
@@ -715,6 +736,8 @@ model JobPayment {
   platformFeePaymentReference String?    @map("platform_fee_payment_reference") @db.VarChar(120)
   platformFeeReceivedAt DateTime?        @map("platform_fee_received_at") @db.Timestamptz(3)
   platformFeeReceiptReference String?   @map("platform_fee_receipt_reference") @db.VarChar(120)
+  platformFeeCorrectionReason String?  @map("platform_fee_correction_reason") @db.VarChar(1000)
+  platformFeeReminderCycle Int          @default(0) @map("platform_fee_reminder_cycle")
   disputeReason         String?           @map("dispute_reason") @db.VarChar(1000)
   resolutionNote        String?           @map("resolution_note") @db.VarChar(1000)
   resolvedByUserId      String?           @map("resolved_by_user_id") @db.Uuid

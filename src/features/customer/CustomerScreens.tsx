@@ -8,7 +8,7 @@ import ListingMediaGallery from "../marketplace/ListingMediaGallery"
 import { ListingReviewForm } from "../marketplace/ListingReviewForm"
 import { ServiceMessages } from "../marketplace/ServiceMessages"
 import { Avatar, Badge, Button, Icon, Metric, PageHeader, ProviderCard, Sponsored } from "../../shared/components/WorkspaceUi"
-import { ProviderDirectoryCard } from "./ProviderDirectory"
+import { ProviderDirectoryCard, ProviderProfileModal } from "./ProviderDirectory"
 
 const photos = {
   amina: "https://images.unsplash.com/photo-1764166471609-c75e2c6bfdb2?auto=format&fit=crop&w=500&q=80",
@@ -106,7 +106,7 @@ function HiringDashboard({ go }: { go: (screen: Screen) => void }) {
   const proposalsToReview = openJobs.reduce((total, job) => total + job.quoteCount, 0)
   const activeJobs = jobs.filter((job) => ["awarded", "in_progress", "completion_pending", "revision_requested"].includes(job.status))
   const completedJobs = jobs.filter((job) => job.status === "completed").length
-  const value = (count: number) => loading ? "…" : error ? "—" : String(count)
+  const value = (count: number) => loading? "…" : error? "—" : String(count)
   const nextJob = openJobs.find((job) => job.quoteCount > 0) ?? openJobs[0] ?? activeJobs[0]
   return <div className="content console-content">
     <PageHeader eyebrow="Hiring workspace" title="Your hiring dashboard" description="See your job posts, proposals, and active work in one place." action={<Button onClick={() => go("post")}>Post a job</Button>} />
@@ -119,11 +119,11 @@ function HiringDashboard({ go }: { go: (screen: Screen) => void }) {
     {error && <p className="form-error" role="alert">Your live job summary could not load. {error} <button className="btn btn-ghost" onClick={() => void refresh()}>Retry</button></p>}
     <div className="dashboard-grid">
       <section className="card">
-        <div className="section-title"><h2>Next step</h2><Badge>{loading ? "Loading" : nextJob ? nextJob.status.replace(/_/g, " ") : "Ready"}</Badge></div>
+        <div className="section-title"><h2>Next step</h2><Badge>{loading? "Loading" : nextJob? nextJob.status.replace(/_/g, " ") : "Ready"}</Badge></div>
         <h3>{nextJob?.title ?? "Find the right worker"}</h3>
-        <p>{nextJob ? `${nextJob.locationLabel} · ${nextJob.quoteCount} proposal${nextJob.quoteCount === 1 ? "" : "s"}` : "Post a job to receive proposals from workers."}</p>
+        <p>{nextJob? `${nextJob.locationLabel} · ${nextJob.quoteCount} proposal${nextJob.quoteCount === 1? "" : "s"}` : "Post a job to receive proposals from workers."}</p>
         <div className="card-actions">
-          <Button onClick={() => go(nextJob ? "jobs" : "post")}>{nextJob ? "Review my jobs" : "Post a job"}</Button>
+          <Button onClick={() => go(nextJob? "jobs" : "post")}>{nextJob? "Review my jobs" : "Post a job"}</Button>
           <Button variant="secondary" onClick={() => go("workFeed")}>Browse workers</Button>
         </div>
       </section>
@@ -145,8 +145,8 @@ function HiringAnalytics({ go }: { go: (screen: Screen) => void }) {
   const proposalCount = jobs.reduce((sum, job) => sum + job.quoteCount, 0)
   const jobsWithProposals = jobs.filter((job) => job.quoteCount > 0).length
   const hired = jobs.filter((job) => ["awarded", "in_progress", "completion_pending", "revision_requested", "completed"].includes(job.status)).length
-  const hireRate = jobsWithProposals ? Math.round((hired / jobsWithProposals) * 100) : null
-  const metric = (count: number | string) => loading ? "…" : error ? "—" : String(count)
+  const hireRate = jobsWithProposals? Math.round((hired / jobsWithProposals) * 100) : null
+  const metric = (count: number | string) => loading? "…" : error? "—" : String(count)
   return <div className="content console-content">
     <PageHeader title="Hiring analytics" description="Live activity from your job posts and worker proposals." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
     {error && <p className="form-error" role="alert">Analytics could not load. {error}</p>}
@@ -157,7 +157,7 @@ function HiringAnalytics({ go }: { go: (screen: Screen) => void }) {
       <Metric label="Jobs awarded" value={metric(awarded.length)} />
     </div>
     <div className="dashboard-grid">
-      <section className="card"><h2>Hiring outcomes</h2><div className="review-facts"><span><small>Jobs with proposals</small><b>{metric(jobsWithProposals)}</b></span><span><small>Hire rate</small><b>{loading ? "…" : error ? "—" : hireRate === null ? "No proposals yet" : `${hireRate}%`}</b></span><span><small>Completed jobs</small><b>{metric(completed)}</b></span></div><p className="caption">Hire rate is awarded jobs divided by jobs that received at least one proposal. No payment or spending figures are shown.</p></section>
+      <section className="card"><h2>Hiring outcomes</h2><div className="review-facts"><span><small>Jobs with proposals</small><b>{metric(jobsWithProposals)}</b></span><span><small>Hire rate</small><b>{loading? "…" : error? "—" : hireRate === null? "No proposals yet" : `${hireRate}%`}</b></span><span><small>Completed jobs</small><b>{metric(completed)}</b></span></div><p className="caption">Hire rate is awarded jobs divided by jobs that received at least one proposal. No payment or spending figures are shown.</p></section>
       <section className="card"><h2>Keep your jobs moving</h2><p>Review proposals promptly and keep job details current so workers can make informed offers.</p><div className="card-actions"><Button onClick={() => go("jobs")}>Review proposals</Button><Button variant="secondary" onClick={() => go("post")}>Post another job</Button></div></section>
     </div>
   </div>
@@ -200,8 +200,8 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
   useEffect(() => {
     void auth.getMarketplaceCategories().then((items) => {
       setServiceCategories(items)
-      setCategory((current) => items.some((item) => item.name === current) ? current : items[0]?.name ?? "")
-    }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load service categories."))
+      setCategory((current) => items.some((item) => item.name === current)? current : items[0]?.name ?? "")
+    }).catch((caught: unknown) => setError(caught instanceof Error? caught.message : "Could not load service categories."))
   }, [auth.getMarketplaceCategories])
   const addFiles = async (files: File[]) => {
     setUploadingMedia(true)
@@ -223,12 +223,12 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
         setAttachments((current) => [...current, { path: "", contentType: file.type, size: file.size, previewUrl, uploading: true }])
         try {
           const uploaded = await auth.uploadServiceListingMedia(file)
-          setAttachments((current) => current.map((item) => item.previewUrl === previewUrl ? { ...uploaded, previewUrl, uploading: false } : item))
+          setAttachments((current) => current.map((item) => item.previewUrl === previewUrl? { ...uploaded, previewUrl, uploading: false } : item))
         } catch (caught) {
           previewUrls.current.delete(previewUrl)
           URL.revokeObjectURL(previewUrl)
           setAttachments((current) => current.filter((item) => item.previewUrl !== previewUrl))
-          setError(caught instanceof Error ? caught.message : "Could not upload this attachment.")
+          setError(caught instanceof Error? caught.message : "Could not upload this attachment.")
         }
       }
     } finally { setUploadingMedia(false) }
@@ -237,10 +237,10 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
     previewUrls.current.delete(item.previewUrl)
     URL.revokeObjectURL(item.previewUrl)
     setAttachments((current) => current.filter((candidate) => candidate.previewUrl !== item.previewUrl))
-    if (item.path) void auth.deleteServiceListingMedia(item.path).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not remove this attachment."))
+    if (item.path) void auth.deleteServiceListingMedia(item.path).catch((caught: unknown) => setError(caught instanceof Error? caught.message : "Could not remove this attachment."))
   }
   const postJob = async () => {
-    const parsedBudget = budget.trim() ? Number(budget) : null
+    const parsedBudget = budget.trim()? Number(budget) : null
     if (
       !title.trim() ||
       !description.trim() ||
@@ -267,14 +267,14 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
         description: description.trim(),
         locationLabel: location.trim(),
         budgetMinor:
-          parsedBudget === null ? null : Math.round(parsedBudget * 100),
+          parsedBudget === null? null : Math.round(parsedBudget * 100),
         requestedFor: requestedDate
-          ? new Date(`${requestedDate}T12:00:00`).toISOString()
+         ? new Date(`${requestedDate}T12:00:00`).toISOString()
           : null,
         applicationDeadlineAt: applicationDeadline
-          ? new Date(`${applicationDeadline}T23:59:59.000Z`).toISOString()
+         ? new Date(`${applicationDeadline}T23:59:59.000Z`).toISOString()
           : null,
-        dueAt: dueDate ? new Date(`${dueDate}T23:59:59.000Z`).toISOString() : null,
+        dueAt: dueDate? new Date(`${dueDate}T23:59:59.000Z`).toISOString() : null,
         locationMode,
         locationLatitude: jobPin?.latitude ?? null,
         locationLongitude: jobPin?.longitude ?? null,
@@ -287,7 +287,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
     } catch (requestError) {
       setError(
         requestError instanceof Error
-          ? requestError.message
+         ? requestError.message
           : "We couldn’t post this job. Please try again.",
       )
     } finally {
@@ -306,7 +306,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
       if (applicationDeadline < today) { setError("Choose an application closing date that is today or later."); return }
       if (requestedDate && requestedDate < today) { setError("Choose a preferred work date that is today or later."); return }
       if (dueDate && dueDate <= applicationDeadline) { setError("The work due date must be after applications close."); return }
-      const parsedBudget = budget.trim() ? Number(budget) : null
+      const parsedBudget = budget.trim()? Number(budget) : null
       if (parsedBudget !== null && (!Number.isFinite(parsedBudget) || parsedBudget <= 0)) { setError("Enter a positive budget or leave it blank for open quotes."); return }
       if (shareExactLocation && !jobPin) { setError("Add a map pin before choosing to share the precise location with your selected worker."); return }
     }
@@ -318,12 +318,12 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
         eyebrow={`Hirer job post · Step ${step} of 3`}
         title={
           step === 1
-            ? "Tell us what you need"
+           ? "Tell us what you need"
             : step === 2
-              ? "Where and when?"
+             ? "Where and when?"
               : "Review your job"
         }
-        description={step === 1 ? "Describe the work so workers know what to quote." : step === 2 ? "Set the work area and timing. Nearby workers can discover pinned jobs by distance." : "Review what workers will see before publishing."}
+        description={step === 1? "Describe the work so workers know what to quote." : step === 2? "Set the work area and timing. Nearby workers can discover pinned jobs by distance." : "Review what workers will see before publishing."}
       />
       <div className="progress">
         <i style={{ width: `${step * 33.3}%` }} />
@@ -366,10 +366,10 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             <small>{description.length}/5000 characters. Keep private access codes and sensitive details out of a public job post.</small>
             <label className="listing-media-picker">
               <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple disabled={uploadingMedia || submitting} onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; void addFiles(files) }} />
-              {uploadingMedia ? "Uploading attachments…" : "Add job photos or video"}
+              {uploadingMedia? "Uploading attachments…" : "Add job photos or video"}
             </label>
             <small>Attach up to 6 photos and 1 short video, up to 6 MB each. Providers who can bid will be able to view these files.</small>
-            {attachments.length > 0 && <div className="listing-media-gallery listing-media-previews">{attachments.map((item) => <div className="listing-media-preview" key={item.previewUrl}>{item.contentType.startsWith("video/") ? <video className="listing-media-item" src={item.previewUrl} controls playsInline preload="metadata" /> : <img className="listing-media-item" src={item.previewUrl} alt="Job attachment preview" />}{item.uploading && <span className="listing-media-status">Uploading…</span>}<button type="button" className="listing-media-remove" disabled={item.uploading} onClick={() => removeAttachment(item)}>Remove</button></div>)}</div>}
+            {attachments.length > 0 && <div className="listing-media-gallery listing-media-previews">{attachments.map((item) => <div className="listing-media-preview" key={item.previewUrl}>{item.contentType.startsWith("video/")? <video className="listing-media-item" src={item.previewUrl} controls playsInline preload="metadata" /> : <img className="listing-media-item" src={item.previewUrl} alt="Job attachment preview" />}{item.uploading && <span className="listing-media-status">Uploading…</span>}<button type="button" className="listing-media-remove" disabled={item.uploading} onClick={() => removeAttachment(item)}>Remove</button></div>)}</div>}
           </>
         )}
         {step === 2 && (
@@ -390,7 +390,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
                 value={location}
                 onChange={(event) => setLocation(event.target.value)}
                 maxLength={160}
-                placeholder={locationMode === "remote" ? "Anywhere, Nairobi, or eligible region" : "For example, Kilimani, Nairobi"}
+                placeholder={locationMode === "remote"? "Anywhere, Nairobi, or eligible region" : "For example, Kilimani, Nairobi"}
               />
             </label>
             <small>Workers see this area label. Keep street addresses and private access details out of it.</small>
@@ -409,7 +409,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
                 () => setError("We could not read your location. You can still post by area."),
                 { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
               )
-            }}>{jobPin ? "Update approximate map pin" : "Add approximate map pin"}</Button>{jobPin && <><span className="caption">Pin saved privately for distance matching.</span><Button type="button" variant="ghost" onClick={() => { setJobPin(null); setShareExactLocation(false) }}>Remove pin</Button></>}</div>}
+            }}>{jobPin? "Update approximate map pin" : "Add approximate map pin"}</Button>{jobPin && <><span className="caption">Pin saved privately for distance matching.</span><Button type="button" variant="ghost" onClick={() => { setJobPin(null); setShareExactLocation(false) }}>Remove pin</Button></>}</div>}
             {locationMode !== "remote" && <div className="safe-note"><Icon name="shield" /><span>Workers see your area and an approximate distance. Your precise pin stays hidden unless you opt in below.</span></div>}
             {locationMode !== "remote" && jobPin && <label className="checkbox-row"><input type="checkbox" checked={shareExactLocation} onChange={(event) => setShareExactLocation(event.target.checked)} /><span>Share this precise pin with the worker I select</span></label>}
             <div className="field-pair">
@@ -429,7 +429,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             <div className="field-pair">
               <label>
                 Work due date
-                <input type="date" value={dueDate} min={applicationDeadline ? new Date(new Date(`${applicationDeadline}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : undefined} onChange={(event) => setDueDate(event.target.value)} />
+                <input type="date" value={dueDate} min={applicationDeadline? new Date(new Date(`${applicationDeadline}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : undefined} onChange={(event) => setDueDate(event.target.value)} />
               </label>
             </div>
           </>
@@ -445,7 +445,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
                 <small>Budget</small>
                 <b>
                   {budget
-                    ? `KES ${Number(budget).toLocaleString()}`
+                   ? `KES ${Number(budget).toLocaleString()}`
                     : "Open to quotes"}
                 </b>
               </span>
@@ -463,7 +463,7 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
               </span>
               {dueDate && <span><small>Work due</small><b>{dueDate}</b></span>}
               <span><small>Work mode</small><b>{locationMode}</b></span>
-              {locationMode !== "remote" && <span><small>Location sharing</small><b>{shareExactLocation ? "Precise pin shared after you select a worker" : "Area and approximate distance only"}</b></span>}
+              {locationMode !== "remote" && <span><small>Location sharing</small><b>{shareExactLocation? "Precise pin shared after you select a worker" : "Area and approximate distance only"}</b></span>}
             </div>
             <p className="caption">Pinned jobs are ranked by distance for workers with a saved service area. Jobs without a pin remain findable by area and category.</p>
             <div className="safe-note">
@@ -495,11 +495,11 @@ function PostJob({ go }: { go: (s: Screen) => void }) {
             disabled={submitting || uploadingMedia || attachments.some((item) => !item.path)}
             onClick={() =>
               step < 3
-                ? continueStep()
+               ? continueStep()
                 : void postJob()
             }
           >
-            {step < 3 ? "Continue" : submitting ? "Publishing…" : "Publish job"}
+            {step < 3? "Continue" : submitting? "Publishing…" : "Publish job"}
           </Button>
         </div>
       </div>
@@ -552,7 +552,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
           auth.getMarketplaceProvider(quote.providerId, job.id),
           auth.getPublicProviderReviews(quote.providerId),
         ])
-        const rating = reviews.length ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length : 0
+        const rating = reviews.length? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length : 0
         return [quote.providerId, { publicName: provider.publicName, bio: provider.bio, region: provider.region, rating, reviewCount: reviews.length, avatarPath: provider.avatarPath }] as const
       } catch {
         return [quote.providerId, { publicName: quote.providerName, bio: "", region: "", rating: 0, reviewCount: 0, avatarPath: null }] as const
@@ -580,7 +580,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
     } catch (requestError) {
       setActionError(
         requestError instanceof Error
-          ? requestError.message
+         ? requestError.message
           : "We couldn’t accept this quote. Please try again.",
       )
     } finally {
@@ -597,7 +597,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
       updateStore({ selectedJobId: job.id, selectedMarketplaceConversationId: conversation.id })
       go("chat")
     } catch (requestError) {
-      setActionError(requestError instanceof Error ? requestError.message : "Could not open this worker conversation.")
+      setActionError(requestError instanceof Error? requestError.message : "Could not open this worker conversation.")
     } finally {
       setOpeningConversation(false)
     }
@@ -621,7 +621,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
         </p>
         <Button
           onClick={() =>
-            jobsError ? void refreshJobs() : void refresh()
+            jobsError? void refreshJobs() : void refresh()
           }
         >
           Retry
@@ -653,7 +653,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
       />
       <label className="bid-job-picker">Your posted jobs
         <select value={job.id} onChange={(event) => { updateStore({ selectedJobId: event.target.value }); setSelectedQuoteId("") }}>
-          {jobs.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.status.replace(/_/g, " ")} · {item.quoteCount} proposal{item.quoteCount === 1 ? "" : "s"}</option>)}
+          {jobs.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.status.replace(/_/g, " ")} · {item.quoteCount} proposal{item.quoteCount === 1? "" : "s"}</option>)}
         </select>
       </label>
       <JobTimeline job={job} />
@@ -661,21 +661,21 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
       <div className="bid-layout">
         <div className="bid-list card table-card"><div className="table-wrap"><table>
           <thead><tr><th>#</th><th>Worker</th><th>Rating</th><th>Proposal</th><th>Bid</th><th>Availability</th><th>Status</th><th></th></tr></thead>
-          <tbody>{quotes.map((quote, index) => <tr key={quote.id} className={selectedQuote?.id === quote.id ? "selected-proposal-row" : undefined}>
+          <tbody>{quotes.map((quote, index) => <tr key={quote.id} className={selectedQuote?.id === quote.id? "selected-proposal-row" : undefined}>
             <td>{index + 1}</td>
             <td><button className="table-link" onClick={() => openBidderProfile(quote.providerId)}>{providerSummaries[quote.providerId]?.publicName || quote.providerName}</button><br /><small>{providerSummaries[quote.providerId]?.region || "Area not provided"}</small>{providerSummaries[quote.providerId]?.bio && <p className="bidder-profile-bio">{providerSummaries[quote.providerId].bio}</p>}</td>
-            <td>{providerSummaries[quote.providerId]?.reviewCount ? providerSummaries[quote.providerId].rating.toFixed(1) + " ? (" + providerSummaries[quote.providerId].reviewCount + ")" : "No reviews"}</td>
+            <td>{providerSummaries[quote.providerId]?.reviewCount? providerSummaries[quote.providerId].rating.toFixed(1) + "? (" + providerSummaries[quote.providerId].reviewCount + ")" : "No reviews"}</td>
             <td className="proposal-message-cell">{quote.message}</td>
             <td>KES {(quote.amountMinor / 100).toLocaleString()}</td><td>{quote.availability}</td>
-            <td><Badge tone={quote.status === "accepted" ? "green" : quote.status === "submitted" ? "amber" : undefined}>{quote.status}</Badge></td>
-            <td><div className="card-actions"><Button variant="secondary" icon="message" disabled={(quote.status !== "submitted" && quote.status !== "accepted") || openingConversation} onClick={() => void messageWorker(quote.providerId)}>Message</Button><Button variant={selectedQuote?.id === quote.id ? "primary" : "secondary"} disabled={quote.status !== "submitted" && quote.status !== "accepted"} onClick={() => setSelectedQuoteId(quote.id)}>{selectedQuote?.id === quote.id ? "Selected" : "Review"}</Button></div></td>
+            <td><Badge tone={quote.status === "accepted"? "green" : quote.status === "submitted"? "amber" : undefined}>{quote.status}</Badge></td>
+            <td><div className="card-actions"><Button variant="secondary" icon="message" disabled={(quote.status !== "submitted" && quote.status !== "accepted") || openingConversation} onClick={() => void messageWorker(quote.providerId)}>Message</Button><Button variant={selectedQuote?.id === quote.id? "primary" : "secondary"} disabled={quote.status !== "submitted" && quote.status !== "accepted"} onClick={() => setSelectedQuoteId(quote.id)}>{selectedQuote?.id === quote.id? "Selected" : "Review"}</Button></div></td>
           </tr>)}
           {!quotes.length && <tr><td colSpan={8}>No worker proposals have been submitted for this job yet.</td></tr>}
           </tbody>
         </table></div></div>
         <aside className="summary-card">
-          <h2>{job.status === "open" ? "Your selection" : "Job status"}</h2>
-          {selectedQuote ? (
+          <h2>{job.status === "open"? "Your selection" : "Job status"}</h2>
+          {selectedQuote? (
             <>
               <div className="selected-person">
                 <Avatar src={auth.getProfileAvatarUrl(providerSummaries[selectedQuote.providerId]?.avatarPath)} name={providerSummaries[selectedQuote.providerId]?.publicName || selectedQuote.providerName} />
@@ -695,7 +695,7 @@ function Bids({ go, onOpenProvider }: { go: (s: Screen) => void; onOpenProvider:
               </div>
               {job.status === "open" && selectedQuote.status === "submitted" && (
                 <Button disabled={accepting} onClick={() => void acceptQuote()}>
-                  {accepting ? "Accepting…" : "Accept bid"}
+                  {accepting? "Accepting…" : "Accept bid"}
                 </Button>
               )}
               {job.status === "awarded" && (
@@ -824,7 +824,7 @@ function Tracking({ go }: { go: (s: Screen) => void }) {
             onClick={() => {
               updateStore({
                 jobs: store.jobs.map((item) =>
-                  item.id === job.id ? { ...item, status: "Completed" } : item,
+                  item.id === job.id? { ...item, status: "Completed" } : item,
                 ),
               })
               go("review")
@@ -854,9 +854,9 @@ function Review({ go }: { go: (s: Screen) => void }) {
   const auth = useAuth()
   const [page, setPage] = useState<import("../../auth/AuthProvider").ServiceListingReviewPage | null>(null)
   const [error, setError] = useState("")
-  const refresh = () => auth.getServiceListingReviews("consumer").then(setPage).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load your reviews."))
+  const refresh = () => auth.getServiceListingReviews("consumer").then(setPage).catch((caught: unknown) => setError(caught instanceof Error? caught.message : "Could not load your reviews."))
   useEffect(() => { void refresh() }, [auth.getServiceListingReviews])
-  return <div className="content narrow"><PageHeader title="Review completed work" description="Customers and providers can review each other after both confirm a job is complete." />{error && <p className="form-error" role="alert">{error}</p>}{!page ? <p role="status">Loading completed jobs…</p> : page.pending.length === 0 ? <section className="card"><h2>No reviews waiting</h2><p>When you confirm a completed job, you can leave the provider a review here.</p><Button variant="secondary" onClick={() => go("history")}>View my jobs</Button></section> : page.pending.map((item) => <ListingReviewForm key={item.listingId} listingId={item.listingId} listingTitle={item.listingTitle} revieweeName={item.revieweeName} onSaved={() => void refresh()} />)}{page?.received.length ? <section className="card reputation-section"><h2>Reviews about you</h2>{page.received.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} · {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"â˜…".repeat(review.rating)}{"â˜†".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}</section> : null}</div>
+  return <div className="content narrow"><PageHeader title="Review completed work" description="Customers and providers can review each other after both confirm a job is complete." />{error && <p className="form-error" role="alert">{error}</p>}{!page? <p role="status">Loading completed jobs…</p> : page.pending.length === 0 ? <section className="card"><h2>No reviews waiting</h2><p>When you confirm a completed job, you can leave the provider a review here.</p><Button variant="secondary" onClick={() => go("history")}>View my jobs</Button></section> : page.pending.map((item) => <ListingReviewForm key={item.listingId} listingId={item.listingId} listingTitle={item.listingTitle} revieweeName={item.revieweeName} onSaved={() => void refresh()} />)}{page?.received.length? <section className="card reputation-section"><h2>Reviews about you</h2>{page.received.map((review) => <article className="review-card" key={review.id}><div className="review-head"><div><strong>{review.reviewerName}</strong><small>{review.listingTitle} · {new Date(review.createdAt).toLocaleDateString()}</small></div><span className="rating">{"â˜…".repeat(review.rating)}{"â˜†".repeat(5 - review.rating)}</span></div>{review.comment && <p>{review.comment}</p>}</article>)}</section> : null}</div>
 }
 
 function EmptyState({
@@ -908,6 +908,8 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
   const [tab, setTab] = useState<"open" | "active" | "completed">("open")
   const [actionError, setActionError] = useState("")
   const [actionNotice, setActionNotice] = useState("")
+  const [jobActionBusyId, setJobActionBusyId] = useState("")
+  const jobActionInFlight = useRef(new Set<string>())
   const [selectedJobId, setSelectedJobId] = useState("")
   const [confirmWithdrawal, setConfirmWithdrawal] = useState(false)
   const [revisionNotes, setRevisionNotes] = useState<Record<string, string>>({})
@@ -915,9 +917,9 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? null
   const activeStatuses = ["awarded", "in_progress", "completion_pending", "revision_requested"]
   const jobsForTab = jobs.filter((job) => tab === "open"
-    ? job.status === "open"
+   ? job.status === "open"
     : tab === "active"
-      ? activeStatuses.includes(job.status)
+     ? activeStatuses.includes(job.status)
       : ["completed", "cancelled", "disputed", "expired"].includes(job.status))
 
   useEffect(() => {
@@ -930,15 +932,18 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
 
   const refreshPayments = useCallback(async () => {
     try { setJobPayments(await auth.getJobPayments("consumer")) }
-    catch (caught) { setActionError(caught instanceof Error ? caught.message : "Could not load payment history.") }
+    catch (caught) { setActionError(caught instanceof Error? caught.message : "Could not load payment history.") }
   }, [auth.getJobPayments])
   useEffect(() => { void refreshPayments() }, [refreshPayments])
 
   const transition = async (jobId: string, action: "confirm-completion" | "request-revision" | "cancel", note?: string) => {
+    if (jobActionInFlight.current.has(jobId)) return
+    jobActionInFlight.current.add(jobId)
+    setJobActionBusyId(jobId)
     try {
       setActionError("")
       setActionNotice("")
-      await auth.transitionMarketplaceJob(jobId, action, note ? { note } : undefined)
+      await auth.transitionMarketplaceJob(jobId, action, note? { note } : undefined)
       await refresh()
       await refreshPayments()
       if (action === "cancel") {
@@ -946,14 +951,17 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
         setActionNotice("Job withdrawn. It no longer appears in workers’ open job search.")
       } else setActionNotice("Job updated.")
     } catch (caught) {
-      setActionError(caught instanceof Error ? caught.message : "We could not update this job. Please try again.")
+      setActionError(caught instanceof Error? caught.message : "We could not update this job. Please try again.")
+    } finally {
+      jobActionInFlight.current.delete(jobId)
+      setJobActionBusyId("")
     }
   }
 
   const reportPayment = async (jobId: string) => {
     setPaymentBusyId(jobId); setActionError(""); setActionNotice("")
     try { await auth.reportJobPayment(jobId, paymentMethods[jobId] ?? "cash"); await refreshPayments(); setActionNotice("Payment report saved.") }
-    catch (caught) { setActionError(caught instanceof Error ? caught.message : "Could not record this payment.") }
+    catch (caught) { setActionError(caught instanceof Error? caught.message : "Could not record this payment.") }
     finally { setPaymentBusyId("") }
   }
   const disputePayment = async (jobId: string) => {
@@ -961,7 +969,7 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
     if (!reason?.trim()) return
     setPaymentBusyId(jobId); setActionError("")
     try { await auth.disputeJobPayment(jobId, reason.trim()); await refreshPayments() }
-    catch (caught) { setActionError(caught instanceof Error ? caught.message : "Could not open a payment dispute.") }
+    catch (caught) { setActionError(caught instanceof Error? caught.message : "Could not open a payment dispute.") }
     finally { setPaymentBusyId("") }
   }
   const openBids = (jobId: string) => {
@@ -975,8 +983,8 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
       <PageHeader title="My jobs" description="Track proposals, active work, and completed jobs." action={<Button onClick={() => go("workFeed")}>Find providers</Button>} />
       <div className="filters">
         {(["open", "active", "completed"] as const).map((status) => (
-          <button className={tab === status ? "active" : ""} key={status} onClick={() => setTab(status)}>
-            {status[0].toUpperCase() + status.slice(1)} · {jobs.filter((job) => status === "open" ? job.status === "open" : status === "active" ? activeStatuses.includes(job.status) : ["completed", "cancelled", "disputed", "expired"].includes(job.status)).length}
+          <button className={tab === status? "active" : ""} key={status} onClick={() => setTab(status)}>
+            {status[0].toUpperCase() + status.slice(1)} · {jobs.filter((job) => status === "open"? job.status === "open" : status === "active"? activeStatuses.includes(job.status) : ["completed", "cancelled", "disputed", "expired"].includes(job.status)).length}
           </button>
         ))}
       </div>
@@ -993,10 +1001,10 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
                   <td>{index + 1}</td>
                   <td><strong>{job.title}</strong><small className="jobs-table-subtitle">{job.category} · {job.locationLabel}</small></td>
                   <td><span className="job-reference">{job.jobReference}</span></td>
-                  <td><Badge tone={job.status === "completed" ? "green" : job.status === "cancelled" || job.status === "disputed" ? "red" : job.status === "open" ? "blue" : "amber"}>{job.status.replaceAll("_", " ")}</Badge></td>
+                  <td><Badge tone={job.status === "completed"? "green" : job.status === "cancelled" || job.status === "disputed"? "red" : job.status === "open"? "blue" : "amber"}>{job.status.replaceAll("_", " ")}</Badge></td>
                   <td>{job.quoteCount}</td>
-                  <td>{job.budgetMinor === null ? "Open budget" : `KES ${(job.budgetMinor / 100).toLocaleString()}`}</td>
-                  <td>{job.dueAt ? new Date(job.dueAt).toLocaleDateString() : "—"}</td>
+                  <td>{job.budgetMinor === null? "Open budget" : `KES ${(job.budgetMinor / 100).toLocaleString()}`}</td>
+                  <td>{job.dueAt? new Date(job.dueAt).toLocaleDateString() : "—"}</td>
                   <td><div className="jobs-table-actions"><Button variant="secondary" onClick={() => { setActionError(""); setActionNotice(""); setSelectedJobId(job.id) }}>Details</Button>{job.status === "open" && <Button variant="ghost" onClick={() => openBids(job.id)}>Compare</Button>}</div></td>
                 </tr>
               ))}
@@ -1010,20 +1018,20 @@ function ConsumerJobs({ go }: { go: (screen: Screen) => void }) {
         {selectedJob && <>
           <header className="jobs-detail-header"><div><p className="eyebrow">{selectedJob.jobReference}</p><h2 id="jobs-detail-title">{selectedJob.title}</h2></div><button type="button" className="jobs-dialog-close" onClick={() => setSelectedJobId("")} aria-label="Close job details">×</button></header>
           <div className="jobs-detail-body">
-            <div className="jobs-detail-meta"><span><small>Status</small><Badge>{selectedJob.status.replaceAll("_", " ")}</Badge></span><span><small>Category and location</small><strong>{selectedJob.category} · {selectedJob.locationLabel}</strong></span><span><small>Budget</small><strong>{selectedJob.budgetMinor === null ? "Open budget" : `KES ${(selectedJob.budgetMinor / 100).toLocaleString()}`}</strong></span><span><small>Proposals</small><strong>{selectedJob.quoteCount}</strong></span></div>
+            <div className="jobs-detail-meta"><span><small>Status</small><Badge>{selectedJob.status.replaceAll("_", " ")}</Badge></span><span><small>Category and location</small><strong>{selectedJob.category} · {selectedJob.locationLabel}</strong></span><span><small>Budget</small><strong>{selectedJob.budgetMinor === null? "Open budget" : `KES ${(selectedJob.budgetMinor / 100).toLocaleString()}`}</strong></span><span><small>Proposals</small><strong>{selectedJob.quoteCount}</strong></span></div>
             {selectedJob.applicationDeadlineAt && selectedJob.status === "open" && <p className="caption">Applications close {new Date(selectedJob.applicationDeadlineAt).toLocaleString()}</p>}
             {selectedJob.dueAt && <p className="caption">Work due {new Date(selectedJob.dueAt).toLocaleString()}</p>}
-            {selectedJob.completionNote && selectedJob.status === "completion_pending" && <div className="safe-note"><span><strong>Worker submission</strong><br />{selectedJob.completionNote}</span></div>}
+            {selectedJob.completionNote && selectedJob.status === "completion_pending" && <><div className="safe-note"><span><strong>Worker submission</strong><br />{selectedJob.completionNote}</span></div><ListingMediaGallery media={selectedJob.completionMedia ?? []} /></>}
             {selectedJob.revisionNote && selectedJob.status === "revision_requested" && <div className="safe-note"><span><strong>Revision requested</strong><br />{selectedJob.revisionNote}</span></div>}
             {(() => {
               const payment = jobPayments.find((item) => item.jobId === selectedJob.id)
               if (!payment) return null
               const money = (minor: number) => `${payment.currency} ${(minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              return <section className="jobs-payment-summary"><h3>Payment · {payment.paymentReference}</h3><p>Worker share: <strong>{money(payment.providerAmountMinor)}</strong> <Badge tone={payment.status === "paid" ? "green" : payment.status === "disputed" ? "red" : "amber"}>{payment.status.replaceAll("_", " ")}</Badge></p><p>OddJobs fee (hirer responsibility): <strong>{money(payment.commissionAmountMinor)}</strong> <Badge tone={payment.platformFeeStatus === "received" ? "green" : payment.platformFeeStatus === "disputed" ? "red" : "amber"}>{payment.platformFeeStatus.replaceAll("_", " ")}</Badge></p>{payment.status === "awaiting_payment" && selectedJob.status === "completed" && <><label>Worker payment method<select value={paymentMethods[selectedJob.id] ?? "cash"} onChange={(event) => setPaymentMethods((current) => ({ ...current, [selectedJob.id]: event.target.value as import("../../auth/AuthProvider").JobPaymentMethod }))}><option value="cash">Cash</option><option value="manual_transfer">Manual transfer / M-Pesa</option></select></label><Button disabled={paymentBusyId === selectedJob.id} onClick={() => void reportPayment(selectedJob.id)}>Record worker payment</Button></>}{payment.status === "reported" && <Button variant="secondary" disabled={paymentBusyId === selectedJob.id} onClick={() => void disputePayment(selectedJob.id)}>Flag payment issue</Button>}{payment.status === "disputed" && <p className="form-error">Payment is under review{payment.disputeReason ? `: ${payment.disputeReason}` : ""}</p>}{payment.status === "paid" && <p className="form-success">Worker confirmed receipt of {money(payment.providerAmountMinor)}.</p>}<Button variant="secondary" onClick={() => { setSelectedJobId(""); go("payments") }}>Manage payments and fees</Button></section>
+              return <section className="jobs-payment-summary"><h3>Payment · {payment.paymentReference}</h3><p>Worker share: <strong>{money(payment.providerAmountMinor)}</strong> <Badge tone={payment.status === "paid"? "green" : payment.status === "disputed"? "red" : "amber"}>{payment.status.replaceAll("_", " ")}</Badge></p><p>OddJobs fee (hirer responsibility): <strong>{money(payment.commissionAmountMinor)}</strong> <Badge tone={payment.platformFeeStatus === "received"? "green" : payment.platformFeeStatus === "disputed"? "red" : "amber"}>{payment.platformFeeStatus.replaceAll("_", " ")}</Badge></p>{payment.status === "awaiting_payment" && selectedJob.status === "completed" && <><label>Worker payment method<select value={paymentMethods[selectedJob.id] ?? "cash"} onChange={(event) => setPaymentMethods((current) => ({ ...current, [selectedJob.id]: event.target.value as import("../../auth/AuthProvider").JobPaymentMethod }))}><option value="cash">Cash</option><option value="manual_transfer">Manual transfer / M-Pesa</option></select></label><Button disabled={paymentBusyId === selectedJob.id} onClick={() => void reportPayment(selectedJob.id)}>Record worker payment</Button></>}{payment.status === "reported" && <Button variant="secondary" disabled={paymentBusyId === selectedJob.id} onClick={() => void disputePayment(selectedJob.id)}>Flag payment issue</Button>}{payment.status === "disputed" && <p className="form-error">Payment is under review{payment.disputeReason? `: ${payment.disputeReason}` : ""}</p>}{payment.status === "paid" && <p className="form-success">Worker confirmed receipt of {money(payment.providerAmountMinor)}.</p>}<Button variant="secondary" onClick={() => { setSelectedJobId(""); go("payments") }}>Manage payments and fees</Button></section>
             })()}
-            {selectedJob.status === "completion_pending" && <section className="jobs-detail-actions"><Button onClick={() => void transition(selectedJob.id, "confirm-completion")}>Approve completed work</Button><label>Request a revision<textarea rows={3} minLength={10} maxLength={5000} value={revisionNotes[selectedJob.id] ?? ""} onChange={(event) => setRevisionNotes((current) => ({ ...current, [selectedJob.id]: event.target.value }))} placeholder="What needs to change?" /></label><Button variant="secondary" disabled={(revisionNotes[selectedJob.id] ?? "").trim().length < 10} onClick={() => void transition(selectedJob.id, "request-revision", revisionNotes[selectedJob.id]?.trim())}>Request revision</Button></section>}
+            {selectedJob.status === "completion_pending" && <section className="jobs-detail-actions"><Button disabled={jobActionBusyId === selectedJob.id} onClick={() => void transition(selectedJob.id, "confirm-completion")}>{jobActionBusyId === selectedJob.id ? "Saving…" : "Approve completed work"}</Button><label>Request a revision<textarea rows={3} minLength={10} maxLength={5000} value={revisionNotes[selectedJob.id] ?? ""} onChange={(event) => setRevisionNotes((current) => ({ ...current, [selectedJob.id]: event.target.value }))} placeholder="What needs to change?" /></label><Button variant="secondary" disabled={jobActionBusyId === selectedJob.id || (revisionNotes[selectedJob.id] ?? "").trim().length < 10} onClick={() => void transition(selectedJob.id, "request-revision", revisionNotes[selectedJob.id]?.trim())}>{jobActionBusyId === selectedJob.id ? "Saving…" : "Request revision"}</Button></section>}
             {selectedJob.status === "awarded" && <Button variant="secondary" onClick={() => openBids(selectedJob.id)}>View selected provider</Button>}
-            {selectedJob.status === "open" && <div className="jobs-detail-actions"><Button onClick={() => openBids(selectedJob.id)}>Compare {selectedJob.quoteCount} proposals</Button>{confirmWithdrawal ? <div className="jobs-withdraw-confirm"><p>Withdraw this job? Workers will no longer see it in job search. Its history remains available to you.</p><Button variant="ghost" onClick={() => setConfirmWithdrawal(false)}>Keep job</Button><Button variant="danger" onClick={() => void transition(selectedJob.id, "cancel")}>Withdraw job</Button></div> : <Button variant="ghost" onClick={() => setConfirmWithdrawal(true)}>Withdraw job</Button>}</div>}
+            {selectedJob.status === "open" && <div className="jobs-detail-actions"><Button onClick={() => openBids(selectedJob.id)}>Compare {selectedJob.quoteCount} proposals</Button>{confirmWithdrawal? <div className="jobs-withdraw-confirm"><p>Withdraw this job? Workers will no longer see it in job search. Its history remains available to you.</p><Button variant="ghost" onClick={() => setConfirmWithdrawal(false)}>Keep job</Button><Button variant="danger" onClick={() => void transition(selectedJob.id, "cancel")}>Withdraw job</Button></div> : <Button variant="ghost" onClick={() => setConfirmWithdrawal(true)}>Withdraw job</Button>}</div>}
           </div>
           {actionError && <p className="form-error jobs-dialog-error" role="alert">{actionError}</p>}
         </>}
@@ -1039,37 +1047,64 @@ function HirerPayments() {
   const [search, setSearch] = useState("")
   const [methodByJob, setMethodByJob] = useState<Record<string, import("../../auth/AuthProvider").JobPaymentMethod>>({})
   const [feeReferenceByJob, setFeeReferenceByJob] = useState<Record<string, string>>({})
+  const [feeReferenceErrors, setFeeReferenceErrors] = useState<Record<string, string>>({})
+  const [feeReportErrors, setFeeReportErrors] = useState<Record<string, string>>({})
   const [busyId, setBusyId] = useState("")
   const refresh = useCallback(async () => {
     setLoading(true)
     try { setPayments(await auth.getJobPayments("consumer")); setError("") }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load hirer payments.") }
+    catch (caught) { setError(caught instanceof Error? caught.message : "Could not load hirer payments.") }
     finally { setLoading(false) }
   }, [auth.getJobPayments])
   useEffect(() => { void refresh() }, [refresh])
   const money = (minor: number, currency: string) => `${currency} ${(minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const paymentTotal = (items: import("../../auth/AuthProvider").JobPaymentRecord[], amount: (item: import("../../auth/AuthProvider").JobPaymentRecord) => number) => {
+    const totals = new Map<string, number>()
+    for (const item of items) totals.set(item.currency, (totals.get(item.currency) ?? 0) + amount(item))
+    return totals.size ? [...totals].map(([currency, total]) => money(total, currency)).join(" · ") : money(0, "KES")
+  }
   const filtered = payments.filter((item) => `${item.jobReference} ${item.paymentReference} ${item.jobTitle} ${item.providerName}`.toLowerCase().includes(search.toLowerCase()))
-  const feeDue = payments.filter((item) => item.jobStatus === "completed" && item.status === "paid" && item.platformFeeStatus !== "received").reduce((sum, item) => sum + item.commissionAmountMinor, 0)
-  const workerDue = payments.filter((item) => item.status !== "paid" && item.status !== "refunded").reduce((sum, item) => sum + item.providerAmountMinor, 0)
+  const paidToWorkers = paymentTotal(payments.filter((item) => item.status === "paid"), (item) => item.providerAmountMinor)
+  const workerAwaitingConfirmation = paymentTotal(payments.filter((item) => item.status === "awaiting_payment" || item.status === "reported"), (item) => item.providerAmountMinor)
+  const feeNeedsAction = paymentTotal(payments.filter((item) => item.jobStatus === "completed" && item.status === "paid" && (item.platformFeeStatus === "due" || item.platformFeeStatus === "needs_correction")), (item) => item.commissionAmountMinor)
+  const feeUnderReview = paymentTotal(payments.filter((item) => item.platformFeeStatus === "reported"), (item) => item.commissionAmountMinor)
+  const feeVerified = paymentTotal(payments.filter((item) => item.platformFeeStatus === "received"), (item) => item.commissionAmountMinor)
+  const feeDisputed = paymentTotal(payments.filter((item) => item.platformFeeStatus === "disputed"), (item) => item.commissionAmountMinor)
   const reportWorkerPayment = async (jobId: string) => {
     setBusyId(jobId); setError("")
     try { await auth.reportJobPayment(jobId, methodByJob[jobId] ?? "cash"); await refresh() }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not report the worker payment.") }
+    catch (caught) { setError(caught instanceof Error? caught.message : "Could not report the worker payment.") }
     finally { setBusyId("") }
   }
   const reportFee = async (jobId: string) => {
     const reference = feeReferenceByJob[jobId]?.trim() ?? ""
-    if (reference.length < 3) return
+    if (reference.length < 3) {
+      setFeeReferenceErrors((current) => ({ ...current, [jobId]: "Enter the payment reference from your receipt (at least 3 characters)." }))
+      return
+    }
     setBusyId(jobId); setError("")
+    setFeeReferenceErrors((current) => ({ ...current, [jobId]: "" }))
+    setFeeReportErrors((current) => ({ ...current, [jobId]: "" }))
     try { await auth.reportHirerPlatformFee(jobId, reference); await refresh() }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not report the OddJobs fee payment.") }
+    catch (caught) { setFeeReportErrors((current) => ({ ...current, [jobId]: caught instanceof Error? caught.message : "Could not report this payment. Please try again." })) }
     finally { setBusyId("") }
   }
   return <div className="content console-content">
     <PageHeader title="Payments & fees" description="Track what you pay workers and what you owe OddJobs for each completed job." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
-    {!error && <div className="dashboard-grid"><Metric label="Worker payments awaiting confirmation" value={money(workerDue, "KES")} /><Metric label="OddJobs fees due from you" value={money(feeDue, "KES")} /><Metric label="Payment records" value={String(payments.length)} /></div>}
+    {!error && <div className="dashboard-grid"><Metric label="Paid to workers" value={paidToWorkers} /><Metric label="Worker payments awaiting confirmation" value={workerAwaitingConfirmation} /><Metric label="OddJobs fees requiring action" value={feeNeedsAction} /><Metric label="OddJobs fees under review" value={feeUnderReview} /><Metric label="OddJobs fees verified paid" value={feeVerified} /><Metric label="Fees under dispute" value={feeDisputed} /></div>}
     <section className="card table-card"><label>Search by job or payment ID<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="OJ-… or PAY-… or job title" /></label>
-      {loading ? <p role="status">Loading payment history…</p> : error ? <p className="form-error" role="alert">{error}</p> : filtered.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Job / payment</th><th>Worker</th><th>Accepted total</th><th>Worker receives</th><th>OddJobs fee you owe</th><th>Worker payment</th><th>Platform fee</th></tr></thead><tbody>{filtered.map((payment, index) => <tr key={payment.id}><td>{index + 1}</td><td><strong>{payment.jobReference}</strong><small className="caption">{payment.paymentReference} · {payment.jobTitle}</small></td><td>{payment.providerName}</td><td>{money(payment.grossAmountMinor, payment.currency)}</td><td>{money(payment.providerAmountMinor, payment.currency)}</td><td>{money(payment.commissionAmountMinor, payment.currency)}</td><td><Badge tone={payment.status === "paid" ? "green" : payment.status === "disputed" ? "red" : "amber"}>{payment.status.replaceAll("_", " ")}</Badge>{payment.status === "awaiting_payment" && payment.jobStatus === "completed" && <div className="payment-action"><select aria-label={`Payment method for ${payment.jobReference}`} value={methodByJob[payment.jobId] ?? "cash"} onChange={(event) => setMethodByJob((current) => ({ ...current, [payment.jobId]: event.target.value as import("../../auth/AuthProvider").JobPaymentMethod }))}><option value="cash">Cash</option><option value="manual_transfer">Manual transfer</option></select><Button disabled={busyId === payment.jobId} onClick={() => void reportWorkerPayment(payment.jobId)}>Report paid</Button></div>}{payment.status === "reported" && <small className="caption">Waiting for worker confirmation</small>}</td><td><Badge tone={payment.platformFeeStatus === "received" ? "green" : payment.platformFeeStatus === "disputed" ? "red" : "amber"}>{payment.platformFeeStatus.replaceAll("_", " ")}</Badge>{payment.platformFeeStatus === "due" && payment.jobStatus === "completed" && payment.status === "paid" && payment.platformFeeDueAt && <small className="caption">Pay by {new Date(payment.platformFeeDueAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}{Date.now() > new Date(payment.platformFeeDueAt).getTime() ? " · Overdue" : ""}</small>}{payment.platformFeeStatus === "due" && payment.jobStatus === "completed" && payment.status === "paid" && <div className="payment-action"><input aria-label={`OddJobs fee receipt reference for ${payment.jobReference}`} value={feeReferenceByJob[payment.jobId] ?? ""} onChange={(event) => setFeeReferenceByJob((current) => ({ ...current, [payment.jobId]: event.target.value }))} placeholder="Your payment reference" /><Button variant="secondary" disabled={busyId === payment.jobId || (feeReferenceByJob[payment.jobId] ?? "").trim().length < 3} onClick={() => void reportFee(payment.jobId)}>Report fee paid</Button></div>}{payment.platformFeeStatus === "due" && payment.status !== "paid" && <small className="caption">Due after worker confirms payment</small>}{payment.platformFeeStatus === "reported" && <small className="caption">Receipt {payment.platformFeePaymentReference}; awaiting OddJobs verification</small>}{payment.platformFeeStatus === "received" && payment.platformFeeReceiptReference && <small className="caption">Verified receipt {payment.platformFeeReceiptReference}</small>}</td></tr>)}</tbody></table></div> : <EmptyState title="No job payment records" detail="Accepted bids will appear here with the worker amount and your OddJobs fee shown separately." />}
+      {loading? <p role="status">Loading payment history…</p> : error? <p className="form-error" role="alert">{error}</p> : filtered.length? <div className="table-wrap"><table><thead><tr><th>#</th><th>Job / payment</th><th>Worker</th><th>Accepted total</th><th>Worker receives</th><th>OddJobs fee you owe</th><th>Worker payment</th><th>Platform fee</th></tr></thead><tbody>{filtered.map((payment, index) => <tr key={payment.id}><td>{index + 1}</td><td><strong>{payment.jobReference}</strong><small className="caption">{payment.paymentReference} · {payment.jobTitle}</small></td><td>{payment.providerName}</td><td>{money(payment.grossAmountMinor, payment.currency)}</td><td>{money(payment.providerAmountMinor, payment.currency)}</td><td>{money(payment.commissionAmountMinor, payment.currency)}</td><td><Badge tone={payment.status === "paid"? "green" : payment.status === "disputed"? "red" : "amber"}>{payment.status.replaceAll("_", " ")}</Badge>{payment.status === "awaiting_payment" && payment.jobStatus === "completed" && <div className="payment-action"><select aria-label={`Payment method for ${payment.jobReference}`} value={methodByJob[payment.jobId] ?? "cash"} onChange={(event) => setMethodByJob((current) => ({ ...current, [payment.jobId]: event.target.value as import("../../auth/AuthProvider").JobPaymentMethod }))}><option value="cash">Cash</option><option value="manual_transfer">Manual transfer</option></select><Button disabled={busyId === payment.jobId} onClick={() => void reportWorkerPayment(payment.jobId)}>Report paid</Button></div>}{payment.status === "reported" && <small className="caption">Waiting for worker confirmation</small>}</td><td className="commission-cell">
+  <Badge tone={payment.platformFeeStatus === "received"? "green" : payment.platformFeeStatus === "disputed"? "red" : payment.platformFeeStatus === "needs_correction"? "amber" : payment.platformFeeStatus === "reported"? "neutral" : "amber"}>
+    {{ due: "Due", reported: "Under review", received: "Verified paid", disputed: "Disputed", needs_correction: "Correction needed" }[payment.platformFeeStatus]}
+  </Badge>
+  {payment.platformFeeStatus === "due" && payment.status !== "paid" && <small className="caption">Due after the worker confirms payment.</small>}
+  {payment.platformFeeDueAt && (payment.platformFeeStatus === "due" || payment.platformFeeStatus === "needs_correction") && payment.status === "paid" && <small className="caption">Pay by {new Date(payment.platformFeeDueAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}{Date.now() > new Date(payment.platformFeeDueAt).getTime() && ["due", "needs_correction"].includes(payment.platformFeeStatus)? " - Overdue" : ""}</small>}
+  {payment.platformFeeStatus === "needs_correction" && payment.platformFeeCorrectionReason && <small className="form-error">Please correct: {payment.platformFeeCorrectionReason}</small>}
+  {(payment.platformFeeStatus === "due" || payment.platformFeeStatus === "needs_correction") && payment.jobStatus === "completed" && payment.status === "paid" && <div className="payment-action"><input aria-label={`OddJobs fee receipt reference for ${payment.jobReference}`} aria-describedby={`fee-reference-help-${payment.jobId}`} aria-invalid={Boolean(feeReferenceErrors[payment.jobId])} value={feeReferenceByJob[payment.jobId] ?? ""} onChange={(event) => { setFeeReferenceByJob((current) => ({ ...current, [payment.jobId]: event.target.value })); setFeeReferenceErrors((current) => ({ ...current, [payment.jobId]: "" })) }} placeholder="Payment reference" /><small id={`fee-reference-help-${payment.jobId}`} className={feeReferenceErrors[payment.jobId] ? "form-error" : "caption"} role={feeReferenceErrors[payment.jobId] ? "alert" : undefined}>{feeReferenceErrors[payment.jobId] || "Enter the M-Pesa or bank reference from your receipt."}</small><Button variant="secondary" disabled={busyId === payment.jobId} onClick={() => void reportFee(payment.jobId)}>{busyId === payment.jobId ? "Submitting…" : "Report fee paid"}</Button>{feeReportErrors[payment.jobId] && <small className="form-error" role="alert">{feeReportErrors[payment.jobId]}</small>}</div>}
+  {payment.platformFeeStatus === "reported" && <small className="caption">Reference {payment.platformFeePaymentReference ?? "submitted"}. OddJobs is reviewing it; reminders are paused.</small>}
+  {payment.platformFeeStatus === "received" && <small className="caption">Verified{payment.platformFeeReceiptReference? ` - Receipt ${payment.platformFeeReceiptReference}` : ""}{payment.platformFeeReceivedAt? ` - ${new Date(payment.platformFeeReceivedAt).toLocaleDateString("en-KE")}` : ""}</small>}
+  {payment.platformFeeEvents.length > 0 && <details className="payment-history-details"><summary>Payment activity ({payment.platformFeeEvents.length})</summary><ol>{[...payment.platformFeeEvents].reverse().map((event, eventIndex) => <li key={`${event.action}-${event.createdAt}-${eventIndex}`}><strong>{{ "platform_fee.reported": "Payment reported", "platform_fee.received": "Payment verified", "platform_fee.correction_requested": "Correction requested", "platform_fee.reminder.manual": "Admin reminder", "platform_fee.reminder.due-soon": "Reminder sent", "platform_fee.reminder.due": "Reminder sent", "platform_fee.reminder.overdue-24h": "Overdue reminder", "platform_fee.reminder.overdue-72h": "Urgent reminder" }[event.action] ?? "Payment update"}</strong><small className="caption">{new Date(event.createdAt).toLocaleString("en-KE")}{typeof event.metadata.reason === "string"? ` - ${event.metadata.reason}` : typeof event.metadata.note === "string" && event.metadata.note? ` - ${event.metadata.note}` : ""}</small></li>)}</ol></details>}
+</td></tr>)}</tbody></table></div> : <EmptyState title="No job payment records" detail="Accepted bids will appear here with the worker amount and your OddJobs fee shown separately." />}
     </section>
     <p className="caption">The accepted bid total is the hirer’s total obligation: 90% is allocated to the worker and 10% to OddJobs. Worker payment confirmation and OddJobs fee verification are separate. Transfers are reported manually; the app does not collect funds yet.</p>
   </div>
@@ -1081,6 +1116,7 @@ function WorkFeed({ onOpenProvider, go }: { onOpenProvider: (providerId: string)
   const [view, setView] = useState<"workers" | "proposals">("workers")
   const [search, setSearch] = useState("")
   const [region, setRegion] = useState("")
+  const [viewingWorkerId, setViewingWorkerId] = useState<string | null>(null)
   const { providers, total: workerTotal, loading: workersLoading, error: workersError, refresh: refreshWorkers } = useMarketplaceProviders(search, region, 50)
   const { jobs, loading: jobsLoading, error: jobsError, refresh: refreshJobs } = useMarketplaceJobs("consumer")
   const [proposalRows, setProposalRows] = useState<Array<{ job: import("../../auth/AuthProvider").MarketplaceJob; quote: import("../../auth/AuthProvider").MarketplaceQuote }>>([])
@@ -1098,7 +1134,7 @@ function WorkFeed({ onOpenProvider, go }: { onOpenProvider: (providerId: string)
     })).then((groups) => {
       if (active) setProposalRows(groups.flat().sort((a, b) => new Date(b.quote.createdAt).getTime() - new Date(a.quote.createdAt).getTime()))
     }).catch((caught: unknown) => {
-      if (active) setProposalsError(caught instanceof Error ? caught.message : "Could not load worker proposals.")
+      if (active) setProposalsError(caught instanceof Error? caught.message : "Could not load worker proposals.")
     }).finally(() => { if (active) setProposalsLoading(false) })
     return () => { active = false }
   }, [auth.getMarketplaceQuotes, jobs])
@@ -1118,17 +1154,17 @@ function WorkFeed({ onOpenProvider, go }: { onOpenProvider: (providerId: string)
   return <div className="content">
     <PageHeader title="Find workers" description="Browse approved worker profiles or review proposals submitted for your jobs." action={<Button variant="secondary" onClick={() => { void refreshWorkers(); void refreshJobs() }}>Refresh</Button>} />
     <div className="filters">
-      <button className={view === "workers" ? "active" : ""} onClick={() => setView("workers")}>Worker directory</button>
-      <button className={view === "proposals" ? "active" : ""} onClick={() => setView("proposals")}>Submitted proposals ({proposalRows.length})</button>
+      <button className={view === "workers"? "active" : ""} onClick={() => setView("workers")}>Worker directory</button>
+      <button className={view === "proposals"? "active" : ""} onClick={() => setView("proposals")}>Submitted proposals ({proposalRows.length})</button>
     </div>
-    {view === "workers" ? <>
+    {view === "workers"? <>
       <div className="provider-directory-filters">
         <label>Search workers<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, skill, or service" /></label>
         <label>Service area<input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="For example, Nairobi" /></label>
       </div>
       {workersError && <p className="form-error" role="alert">{workersError}</p>}
-      <p className="caption">{workerTotal} approved {workerTotal === 1 ? "worker profile" : "worker profiles"}</p>
-      {workersLoading ? <p role="status">Loading workers…</p> : providers.length ? <div className="provider-directory-grid">{providers.map((worker) => <ProviderDirectoryCard key={worker.id} provider={worker} onClick={() => onOpenProvider(worker.id)} />)}</div> : !workersError ? <EmptyState title="No workers found" detail="Try another skill or service area. Approved worker profiles will appear here." /> : null}
+      <p className="caption">{workerTotal} approved {workerTotal === 1? "worker profile" : "worker profiles"}</p>
+      {workersLoading? <p role="status">Loading workers…</p> : providers.length? <section className="card table-card provider-directory-table"><div className="table-wrap"><table><thead><tr><th>#</th><th>Worker</th><th>Service area</th><th>About</th><th></th></tr></thead><tbody>{providers.map((worker, index) => <tr key={worker.id}><td>{index + 1}</td><td><div className="provider-table-person"><Avatar src={auth.getProfileAvatarUrl(worker.avatarPath)} name={worker.publicName} /><div><strong>{worker.publicName}</strong><small><Badge tone="green">Verified worker</Badge></small></div></div></td><td>{worker.region || "Not listed"}</td><td className="provider-table-bio">{worker.bio || "No profile description yet."}</td><td><Button variant="secondary" onClick={() => setViewingWorkerId(worker.id)}>View</Button></td></tr>)}</tbody></table></div></section> : !workersError? <EmptyState title="No workers found" detail="Try another skill or service area. Approved worker profiles will appear here." /> : null}
     </> : <>
       <p className="caption">Proposals submitted by workers for your open jobs. Review a job to compare bids and select a worker.</p>
       {jobsError && <p className="form-error" role="alert">{jobsError}</p>}
@@ -1140,7 +1176,7 @@ function WorkFeed({ onOpenProvider, go }: { onOpenProvider: (providerId: string)
             <td>{index + 1}</td><td><strong>{job.title}</strong><br /><small>{job.category} · {job.locationLabel}</small></td>
             <td><button className="table-link" onClick={() => onOpenProvider(quote.providerId)}>{quote.providerName}</button></td>
             <td>KES {(quote.amountMinor / 100).toLocaleString()}</td><td>{quote.availability}</td><td className="proposal-message-cell">{quote.message}</td>
-            <td><Badge tone={quote.status === "accepted" ? "green" : "amber"}>{quote.status === "accepted" ? "selected" : "awaiting review"}</Badge></td>
+            <td><Badge tone={quote.status === "accepted"? "green" : "amber"}>{quote.status === "accepted"? "selected" : "awaiting review"}</Badge></td>
             <td><Button variant="secondary" onClick={() => reviewProposals(job.id)}>Review bids</Button></td>
           </tr>)}
           {(jobsLoading || proposalsLoading) && !proposalRows.length && <tr><td colSpan={8}>Loading worker proposals…</td></tr>}
@@ -1149,6 +1185,7 @@ function WorkFeed({ onOpenProvider, go }: { onOpenProvider: (providerId: string)
       </table></div></section>
       {!proposalRows.length && !jobsLoading && !proposalsLoading && <div className="card-actions"><Button onClick={() => go("post")}>Post a job</Button></div>}
     </>}
+    {viewingWorkerId && <ProviderProfileModal providerId={viewingWorkerId} onClose={() => setViewingWorkerId(null)} />}
   </div>
 }
 
@@ -1171,7 +1208,7 @@ function MapView({ go }: { go: (screen: Screen) => void }) {
           (name, index) => (
             <button
               className={`map-marker marker-${index} ${
-                selected === name ? "selected" : ""
+                selected === name? "selected" : ""
               }`}
               key={name}
               onClick={() => setSelected(name)}
@@ -1187,16 +1224,16 @@ function MapView({ go }: { go: (screen: Screen) => void }) {
           <Avatar
             src={
               selected === "Amina Hassan"
-                ? photos.amina
+               ? photos.amina
                 : selected === "Grace Wairimu"
-                  ? photos.wanjiku
+                 ? photos.wanjiku
                   : photos.otieno
             }
             name={selected}
           />
           <span>
             <strong>{selected}</strong>
-            <small>Available now ? ? 4.9 ? from KES 800</small>
+            <small>Available now - ? 4.9 - from KES 800</small>
           </span>
         </div>
         <Button onClick={() => go("profile")}>View provider</Button>
@@ -1251,7 +1288,7 @@ function History({ go }: { go: (screen: Screen) => void }) {
               <td>{index + 1}</td>
               <td><strong>{job.title}</strong><br /><small>{job.category} · {job.jobReference}</small></td>
               <td>{workerNames[job.id] ?? "Loading…"}</td>
-              <td><Badge tone={job.status === "completed" ? "green" : job.status === "revision_requested" ? "red" : "amber"}>{job.status === "awarded" ? "worker selected" : job.status.replace(/_/g, " ")}</Badge></td>
+              <td><Badge tone={job.status === "completed"? "green" : job.status === "revision_requested"? "red" : "amber"}>{job.status === "awarded"? "worker selected" : job.status.replace(/_/g, " ")}</Badge></td>
               <td>{job.locationLabel}</td>
               <td>{new Date(job.updatedAt).toLocaleString()}</td>
               <td><Button variant="ghost" onClick={() => openJob(job.id)}>View job</Button></td>
@@ -1274,7 +1311,7 @@ function SavedProviders({ go, onOpenProvider }: { go: (screen: Screen) => void; 
   const refresh = useCallback(async () => {
     setError("")
     try { setProviders(await auth.getSavedProviders()) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load saved workers.") }
+    catch (caught) { setError(caught instanceof Error? caught.message : "Could not load saved workers.") }
     finally { setLoading(false) }
   }, [auth.getSavedProviders])
   useEffect(() => {
@@ -1288,18 +1325,18 @@ function SavedProviders({ go, onOpenProvider }: { go: (screen: Screen) => void; 
     setRemovingId(providerId)
     setError("")
     try { await auth.removeSavedProvider(providerId); setProviders((items) => items.filter((item) => item.id !== providerId)) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not remove this provider.") }
+    catch (caught) { setError(caught instanceof Error? caught.message : "Could not remove this provider.") }
     finally { setRemovingId("") }
   }
   return <div className="content">
     <PageHeader title="Saved workers" description="Your personal shortlist of approved workers." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh</Button>} />
     {error && <p className="form-error" role="alert">{error}</p>}
-    {loading ? <p role="status">Loading your saved workers…</p> : providers.length ? <div className="provider-directory-grid">
+    {loading? <p role="status">Loading your saved workers…</p> : providers.length? <div className="provider-directory-grid">
       {providers.map((provider) => <section className="saved-provider-item" key={provider.id}>
         <ProviderDirectoryCard provider={provider} onClick={() => onOpenProvider(provider.id)} />
-        <Button variant="ghost" disabled={removingId === provider.id} onClick={() => void remove(provider.id)}>{removingId === provider.id ? "Removing…" : "Remove from saved"}</Button>
+        <Button variant="ghost" disabled={removingId === provider.id} onClick={() => void remove(provider.id)}>{removingId === provider.id? "Removing…" : "Remove from saved"}</Button>
       </section>)}
-    </div> : !error ? <EmptyState title="No saved workers yet" detail="Open an approved worker profile and save it to keep it on your shortlist." action={() => go("workFeed")} actionLabel="Find workers" /> : null}
+    </div> : !error? <EmptyState title="No saved workers yet" detail="Open an approved worker profile and save it to keep it on your shortlist." action={() => go("workFeed")} actionLabel="Find workers" /> : null}
   </div>
 }
 function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBack: () => void }) {
@@ -1316,7 +1353,7 @@ function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBa
   const [error, setError] = useState("")
   useEffect(() => {
     let active = true
-    void auth.getServiceListings("consumer", "mine").then((items) => { if (active) setListings(items) }).catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load your jobs.") }).finally(() => { if (active) setLoading(false) })
+    void auth.getServiceListings("consumer", "mine").then((items) => { if (active) setListings(items) }).catch((caught: unknown) => { if (active) setError(caught instanceof Error? caught.message : "Could not load your jobs.") }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [auth.getServiceListings])
   useEffect(() => { if (listingId) setSelectedId(listingId) }, [listingId])
@@ -1334,22 +1371,22 @@ function CustomerDispute({ listingId, onBack }: { listingId: string | null; onBa
     try {
       setReport(await auth.createModerationReport({ subjectType: "job", subjectId: selected.id, reason, details: details.trim() }))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not submit your report.")
+      setError(caught instanceof Error? caught.message : "Could not submit your report.")
     } finally {
       setBusy(false)
     }
   }
   return <div className="content narrow">
-    <PageHeader title={report ? "Report submitted" : "Get help with your job"} description={selected ? `Job ID ${selected.jobReference} · ${selected.title} · ${selected.counterpart}` : "Choose a job from your history to contact support about it."} />
+    <PageHeader title={report? "Report submitted" : "Get help with your job"} description={selected? `Job ID ${selected.jobReference} · ${selected.title} · ${selected.counterpart}` : "Choose a job from your history to contact support about it."} />
     {(error || marketplaceJobsError) && <p className="form-error" role="alert">{error || marketplaceJobsError}</p>}
-    {report ? <section className="card"><Badge tone="green">Received</Badge><h2>Your report is in the support queue</h2><p>Job ID: {selected?.jobReference ?? "Unavailable"}</p><p>Report reference: {report.id}</p><p>Status: {report.status.replace(/_/g, " ")}</p><Button onClick={onBack}>Back to job history</Button></section> : <section className="form-card">
-      {loading || marketplaceJobsLoading ? <p role="status">Loading your jobs…</p> : <>
+    {report? <section className="card"><Badge tone="green">Received</Badge><h2>Your report is in the support queue</h2><p>Job ID: {selected?.jobReference ?? "Unavailable"}</p><p>Report reference: {report.id}</p><p>Status: {report.status.replace(/_/g, " ")}</p><Button onClick={onBack}>Back to job history</Button></section> : <section className="form-card">
+      {loading || marketplaceJobsLoading? <p role="status">Loading your jobs…</p> : <>
         <label>Search jobs by ID or title<input value={jobSearch} onChange={(event) => setJobSearch(event.target.value)} placeholder="For example, OJ-0000000042" /></label>
         <label>Job<select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}><option value="">Choose a job</option>{filteredJobs.map((item) => <option key={item.id} value={item.id}>{item.jobReference} · {item.title} · {item.status.replace(/_/g, " ")}</option>)}</select></label>
       </>}
       <label>Issue<select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)}><option value="other">Work quality, missed visit, or other issue</option><option value="unsafe">Safety concern</option><option value="harassment">Harassment</option><option value="fraud">Fraud</option><option value="off_platform_payment">Asked to pay outside OddJobs</option></select></label>
       <label>Details<textarea rows={5} maxLength={2000} value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Describe what happened and what help you need." /></label>
-      <div className="card-actions"><Button variant="secondary" onClick={onBack}>Cancel</Button><Button disabled={busy || loading || !selected || details.trim().length < 10} onClick={() => void submit()}>{busy ? "Submitting…" : "Submit report"}</Button></div>
+      <div className="card-actions"><Button variant="secondary" onClick={onBack}>Cancel</Button><Button disabled={busy || loading || !selected || details.trim().length < 10} onClick={() => void submit()}>{busy? "Submitting…" : "Submit report"}</Button></div>
     </section>}
   </div>
 }
@@ -1403,7 +1440,7 @@ function Settings({ go }: { go: (s: Screen) => void }) {
       setWorkerServiceLongitude(profile.serviceLongitude ?? null)
       setWorkerTravelDistance(String(profile.maxTravelDistanceKm ?? 25))
     }).catch((caught: unknown) => {
-      if (current) setWorkerProfileError(caught instanceof Error ? caught.message : "Could not load your profile.")
+      if (current) setWorkerProfileError(caught instanceof Error? caught.message : "Could not load your profile.")
     }).finally(() => { if (current) setWorkerProfileLoading(false) })
     return () => { current = false }
   }, [auth.getMarketplaceProvider, auth.profile?.id, hasProviderRole])
@@ -1417,7 +1454,7 @@ function Settings({ go }: { go: (s: Screen) => void }) {
     setProfileBusy(true)
     setProfileMessage("")
     try { await auth.updateProfile(displayName, avatarFile ?? undefined); setAvatarFile(null); setProfileMessage("Your account profile was updated.") }
-    catch (caught) { setProfileMessage(caught instanceof Error ? caught.message : "Could not update your profile.") }
+    catch (caught) { setProfileMessage(caught instanceof Error? caught.message : "Could not update your profile.") }
     finally { setProfileBusy(false) }
   }
   const savePassword = async () => {
@@ -1428,7 +1465,7 @@ function Settings({ go }: { go: (s: Screen) => void }) {
       const error = await auth.updatePassword(newPassword)
       if (error) { setPasswordMessage(error); return }
       setNewPassword(""); setConfirmPassword(""); setPasswordMessage("Password updated successfully.")
-    } catch (caught) { setPasswordMessage(caught instanceof Error ? caught.message : "Could not update your password.") }
+    } catch (caught) { setPasswordMessage(caught instanceof Error? caught.message : "Could not update your password.") }
     finally { setPasswordBusy(false) }
   }
   const saveWorkerProfile = async () => {
@@ -1446,7 +1483,7 @@ function Settings({ go }: { go: (s: Screen) => void }) {
       setWorkerTravelDistance(String(saved.maxTravelDistanceKm ?? 25))
       setWorkerProfileNotice("Your profile is saved and will appear to hirers reviewing your bids.")
     } catch (caught) {
-      setWorkerProfileError(caught instanceof Error ? caught.message : "Could not save your profile.")
+      setWorkerProfileError(caught instanceof Error? caught.message : "Could not save your profile.")
     } finally {
       setWorkerProfileSaving(false)
     }
@@ -1454,31 +1491,31 @@ function Settings({ go }: { go: (s: Screen) => void }) {
   return (
     <div className="content narrow">
       <PageHeader
-        title={isAdmin ? "Admin account" : "Settings"}
-        description={isAdmin ? "Manage your admin profile and sign-in security." : hasProviderRole ? "Manage your account and the profile hirers see with your bids." : "Manage your account and identity details."}
+        title={isAdmin? "Admin account" : "Settings"}
+        description={isAdmin? "Manage your admin profile and sign-in security." : hasProviderRole? "Manage your account and the profile hirers see with your bids." : "Manage your account and identity details."}
       />
       {hasProviderRole && <section className="card setting-card account-settings-card">
         <h2>My profile</h2>
         <p className="caption">This information is shown to hirers when they review your proposal. Your private contact details are not included.</p>
-        {workerProfileLoading ? <p role="status">Loading your profile…</p> : <>
+        {workerProfileLoading? <p role="status">Loading your profile…</p> : <>
           <label>Public name<input value={workerName} maxLength={120} onChange={(event) => setWorkerName(event.target.value)} placeholder="Name shown to hirers" /></label>
           <label>Service area<input value={workerRegion} maxLength={120} onChange={(event) => setWorkerRegion(event.target.value)} placeholder="For example, Westlands, Nairobi" /></label>
           <div className="form-card"><h3>Jobs near my service area</h3><p className="caption">Save an approximate location so nearby jobs appear first. Your coordinates stay private; hirers and other workers see your service area text only.</p><div className="card-actions"><Button variant="secondary" type="button" onClick={() => {
             if (!navigator.geolocation) { setWorkerProfileError("Location is not available in this browser."); return }
             navigator.geolocation.getCurrentPosition((position) => { setWorkerServiceLatitude(Number(position.coords.latitude.toFixed(4))); setWorkerServiceLongitude(Number(position.coords.longitude.toFixed(4))); setWorkerProfileError("") }, () => setWorkerProfileError("We could not read your location. You can still browse jobs without distance sorting."), { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 })
-          }}>{workerServiceLatitude === null ? "Use approximate current location" : "Update my approximate location"}</Button>{workerServiceLatitude !== null && <Button variant="ghost" type="button" onClick={() => { setWorkerServiceLatitude(null); setWorkerServiceLongitude(null) }}>Remove location</Button>}</div><label>Maximum travel distance (km)<input type="number" min={1} max={250} step={1} value={workerTravelDistance} onChange={(event) => setWorkerTravelDistance(event.target.value)} /></label><small>Choose from 1 to 250 km. Distance is used to rank jobs and filter your feed.</small></div>
+          }}>{workerServiceLatitude === null? "Use approximate current location" : "Update my approximate location"}</Button>{workerServiceLatitude !== null && <Button variant="ghost" type="button" onClick={() => { setWorkerServiceLatitude(null); setWorkerServiceLongitude(null) }}>Remove location</Button>}</div><label>Maximum travel distance (km)<input type="number" min={1} max={250} step={1} value={workerTravelDistance} onChange={(event) => setWorkerTravelDistance(event.target.value)} /></label><small>Choose from 1 to 250 km. Distance is used to rank jobs and filter your feed.</small></div>
           <label>About me and my experience<textarea rows={5} value={workerBio} maxLength={2000} onChange={(event) => setWorkerBio(event.target.value)} placeholder="Describe your skills, experience, and how you work." /></label>
           {workerProfileError && <p className="form-error" role="alert">{workerProfileError}</p>}
           {workerProfileNotice && <p className="form-success" role="status">{workerProfileNotice}</p>}
-          <Button disabled={workerProfileSaving || !workerName.trim() || !workerProfile || Number(workerTravelDistance) < 1 || Number(workerTravelDistance) > 250 || !Number.isInteger(Number(workerTravelDistance)) || (workerName.trim() === workerProfile.publicName && workerRegion.trim() === workerProfile.region && workerBio.trim() === workerProfile.bio && workerServiceLatitude === (workerProfile.serviceLatitude ?? null) && workerServiceLongitude === (workerProfile.serviceLongitude ?? null) && Number(workerTravelDistance) === (workerProfile.maxTravelDistanceKm ?? 25))} onClick={() => void saveWorkerProfile()}>{workerProfileSaving ? "Saving…" : "Save my profile"}</Button>
+          <Button disabled={workerProfileSaving || !workerName.trim() || !workerProfile || Number(workerTravelDistance) < 1 || Number(workerTravelDistance) > 250 || !Number.isInteger(Number(workerTravelDistance)) || (workerName.trim() === workerProfile.publicName && workerRegion.trim() === workerProfile.region && workerBio.trim() === workerProfile.bio && workerServiceLatitude === (workerProfile.serviceLatitude ?? null) && workerServiceLongitude === (workerProfile.serviceLongitude ?? null) && Number(workerTravelDistance) === (workerProfile.maxTravelDistanceKm ?? 25))} onClick={() => void saveWorkerProfile()}>{workerProfileSaving? "Saving…" : "Save my profile"}</Button>
         </>}
       </section>}
       <section className="card setting-card account-settings-card">
-        <h2>{isAdmin ? "Admin profile" : "Account profile"}</h2>
+        <h2>{isAdmin? "Admin profile" : "Account profile"}</h2>
         <label>Profile photo<div className="account-avatar-edit"><Avatar src={avatarPreview || auth.getProfileAvatarUrl(auth.profile?.avatarPath)} name={displayName || "Your profile"} /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} /></div><small>JPG, PNG, or WebP; up to 2 MB.</small></label>
         <label>Display name<input value={displayName} maxLength={120} onChange={(event) => setDisplayName(event.target.value)} /></label>
-        {profileMessage && <p className={profileMessage.startsWith("Your account") ? "form-success" : "form-error"} role="status">{profileMessage}</p>}
-        <div className="card-actions"><Button disabled={profileBusy || !displayName.trim() || (displayName.trim() === auth.profile?.displayName && !avatarFile)} onClick={() => void saveProfile()}>{profileBusy ? "Saving…" : "Save profile"}</Button>{!isAdmin && auth.profile?.roles.includes("consumer") && <Button variant="secondary" onClick={() => go("identityVerification")}>Hirer ID verification</Button>}{!isAdmin && auth.profile?.roles.includes("provider") && <Button variant="secondary" onClick={() => go("providerVerification")}>Worker ID verification</Button>}</div>
+        {profileMessage && <p className={profileMessage.startsWith("Your account")? "form-success" : "form-error"} role="status">{profileMessage}</p>}
+        <div className="card-actions"><Button disabled={profileBusy || !displayName.trim() || (displayName.trim() === auth.profile?.displayName && !avatarFile)} onClick={() => void saveProfile()}>{profileBusy? "Saving…" : "Save profile"}</Button>{!isAdmin && auth.profile?.roles.includes("consumer") && <Button variant="secondary" onClick={() => go("identityVerification")}>Hirer ID verification</Button>}{!isAdmin && auth.profile?.roles.includes("provider") && <Button variant="secondary" onClick={() => go("providerVerification")}>Worker ID verification</Button>}</div>
       </section>
       {isAdmin && <>
         <section className="card setting-card account-settings-card">
@@ -1486,18 +1523,18 @@ function Settings({ go }: { go: (s: Screen) => void }) {
           <p className="caption">Set a strong password that you do not use on other sites.</p>
           <label>New password<input type="password" autoComplete="new-password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
           <label>Confirm new password<input type="password" autoComplete="new-password" minLength={8} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
-          {passwordMessage && <p className={passwordMessage.includes("successfully") ? "form-success" : "form-error"} role="status">{passwordMessage}</p>}
-          <Button disabled={passwordBusy || newPassword.length < 8 || !confirmPassword} onClick={() => void savePassword()}>{passwordBusy ? "Updating…" : "Update password"}</Button>
+          {passwordMessage && <p className={passwordMessage.includes("successfully")? "form-success" : "form-error"} role="status">{passwordMessage}</p>}
+          <Button disabled={passwordBusy || newPassword.length < 8 || !confirmPassword} onClick={() => void savePassword()}>{passwordBusy? "Updating…" : "Update password"}</Button>
         </section>
         <section className="card setting-card account-settings-card">
           <h2>Admin access</h2>
           <div className="setting-line"><span>Workspace roles</span><strong>{auth.profile?.roles.join(", ") || "—"}</strong></div>
-          <div className="setting-line"><span>Account status</span><Badge tone={auth.profile?.status === "active" ? "green" : "amber"}>{auth.profile?.status ?? "Unknown"}</Badge></div>
+          <div className="setting-line"><span>Account status</span><Badge tone={auth.profile?.status === "active"? "green" : "amber"}>{auth.profile?.status ?? "Unknown"}</Badge></div>
           <p className="caption">Identity document reviews are handled from Verification. In-app alerts are available from the notification bell; email and push delivery are not configured.</p>
         </section>
         <section className="card table-card account-settings-card">
           <div className="section-title"><div><h2>Recent admin activity</h2><p className="caption">Latest actions recorded for this account.</p></div></div>
-          {adminActivity.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Action</th><th>Time</th></tr></thead><tbody>{adminActivity.map((event, index) => <tr key={event.id}><td>{index + 1}</td><td>{event.action.replaceAll("_", " ").replaceAll(".", " · ")}</td><td>{new Date(event.createdAt).toLocaleString()}</td></tr>)}</tbody></table></div> : <p className="caption">No recent admin actions found.</p>}
+          {adminActivity.length? <div className="table-wrap"><table><thead><tr><th>#</th><th>Action</th><th>Time</th></tr></thead><tbody>{adminActivity.map((event, index) => <tr key={event.id}><td>{index + 1}</td><td>{event.action.replaceAll("_", " ").replaceAll(".", " · ")}</td><td>{new Date(event.createdAt).toLocaleString()}</td></tr>)}</tbody></table></div> : <p className="caption">No recent admin actions found.</p>}
         </section>
       </>}
     </div>

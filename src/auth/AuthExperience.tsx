@@ -26,6 +26,12 @@ type AuthExperienceProps = {
 
   initialStage: AuthStage
 
+  initialIdentifier?: string
+
+  adminInvitationSignup?: boolean
+
+  adminInvitationRedirectUrl?: string
+
   chooseWorkspace: (role: Role) => void
 
   changeWorkspace: () => void
@@ -63,6 +69,12 @@ export default function AuthExperience({
 
   initialStage,
 
+  initialIdentifier = "",
+
+  adminInvitationSignup = false,
+
+  adminInvitationRedirectUrl,
+
   chooseWorkspace,
 
   changeWorkspace,
@@ -76,7 +88,7 @@ export default function AuthExperience({
 
   const [name, setName] = useState("")
 
-  const [identifier, setIdentifier] = useState("")
+  const [identifier, setIdentifier] = useState(initialIdentifier)
 
   const [activeIdentifier, setActiveIdentifier] = useState("")
 
@@ -137,7 +149,7 @@ export default function AuthExperience({
 
   const selectedRole = initialRole ?? "consumer"
 
-  const canRegister = !["admin", "support", "partner"].includes(selectedRole)
+  const canRegister = adminInvitationSignup || !["admin", "support", "partner"].includes(selectedRole)
   const accountRoleMismatch = Boolean(
     initialRole &&
     auth.profile &&
@@ -188,8 +200,8 @@ export default function AuthExperience({
 
     const contact = identify(identifier)
 
-    if (!contact) {
-      setError("Enter a valid email address or Kenyan mobile number.")
+    if (!contact || (adminInvitationSignup && contact.method !== "email")) {
+      setError(adminInvitationSignup ? "Use the invited email address to create your administrator account." : "Enter a valid email address or Kenyan mobile number.")
 
       return
     }
@@ -234,8 +246,8 @@ export default function AuthExperience({
       return
     }
 
-    if (!contact) {
-      setError("Enter a valid email address or Kenyan mobile number.")
+    if (!contact || (adminInvitationSignup && contact.method !== "email")) {
+      setError(adminInvitationSignup ? "Use the invited email address to create your administrator account." : "Enter a valid email address or Kenyan mobile number.")
 
       return
     }
@@ -275,6 +287,8 @@ export default function AuthExperience({
         name.trim(),
 
         intent,
+
+        adminInvitationSignup ? adminInvitationRedirectUrl : undefined,
       )
 
       if (result.error) {
@@ -345,8 +359,8 @@ export default function AuthExperience({
       return
     }
 
-    if (!contact) {
-      setError("Enter a valid email address or Kenyan mobile number.")
+    if (!contact || (adminInvitationSignup && contact.method !== "email")) {
+      setError(adminInvitationSignup ? "Use the invited email address to create your administrator account." : "Enter a valid email address or Kenyan mobile number.")
 
       return
     }
@@ -369,6 +383,10 @@ export default function AuthExperience({
           displayName: name.trim(),
 
           intent,
+
+          ...(adminInvitationSignup && adminInvitationRedirectUrl
+            ? { emailRedirectTo: adminInvitationRedirectUrl }
+            : {}),
         },
       )
 
@@ -705,6 +723,7 @@ export default function AuthExperience({
           )}
         </div>
         <div className="auth-form-card">
+          {adminInvitationSignup && <div className="admin-invite-auth-note"><strong>Admin account invitation</strong><span>Sign up or sign in using the invited email{initialIdentifier ? `: ${initialIdentifier}` : " address"}. Admin access activates after the one-time link is validated.</span></div>}
           {["login", "role", "signup"].includes(stage) && (
             <button type="button" className="auth-back auth-home-link" onClick={goHome}>
               ← OddJobs home
@@ -969,7 +988,8 @@ export default function AuthExperience({
                   Continue with Apple
                 </button>
               </div></>}
-              {canRegister && (
+              {adminInvitationSignup && initialRole === "admin" && <div className="auth-signup-links"><button type="button" className="auth-text-button" onClick={() => startSignup("customer")}>Create an admin account <span aria-hidden="true">→</span></button></div>}
+              {canRegister && !adminInvitationSignup && (
                 <div className="auth-signup-links">
                   {initialRole === "consumer" && <p>
                     Don’t have an account?{" "}
@@ -1009,28 +1029,28 @@ export default function AuthExperience({
               >
                 Use a one-time code instead
               </button>}
-              {initialRole === "admin" && <p className="auth-inline-note">Staff accounts are provisioned by an OddJobs administrator.</p>}
+              {initialRole === "admin" && <p className="auth-inline-note">{adminInvitationSignup ? "Sign in with the invited email address. The one-time link grants admin access after verification." : "Staff accounts are provisioned by an OddJobs administrator."}</p>}
             </>
           )}
 
           {stage === "signup" && (
             <>
               <button type="button" className="auth-back" onClick={backToLogin}>
-                ← Back to login
+                {adminInvitationSignup ? "Already have an account? Sign in" : "← Back to login"}
               </button>
               <p className="auth-accent-line" />
               <h1>
-                {intent === "supplier"
+                {adminInvitationSignup ? "Create your admin account" : intent === "supplier"
                   ? "Create a worker account"
                   : "Create your account"}
               </h1>
               <p className="auth-subtitle">
-                {intent === "supplier"
+                {adminInvitationSignup ? "Create your account with the email address on your invitation. Your assigned admin access activates after you verify your email and redeem the one-time link." : intent === "supplier"
                   ? "Create a worker account to browse jobs and submit bids. Your separate service profile helps hirers review your skills; you can publish up to ten profiles while ID review is pending, and unlimited profiles after approval."
                   : "Create a hirer account to post jobs, compare worker bids, and choose who does the work."}
               </p>
               <p className="auth-inline-note">
-                {intent === "supplier" ? "Worker workspace access starts after registration. Submit your ID for review when you reach ten service profiles; approval removes the profile limit." : "Hirer accounts post jobs and review bids. To do paid work, create a separate worker account."}
+                {adminInvitationSignup ? "Creating this account alone does not grant admin access. The invitation is checked against your verified account email and can only be used once." : intent === "supplier" ? "Worker workspace access starts after registration. Submit your ID for review when you reach ten service profiles; approval removes the profile limit." : "Hirer accounts post jobs and review bids. To do paid work, create a separate worker account."}
               </p>
               <form className="auth-form" onSubmit={handleSignup}>
                 <label className="auth-field">
@@ -1044,13 +1064,13 @@ export default function AuthExperience({
                   />
                 </label>
                 <label className="auth-field">
-                  <span>Email address or phone number</span>
+                  <span>{adminInvitationSignup ? "Invited email address" : "Email address or phone number"}</span>
                   <input
-                    type="text"
+                    type={adminInvitationSignup ? "email" : "text"}
                     value={identifier}
                     onChange={(event) => setIdentifier(event.target.value)}
                     autoComplete="username"
-                    placeholder="Email Address or Phone Number"
+                    placeholder={adminInvitationSignup ? "Enter the email that received this link" : "Email Address or Phone Number"}
                     required
                   />
                 </label>
@@ -1108,7 +1128,9 @@ export default function AuthExperience({
                 <button className="auth-submit" disabled={busy}>
                   {busy
                     ? "Creating account..."
-                    : intent === "supplier"
+                    : adminInvitationSignup
+                      ? "Create admin account"
+                      : intent === "supplier"
                       ? "Create worker account"
                       : "Create hirer account"}
                 </button>
@@ -1143,9 +1165,9 @@ export default function AuthExperience({
                 ← Back to password signup
               </button>
               <p className="auth-accent-line" />
-              <h1>Sign up with a code</h1>
+              <h1>{adminInvitationSignup ? "Create admin account with a code" : "Sign up with a code"}</h1>
               <p className="auth-subtitle">
-                We’ll send a one-time verification code to your email or phone.
+                {adminInvitationSignup ? "We’ll send a verification code to the invited email address. Admin access activates after the invitation is validated." : "We’ll send a one-time verification code to your email or phone."}
               </p>
               <form className="auth-form" onSubmit={handleOtpSignup}>
                 <label className="auth-field">
@@ -1159,13 +1181,13 @@ export default function AuthExperience({
                   />
                 </label>
                 <label className="auth-field">
-                  <span>Email address or phone number</span>
+                  <span>{adminInvitationSignup ? "Invited email address" : "Email address or phone number"}</span>
                   <input
-                    type="text"
+                    type={adminInvitationSignup ? "email" : "text"}
                     value={identifier}
                     onChange={(event) => setIdentifier(event.target.value)}
                     autoComplete="username"
-                    placeholder="Email Address or Phone Number"
+                    placeholder={adminInvitationSignup ? "Enter the email that received this link" : "Email Address or Phone Number"}
                     required
                   />
                 </label>
@@ -1208,7 +1230,7 @@ export default function AuthExperience({
                   </div>
                 </div>
                 <button className="auth-submit" disabled={busy}>
-                  {busy ? "Sending code..." : "Send verification code"}
+                  {busy ? "Sending code..." : adminInvitationSignup ? "Create admin account" : "Send verification code"}
                 </button>
               </form>
             </>

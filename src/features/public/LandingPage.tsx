@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import type { Role } from "../../demo/model"
+import { SponsoredAd } from "../../shared/components/WorkspaceUi"
 import "./landing.css"
 
 function Mark({ name, size = 20 }: { name: string; size?: number }) {
@@ -95,6 +96,8 @@ export default function LandingPage({ onSignIn, onLogin }: { onSignIn: () => voi
           </div>
         </div>
       </section>
+
+      <section className="landing-section landing-ad-section" aria-label="Sponsored offers"><div className="landing-container"><div className="landing-ad-heading"><span className="landing-eyebrow">Offers from our partners</span><h2>Useful services for your next job.</h2></div><SponsoredAd placement="customer_landing" /></div></section>
 
       <section className="landing-section landing-audiences">
         <div className="landing-container">

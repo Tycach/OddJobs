@@ -80,7 +80,7 @@ export default function Notifications({ onOpenJob, role = "consumer" }: { onOpen
               <td>{index + 1}</td>
               <td><strong>{item.title}</strong><br /><small>{item.body}</small></td>
               <td>{new Date(item.createdAt).toLocaleString()}</td>
-              <td>{item.readAt ? "Read" : "New"}</td>
+              <td>{item.title.includes("reminder closed") ? "No action needed" : item.readAt ? "Read" : "New"}</td>
               <td><Button variant="ghost" onClick={() => setSelected(item)}>View details</Button></td>
             </tr>)}
             {loading && !items.length && <tr><td colSpan={5}>Loading notifications…</td></tr>}
@@ -92,7 +92,7 @@ export default function Notifications({ onOpenJob, role = "consumer" }: { onOpen
     </section>
     {selected && <div className="notification-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null) }}>
       <section className="notification-modal" role="dialog" aria-modal="true" aria-labelledby="notification-title">
-        <div className="notification-modal-heading"><div><span className="eyebrow">{selected.readAt ? "Notification" : "New notification"}</span><h2 id="notification-title">{selected.title}</h2></div><button className="notification-modal-close" aria-label="Close details" onClick={() => setSelected(null)}>×</button></div>
+        <div className="notification-modal-heading"><div><span className="eyebrow">{selected.title.includes("reminder closed") ? "Closed reminder" : selected.readAt ? "Notification" : "New notification"}</span><h2 id="notification-title">{selected.title}</h2></div><button className="notification-modal-close" aria-label="Close details" onClick={() => setSelected(null)}>×</button></div>
         <p>{selected.body}</p>
         <small>{new Date(selected.createdAt).toLocaleString()}</small>
         <div className="card-actions">

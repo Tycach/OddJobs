@@ -105,14 +105,14 @@ function adminAreaForRequest(request: FastifyRequest) {
 }
 
 const adminScreensByRole: Record<AdminMemberRole, string[]> = {
-  OWNER: ["overview", "analytics", "monitoring", "team", "users", "verification", "categories", "moderation", "adApprovals", "audit", "payments", "operations", "messages", "config"],
-  ADMIN: ["overview", "analytics", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "audit", "payments", "operations", "messages", "config"],
-  OPERATIONS_ADMIN: ["overview", "analytics", "monitoring", "moderation", "operations"],
-  VERIFICATION_REVIEWER: ["overview", "verification"],
-  MODERATION_REVIEWER: ["overview", "moderation", "operations"],
-  SUPPORT_AGENT: ["overview", "messages", "operations"],
-  FINANCE_REVIEWER: ["overview", "analytics", "payments", "audit"],
-  ANALYST: ["overview", "analytics", "monitoring", "audit"],
+  OWNER: ["overview", "actionCenter", "analytics", "monitoring", "team", "users", "verification", "categories", "moderation", "adApprovals", "audit", "payments", "operations", "messages", "config"],
+  ADMIN: ["overview", "actionCenter", "analytics", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "audit", "payments", "operations", "messages", "config"],
+  OPERATIONS_ADMIN: ["overview", "actionCenter", "analytics", "monitoring", "moderation", "operations"],
+  VERIFICATION_REVIEWER: ["overview", "actionCenter", "verification"],
+  MODERATION_REVIEWER: ["overview", "actionCenter", "moderation", "operations"],
+  SUPPORT_AGENT: ["overview", "actionCenter", "messages", "operations"],
+  FINANCE_REVIEWER: ["overview", "actionCenter", "analytics", "payments", "audit"],
+  ANALYST: ["overview", "actionCenter", "analytics", "monitoring", "audit"],
 }
 
 declare module "fastify" {
@@ -158,9 +158,6 @@ export async function buildApp({
 
   logger,
 }: BuildAppOptions): Promise<FastifyInstance> {
-  const supabaseAdmin = config.supabaseUrl && config.supabaseSecretKey
-    ? createClient(config.supabaseUrl, config.supabaseSecretKey, { auth: { autoRefreshToken: false, persistSession: false } })
-    : null
   const requestStorage = (request: FastifyRequest) => {
     const authorization = request.headers.authorization
     if (!config.supabaseUrl || !config.supabaseApiKey || !authorization) return null
@@ -376,8 +373,8 @@ export async function buildApp({
     const role = assignedRole ?? "OWNER"
     const area = adminAreaForRequest(request)
     const permissions = adminRolePermissions[role]
-    if (area === "team" && role !== "OWNER") {
-      return reply.code(403).send({ error: "Only an owner can manage admin invitations and access." })
+    if (area === "team" && assignedRole != null) {
+      return reply.code(403).send({ error: "Only the legacy super admin can manage admin invitations and access." })
     }
     if (area === "monitoring_manage" && !["OWNER", "ADMIN", "OPERATIONS_ADMIN"].includes(role)) {
       return reply.code(403).send({ error: "You do not have permission to manage monitoring alerts." })
@@ -495,7 +492,10 @@ export async function buildApp({
     type: "object",
     additionalProperties: false,
     required: ["note"],
-    properties: { note: { type: "string", minLength: 10, maxLength: 5000 } },
+    properties: {
+      note: { type: "string", minLength: 10, maxLength: 5000 },
+      media: { type: "array", maxItems: 7, items: { type: "object", required: ["path", "contentType", "size"], additionalProperties: false, properties: { path: { type: "string", maxLength: 300 }, contentType: { type: "string", maxLength: 100 }, size: { type: "integer", minimum: 1, maximum: 6291456 } } } },
+    },
   } as const
 
   const marketplaceRevisionInputSchema = {
@@ -534,6 +534,7 @@ export async function buildApp({
       "createdAt",
       "updatedAt",
       "quoteCount",
+      "completionMedia",
     ],
     properties: {
       id: { type: "string", format: "uuid" },
@@ -570,6 +571,7 @@ export async function buildApp({
       shareExactLocationWithProvider: { type: "boolean" },
       distanceKm: { type: "number", nullable: true },
       completionNote: { type: "string", nullable: true },
+      completionMedia: { type: "array", items: { type: "object", required: ["path", "contentType", "size"], properties: { path: { type: "string" }, contentType: { type: "string" }, size: { type: "integer" } } } },
       revisionNote: { type: "string", nullable: true },
       media: { type: "array", items: { type: "object", required: ["path", "contentType", "size"], properties: { path: { type: "string" }, contentType: { type: "string" }, size: { type: "integer" } } } },
       createdAt: { type: "string", format: "date-time" },
@@ -1381,6 +1383,14 @@ export async function buildApp({
     },
   )
 
+  app.get("/v1/jobs/:jobId/hirer-summary", { preHandler: requireMarketplaceRole("provider"), schema: { params: marketplacePathParamsSchema, querystring: { type: "object", required: ["role"], additionalProperties: false, properties: { role: { type: "string", enum: ["provider"] } } } } }, async (request, reply) => {
+    if (!marketplaceStore?.getJobHirerSummary || !request.authPrincipal) return reply.code(503).send({ error: "Hirer details are unavailable." })
+    const summary = await marketplaceStore.getJobHirerSummary(request.authPrincipal.id, (request.params as { jobId: string }).jobId)
+    if (!summary) return reply.code(404).send({ error: "Hirer details are unavailable for this job." })
+    reply.header("Cache-Control", "no-store")
+    return summary
+  })
+
   app.post(
     "/v1/jobs/:jobId/quotes",
     {
@@ -1582,6 +1592,7 @@ export async function buildApp({
           ...(transition === "submit_completion" ? { body: marketplaceCompletionInputSchema } : transition === "request_revision" ? { body: marketplaceRevisionInputSchema } : {}),
           response: {
             200: marketplaceJobResponseSchema,
+            400: marketplaceErrorSchema,
             404: marketplaceErrorSchema,
             409: marketplaceErrorSchema,
             503: marketplaceErrorSchema,
@@ -1597,8 +1608,23 @@ export async function buildApp({
 
         const { jobId } = request.params as { jobId: string }
         const details = transition === "submit_completion" || transition === "request_revision"
-          ? request.body as { note: string }
+          ? request.body as { note: string; media?: import("./auth/types.js").ServiceListingMedia[] }
           : undefined
+        if (transition === "submit_completion" && details && request.authPrincipal) {
+          const media = details.media ?? []
+          const paths = new Set<string>()
+          const imageCount = media.filter((item) => item.contentType.startsWith("image/")).length
+          const videoCount = media.filter((item) => item.contentType.startsWith("video/")).length
+          const validMime = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"])
+          const invalid = media.length > 7 || imageCount > 6 || videoCount > 1 || media.some((item) => {
+            const parts = item.path.split("/")
+            const ownsPath = parts.length === 2 && parts[0] === request.authPrincipal?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{1,10}$/i.test(parts[1] ?? "")
+            const duplicate = paths.has(item.path)
+            paths.add(item.path)
+            return !ownsPath || duplicate || !validMime.has(item.contentType) || item.size > 6 * 1024 * 1024
+          })
+          if (invalid) return reply.code(400).send({ error: "Attach up to six photos and one video, each 6 MB or smaller, uploaded to your account." })
+        }
         try {
           const job = await marketplaceStore.transitionJob(
             request.authPrincipal.id,
@@ -1910,9 +1936,13 @@ export async function buildApp({
     { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }] } },
     async (request, reply) => {
       if (!request.authPrincipal || !adminStore) return reply.code(503).send({ error: "Admin access is unavailable." })
-      const role = await adminStore.getAdminMemberRole?.(request.authPrincipal.id) ?? "OWNER"
+      const assignedRole = await adminStore.getAdminMemberRole?.(request.authPrincipal.id)
+      const role = assignedRole ?? "OWNER"
       reply.header("Cache-Control", "no-store")
-      return { role, screens: adminScreensByRole[role] }
+      const screens = role === "OWNER" && assignedRole != null
+        ? adminScreensByRole[role].filter((screen) => screen !== "team")
+        : adminScreensByRole[role]
+      return { role, screens }
     },
   )
 
@@ -1944,52 +1974,20 @@ export async function buildApp({
     },
     async (request, reply) => {
       if (!adminStore?.createAdminInvitation || !request.authPrincipal) return reply.code(503).send({ error: "Admin invitations are unavailable." })
-      if (!supabaseAdmin) return reply.code(503).send({ error: "Admin invitations need the server-side Supabase service key." })
       const body = request.body as { email: string; role: AdminMemberRole }
       const invitationId = randomUUID()
       const token = randomBytes(32).toString("base64url")
       const tokenHash = createHash("sha256").update(token).digest("hex")
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000)
       try {
         const invitation = await adminStore.createAdminInvitation({
           id: invitationId, email: body.email, role: body.role, tokenHash, invitedBy: request.authPrincipal.id, expiresAt,
         })
-        const redirect = new URL("/consumer/adminInviteAccept", config.webOrigin)
-        redirect.searchParams.set("invitationId", invitationId)
-        redirect.searchParams.set("token", token)
-        const { error } = await supabaseAdmin.auth.admin.inviteUserByEmail(invitation.email, {
-          redirectTo: redirect.toString(),
-          data: { admin_invitation_id: invitationId },
-        })
-        if (error) {
-          await adminStore.revokeAdminInvitation?.(invitationId, request.authPrincipal.id)
-          const providerError = error as { code?: string; status?: number; message?: string }
-          const providerCode = providerError.code ?? "unknown"
-          const detail = (providerError.message ?? "").toLowerCase()
-          app.log.warn({ providerCode, providerStatus: providerError.status }, "Supabase rejected an administrator invitation")
-          if (/redirect|redirect_to|not allowed/.test(detail)) {
-            return reply.code(400).send({ error: `Supabase rejected the invitation redirect. Add ${redirect.origin}/consumer/adminInviteAccept to Authentication > URL Configuration > Redirect URLs, then retry.` })
-          }
-          if (/already registered|already exists|user already/.test(detail)) {
-            return reply.code(409).send({ error: "That email already has a Supabase account, and Supabase cannot send a new-account invitation to it. Use a new email address for this invitation." })
-          }
-          if (/rate limit|too many|email.*limit/.test(detail) || providerError.status === 429) {
-            return reply.code(429).send({ error: "Supabase’s email rate limit was reached. Wait before sending another administrator invitation." })
-          }
-          if (providerError.status === 401 || providerError.status === 403) {
-            return reply.code(503).send({ error: "Supabase rejected the server admin key. Check SUPABASE_SECRET_KEY in the API environment and restart the API." })
-          }
-          if (/email|smtp|mail/.test(detail)) {
-            return reply.code(502).send({ error: "Supabase could not deliver the invitation email. Check Authentication > SMTP Settings and the Supabase Auth email logs." })
-          }
-          return reply.code(502).send({ error: `Supabase could not send the invitation (provider code: ${providerCode}). Check Authentication > URL Configuration and Auth email logs.` })
-        }
-        await adminStore.recordAdminAuditEvent({
-          actorUserId: request.authPrincipal.id, action: "admin.invitation.sent", targetType: "admin_invitation",
-          targetId: invitationId, metadata: { email: invitation.email, role: invitation.role }, requestId: request.id,
-        })
+        const inviteUrl = new URL("/consumer/adminInviteAccept", config.webOrigin)
+        inviteUrl.hash = new URLSearchParams({ invitationId, token, email: invitation.email }).toString()
         reply.header("Cache-Control", "no-store")
-        return reply.code(201).send(invitation)
+        reply.header("Referrer-Policy", "no-referrer")
+        return reply.code(201).send({ ...invitation, inviteUrl: inviteUrl.toString() })
       } catch (error) {
         if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
         throw error
@@ -2214,7 +2212,7 @@ export async function buildApp({
     },
 
     async (request, reply) => {
-      if (!adminStore) {
+      if (!adminStore || !request.authPrincipal) {
         return reply
           .code(503)
           .send({ error: "Admin data storage is unavailable." })
@@ -2222,7 +2220,11 @@ export async function buildApp({
 
       reply.header("Cache-Control", "no-store")
 
+      const actorUserId = request.authPrincipal.id
+
       const overview: AdminOverview = await adminStore.getAdminOverview()
+
+      await adminStore.recordAdminAuditEvent({ actorUserId, action: "admin.overview.read", targetType: "marketplace_overview", targetId: null, metadata: {}, requestId: request.id })
 
       return overview
     },
@@ -2280,6 +2282,8 @@ export async function buildApp({
 
       const page: AdminPage<AdminVerificationSummary> =
         await adminStore.listAdminVerifications(status, limit, offset)
+
+      await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.verification.read", targetType: "provider_profile", targetId: null, metadata: { status, limit, offset }, requestId: request.id })
 
       return page
     },
@@ -2972,6 +2976,8 @@ export async function buildApp({
 
       reply.header("Cache-Control", "no-store")
 
+      await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.users.read", targetType: "user", targetId: null, metadata: { limit, offset, hasFilters: Boolean(search || action || from || to) }, requestId: request.id })
+
       return adminStore.listAdminUsers(limit, offset)
     },
   )
@@ -3093,6 +3099,7 @@ export async function buildApp({
 
       const { limit, offset } = request.query
       reply.header("Cache-Control", "no-store")
+      await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.marketplace_activity.read", targetType: "marketplace_activity", targetId: null, metadata: { limit, offset }, requestId: request.id })
       return adminStore.listAdminMarketplaceActivity(limit, offset)
     },
   )
@@ -3152,10 +3159,10 @@ export async function buildApp({
     }
   })
 
-  app.get("/v1/admin/payments", { preHandler: requireAdmin, schema: { querystring: { type: "object", additionalProperties: false, properties: { search: { type: "string", maxLength: 160, default: "" }, status: { type: "string", enum: ["all", "awaiting_payment", "reported", "paid", "disputed", "refunded"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 100, default: 25 }, offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 } } } } }, async (request, reply) => {
+  app.get("/v1/admin/payments", { preHandler: requireAdmin, schema: { querystring: { type: "object", additionalProperties: false, properties: { search: { type: "string", maxLength: 160, default: "" }, status: { type: "string", enum: ["all", "awaiting_payment", "reported", "paid", "disputed", "refunded"], default: "all" }, commissionStatus: { type: "string", enum: ["all", "due", "reported", "received", "disputed", "needs_correction", "overdue"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 100, default: 25 }, offset: { type: "integer", minimum: 0, maximum: 100000, default: 0 } } } } }, async (request, reply) => {
     if (!adminStore?.listAdminJobPayments) return reply.code(503).send({ error: "Admin payment reporting is unavailable." })
-    const query = request.query as { search?: string; status?: import("./auth/types.js").JobPaymentStatus | "all"; limit?: number; offset?: number }
-    const page = await adminStore.listAdminJobPayments(query.search ?? "", query.status ?? "all", query.limit ?? 25, query.offset ?? 0)
+    const query = request.query as { search?: string; status?: import("./auth/types.js").JobPaymentStatus | "all"; commissionStatus?: import("./auth/types.js").AdminCommissionFilter; limit?: number; offset?: number }
+    const page = await adminStore.listAdminJobPayments(query.search ?? "", query.status ?? "all", query.commissionStatus ?? "all", query.limit ?? 25, query.offset ?? 0)
     reply.header("Cache-Control", "no-store")
     return page
   })
@@ -3178,6 +3185,36 @@ export async function buildApp({
     if (!payment) return reply.code(404).send({ error: "A hirer-reported platform fee awaiting admin confirmation could not be found." })
     reply.header("Cache-Control", "no-store")
     return payment
+  })
+
+  app.post("/v1/admin/payments/:paymentId/platform-fee/correction", { preHandler: requireAdmin, schema: { params: { type: "object", required: ["paymentId"], additionalProperties: false, properties: { paymentId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["reason"], additionalProperties: false, properties: { reason: { type: "string", minLength: 10, maxLength: 1000, pattern: "\\S" } } } } }, async (request, reply) => {
+    if (!adminStore?.requestAdminPlatformFeeCorrection || !request.authPrincipal) return reply.code(503).send({ error: "Commission correction requests are unavailable." })
+    const { paymentId } = request.params as { paymentId: string }
+    const { reason } = request.body as { reason: string }
+    try {
+      const payment = await adminStore.requestAdminPlatformFeeCorrection({ actorUserId: request.authPrincipal.id, paymentId, reason, requestId: request.id })
+      if (!payment) return reply.code(404).send({ error: "A reported commission awaiting review could not be found." })
+      reply.header("Cache-Control", "no-store")
+      return payment
+    } catch (error) {
+      if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post("/v1/admin/payments/:paymentId/platform-fee/remind", { preHandler: requireAdmin, schema: { params: { type: "object", required: ["paymentId"], additionalProperties: false, properties: { paymentId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["note"], additionalProperties: false, properties: { note: { type: "string", maxLength: 500 } } } } }, async (request, reply) => {
+    if (!adminStore?.sendAdminPlatformFeeReminder || !request.authPrincipal) return reply.code(503).send({ error: "Manual commission reminders are unavailable." })
+    const { paymentId } = request.params as { paymentId: string }
+    const { note } = request.body as { note: string }
+    try {
+      const payment = await adminStore.sendAdminPlatformFeeReminder({ actorUserId: request.authPrincipal.id, paymentId, note, requestId: request.id })
+      if (!payment) return reply.code(404).send({ error: "A commission requiring payment could not be found." })
+      reply.header("Cache-Control", "no-store")
+      return payment
+    } catch (error) {
+      if (error instanceof MarketplaceConflictError) return reply.code(409).send({ error: error.message })
+      throw error
+    }
   })
 
   app.patch("/v1/admin/providers/:providerId/payout-hold", { preHandler: requireAdmin, schema: { params: { type: "object", required: ["providerId"], additionalProperties: false, properties: { providerId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["held", "reason"], additionalProperties: false, properties: { held: { type: "boolean" }, reason: { type: "string", maxLength: 1000 } } } } }, async (request, reply) => {
@@ -3574,7 +3611,7 @@ export async function buildApp({
     "/v1/provider-applications",
 
     {
-      preHandler: requireAuth,
+      preValidation: requireAuth,
 
       schema: {
         tags: ["identity"],
@@ -3694,6 +3731,11 @@ export async function buildApp({
         return reply.code(403).send({ error: "This account is not active." })
       }
 
+      const settings = await adminStore.getAdminSettings()
+      if (!settings.newProviderApplicationsEnabled) {
+        return reply.code(403).send({ error: "New provider applications are currently paused." })
+      }
+
       if (request.body.documentPath && !request.body.documentPath.startsWith(`${request.authPrincipal.id}/`)) {
         return reply.code(400).send({ error: "Upload your own identity document before submitting." })
       }
@@ -3712,13 +3754,6 @@ export async function buildApp({
           request.log.warn({ err: storageError }, "Provider identity document is not available in private storage")
           return reply.code(400).send({ error: "The uploaded identity document could not be found in private storage. Upload it again." })
         }
-      }
-
-      const settings = await adminStore.getAdminSettings()
-      if (!settings.newProviderApplicationsEnabled) {
-        return reply.code(403).send({
-          error: "New provider applications are currently paused.",
-        })
       }
 
       const application = await profileStore.submitProviderApplication(
@@ -3885,6 +3920,10 @@ export async function buildApp({
             description: { type: "string", minLength: 3, maxLength: 500 },
             placement: { type: "string", enum: ["customer_landing", "customer_dashboard"] },
             destinationUrl: { type: "string", format: "uri", maxLength: 2048 },
+            imageUrl: { type: "string", format: "uri", maxLength: 2048 },
+            startAt: { type: "string", format: "date-time" },
+            endAt: { type: "string", format: "date-time" },
+            priceMinor: { type: "integer", minimum: 1, maximum: 1000000000 },
           },
         },
       },
@@ -3895,6 +3934,10 @@ export async function buildApp({
         description: string
         placement: "customer_landing" | "customer_dashboard"
         destinationUrl?: string
+        imageUrl?: string
+        startAt?: string
+        endAt?: string
+        priceMinor?: number
       }
     }>, reply) => {
       if (!adminStore || !profileStore || !request.authPrincipal) {
@@ -3912,6 +3955,11 @@ export async function buildApp({
       if (destinationUrl && new URL(destinationUrl).protocol !== "https:") {
         return reply.code(400).send({ error: "Ad destination links must use HTTPS." })
       }
+      const imageUrl = request.body.imageUrl?.trim() || null
+      if (imageUrl && new URL(imageUrl).protocol !== "https:") return reply.code(400).send({ error: "Ad image links must use HTTPS." })
+      const startAt = request.body.startAt ? new Date(request.body.startAt) : null
+      const endAt = request.body.endAt ? new Date(request.body.endAt) : null
+      if (startAt && endAt && endAt <= startAt) return reply.code(400).send({ error: "The campaign end date must be after its start date." })
       const campaign = await adminStore.createAdCampaign({
         advertiserId: profile.id,
         advertiserName: profile.displayName,
@@ -3919,11 +3967,67 @@ export async function buildApp({
         description: request.body.description.trim(),
         placement: request.body.placement,
         destinationUrl,
+        imageUrl,
+        startAt,
+        endAt,
+        priceMinor: request.body.priceMinor === undefined ? null : BigInt(request.body.priceMinor),
       })
+      await adminStore.recordAdminAuditEvent({ actorUserId: profile.id, action: "ads.campaign.submitted", targetType: "ad_campaign", targetId: campaign.id, metadata: { title: campaign.title, placement: campaign.placement }, requestId: request.id })
       reply.header("Cache-Control", "no-store")
       return reply.code(201).send(campaign)
     },
   )
+
+  app.get("/v1/ads/live", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } }, schema: { querystring: { type: "object", required: ["placement"], additionalProperties: false, properties: { placement: { type: "string", enum: ["customer_landing", "customer_dashboard"] } } } } }, async (request, reply) => {
+    if (!adminStore || !adminStore.listLiveAds) return reply.code(503).send({ error: "Ads are temporarily unavailable." })
+    if (!(await adminStore.getAdminSettings()).adsEnabled) return []
+    reply.header("Cache-Control", "public, max-age=60, stale-while-revalidate=120")
+    return adminStore.listLiveAds((request.query as { placement: string }).placement)
+  })
+
+  app.post("/v1/ads/:campaignId/events", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } }, schema: { params: { type: "object", required: ["campaignId"], additionalProperties: false, properties: { campaignId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["type"], additionalProperties: false, properties: { type: { type: "string", enum: ["impression", "click"] } } } } }, async (request, reply) => {
+    if (!adminStore?.recordAdCampaignEvent) return reply.code(503).send({ error: "Ad activity tracking is unavailable." })
+    if (!(await adminStore.getAdminSettings()).adsEnabled) return reply.code(404).send({ error: "This ad is no longer available." })
+    const saved = await adminStore.recordAdCampaignEvent((request.params as { campaignId: string }).campaignId, (request.body as { type: "impression" | "click" }).type)
+    if (!saved) return reply.code(404).send({ error: "This ad is no longer available." })
+    return reply.code(204).send()
+  })
+
+  app.post("/v1/admin/ads/:campaignId/payment", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ bearerAuth: [] }], params: { type: "object", required: ["campaignId"], additionalProperties: false, properties: { campaignId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["reference"], additionalProperties: false, properties: { reference: { type: "string", minLength: 2, maxLength: 120 } } } } }, async (request, reply) => {
+    if (!adminStore?.markAdCampaignPaid || !request.authPrincipal) return reply.code(503).send({ error: "Campaign payments are unavailable." })
+    const campaign = await adminStore.markAdCampaignPaid({ actorUserId: request.authPrincipal.id, campaignId: (request.params as { campaignId: string }).campaignId, reference: (request.body as { reference: string }).reference.trim(), requestId: request.id })
+    if (!campaign) return reply.code(404).send({ error: "An approved campaign was not found." })
+    reply.header("Cache-Control", "no-store")
+    return campaign
+  })
+
+  app.post("/v1/admin/ads", {
+    preHandler: requireAdmin,
+    schema: {
+      tags: ["admin"], security: [{ bearerAuth: [] }],
+      body: {
+        type: "object", required: ["advertiserName", "title", "description", "placement"], additionalProperties: false,
+        properties: {
+          advertiserName: { type: "string", minLength: 2, maxLength: 120 }, title: { type: "string", minLength: 3, maxLength: 120 }, description: { type: "string", minLength: 3, maxLength: 500 },
+          placement: { type: "string", enum: ["customer_landing", "customer_dashboard"] }, destinationUrl: { type: "string", format: "uri", maxLength: 2048 }, imageUrl: { type: "string", format: "uri", maxLength: 2048 }, startAt: { type: "string", format: "date-time" }, endAt: { type: "string", format: "date-time" }, priceMinor: { type: "integer", minimum: 1, maximum: 1000000000 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    if (!adminStore || !request.authPrincipal) return reply.code(503).send({ error: "Campaign management is unavailable." })
+    const body = request.body as { advertiserName: string; title: string; description: string; placement: "customer_landing" | "customer_dashboard"; destinationUrl?: string; imageUrl?: string; startAt?: string; endAt?: string; priceMinor?: number }
+    const destinationUrl = body.destinationUrl?.trim() || null
+    const imageUrl = body.imageUrl?.trim() || null
+    if (destinationUrl && new URL(destinationUrl).protocol !== "https:") return reply.code(400).send({ error: "Ad destination links must use HTTPS." })
+    if (imageUrl && new URL(imageUrl).protocol !== "https:") return reply.code(400).send({ error: "Ad image links must use HTTPS." })
+    const startAt = body.startAt ? new Date(body.startAt) : null
+    const endAt = body.endAt ? new Date(body.endAt) : null
+    if (startAt && endAt && endAt <= startAt) return reply.code(400).send({ error: "The campaign end date must be after its start date." })
+    const campaign = await adminStore.createAdCampaign({ advertiserId: null, advertiserName: body.advertiserName.trim(), title: body.title.trim(), description: body.description.trim(), placement: body.placement, destinationUrl, imageUrl, startAt, endAt, priceMinor: body.priceMinor === undefined ? null : BigInt(body.priceMinor) })
+    await adminStore.recordAdminAuditEvent({ actorUserId: request.authPrincipal.id, action: "admin.ad.created", targetType: "ad_campaign", targetId: campaign.id, metadata: { title: campaign.title, placement: campaign.placement }, requestId: request.id })
+    reply.header("Cache-Control", "no-store")
+    return reply.code(201).send(campaign)
+  })
 
   app.get(
     "/v1/admin/ads",
@@ -4268,6 +4372,19 @@ export async function buildApp({
         overdueCommissionMinor,
 
         alerts,
+      }
+
+      try {
+        await adminStore.recordAdminMonitoringSnapshot({
+          database: databaseStatus,
+          pendingVerifications,
+          openReports,
+          heapUsedBytes: memory.heapUsed,
+          heapLimitBytes,
+          alerts,
+        })
+      } catch (error) {
+        request.log.warn({ err: error }, "Unable to save monitoring check history")
       }
 
       reply.header("Cache-Control", "no-store")

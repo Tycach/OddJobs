@@ -34,6 +34,30 @@ import type { ReadinessDatabase } from "../src/database.js"
 
 const config = loadConfig({ NODE_ENV: "test" })
 
+const storageTestConfig = {
+  ...config,
+  supabaseUrl: "https://storage.example.supabase.co",
+  supabaseApiKey: "test-publishable-key",
+}
+
+async function withSignedStorageObject<T>(run: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input, init) => {
+    if (String(input).includes("/storage/v1/object/sign/")) {
+      return new Response(JSON.stringify({ signedURL: "https://storage.example.supabase.co/private-object?token=test" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return originalFetch(input, init)
+  }
+  try {
+    return await run()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
 function createDatabase(check: () => Promise<void>): ReadinessDatabase {
   return { check, close: async () => {} }
 }
@@ -48,10 +72,21 @@ const principal: AuthenticatedPrincipal = {
   displayName: "Customer",
 }
 
+const validProviderApplication = {
+  publicName: "Customer Services",
+  bio: "Home repairs and maintenance.",
+  region: "Nairobi",
+  documentType: "national_id",
+  documentPath: `${principal.id}/00000000-0000-4000-8000-000000000001.jpg`,
+  identityDisclosureAccepted: true,
+}
+
 const profile: UserProfile = {
   id: principal.id,
 
   displayName: "Customer",
+
+  avatarPath: null,
 
   status: "active",
 
@@ -72,6 +107,8 @@ const adminProfile: UserProfile = {
   id: adminPrincipal.id,
 
   displayName: "Admin",
+
+  avatarPath: null,
 
   status: "active",
 
@@ -142,7 +179,7 @@ const profileStore: UserProfileStore = {
 
     assert.equal(termsVersion, "2026-11-05-v1")
 
-    assert.equal(privacyVersion, "2026-11-05-v1")
+    assert.equal(privacyVersion, "2026-11-19-v2")
   },
 
   submitProviderApplication: async (userId, application) => {
@@ -161,6 +198,14 @@ const adminUsers: AdminUserSummary[] = [
     status: profile.status,
 
     roles: profile.roles,
+
+    commissionRestricted: false,
+
+    commissionRestrictionReason: null,
+
+    overdueCommissionCount: 0,
+
+    overdueCommissionMinor: 0,
 
     createdAt: "2026-11-09T12:00:00.000Z",
   },
@@ -211,6 +256,8 @@ const moderationReports: AdminModerationReport[] = [
 
     subjectId: adminPrincipal.id,
 
+    jobReference: null,
+
     reason: "harassment",
 
     details: "Reported for testing the moderation workflow.",
@@ -235,6 +282,16 @@ let adminSettings = {
 
 const adminStore: AdminStore = {
   getAdminOverview: async () => adminOverview,
+
+  getAdminAnalytics: async () => ({
+    currency: "KES",
+    categories: [],
+    current: { jobsPosted: 0, jobsWithProposals: 0, hiredJobs: 0, completedJobs: 0, agreedGrossMinor: 0, expectedCommissionMinor: 0, reportedCommissionMinor: 0, verifiedCommissionMinor: 0, overdueCommissionMinor: 0, overdueCommissionCount: 0 },
+    previous: { jobsPosted: 0, hiredJobs: 0, completedJobs: 0, agreedGrossMinor: 0, verifiedCommissionMinor: 0 },
+    series: [],
+    jobs: [],
+    commissions: [],
+  }),
 
   listAdminUsers: async (
     limit,
@@ -313,6 +370,8 @@ const adminStore: AdminStore = {
       ...input,
 
       id: `20000000-0000-4000-8000-${String(moderationReports.length + 1).padStart(12, "0")}`,
+
+      jobReference: null,
 
       status: "open",
 
@@ -407,6 +466,8 @@ const adminStore: AdminStore = {
     const created = {
       id: `30000000-0000-4000-8000-${String(adminCategories.length + 1).padStart(12, "0")}`,
       ...input.category,
+      totalJobs: 0,
+      openJobs: 0,
     }
     adminCategories.push(created)
     return created
@@ -427,6 +488,9 @@ const adminStore: AdminStore = {
       id: `40000000-0000-4000-8000-${String(adminCampaigns.length + 1).padStart(12, "0")}`,
       ...input,
       status: "pending",
+      startAt: input.startAt?.toISOString() ?? null,
+      endAt: input.endAt?.toISOString() ?? null,
+      priceMinor: input.priceMinor == null ? null : Number(input.priceMinor),
       decisionReason: null,
       createdAt: "2026-11-09T12:00:00.000Z",
     }
@@ -455,6 +519,14 @@ const adminStore: AdminStore = {
 
   getAdminMonitoringSnapshot: async () => ({
     pendingVerifications: 2,
+
+    pendingCustomerVerifications: 0,
+
+    openSupportCases: 0,
+
+    overdueCommissionCount: 0,
+
+    overdueCommissionMinor: 0,
 
     openReports: moderationReports.filter((report) =>
       ["open", "reviewing"].includes(report.status),
@@ -555,12 +627,14 @@ function createTestMarketplaceStore(): MarketplaceStore {
       const now = new Date().toISOString()
       job = {
         id: "c2cc0027-b466-45db-a190-c89f981e6328",
+        jobReference: "OJ-0000000001",
         customerId: userId,
         ...input,
         budgetMinor: input.budgetMinor,
         currency: "KES",
         status: "open",
         requestedFor: input.requestedFor ?? null,
+        completionMedia: [],
         createdAt: now,
         updatedAt: now,
         quoteCount: 0,
@@ -1354,9 +1428,7 @@ test("system settings pause provider applications and ad submissions", async () 
     url: "/v1/provider-applications",
     headers: { authorization: "Bearer valid-token" },
     payload: {
-      publicName: "Provider account",
-      bio: "Provides repair services",
-      region: "Nairobi",
+      ...validProviderApplication,
     },
   })
   assert.equal(providerApplication.statusCode, 403)
@@ -1630,7 +1702,7 @@ test("policy consent requires authentication", async () => {
 
 test("supplier applications require an authenticated active profile and do not assign provider roles", async () => {
   const app = await buildApp({
-    config,
+    config: storageTestConfig,
 
     database: null,
 
@@ -1641,21 +1713,15 @@ test("supplier applications require an authenticated active profile and do not a
     adminStore,
   })
 
-  const response = await app.inject({
+  const response = await withSignedStorageObject(() => app.inject({
     method: "POST",
 
     url: "/v1/provider-applications",
 
     headers: { authorization: "Bearer valid-token" },
 
-    payload: {
-      publicName: "  Customer Services  ",
-
-      bio: "  Home repairs and maintenance.  ",
-
-      region: "  Nairobi ",
-    },
-  })
+    payload: { ...validProviderApplication, publicName: "  Customer Services  ", bio: "  Home repairs and maintenance.  ", region: "  Nairobi " },
+  }))
 
   assert.equal(response.statusCode, 201)
 
@@ -1667,6 +1733,10 @@ test("supplier applications require an authenticated active profile and do not a
     region: "Nairobi",
 
     status: "in_review",
+
+    documentType: "national_id",
+
+    documentPath: validProviderApplication.documentPath,
   })
 
   assert.equal(response.headers["cache-control"], "no-store")
@@ -1768,7 +1838,7 @@ test("supplier applications reject blank profile details", async () => {
 
 test("supplier applications are rate limited", async () => {
   const app = await buildApp({
-    config,
+    config: storageTestConfig,
 
     database: null,
 
@@ -1788,21 +1858,17 @@ test("supplier applications are rate limited", async () => {
       headers: { authorization: "Bearer valid-token" },
 
       payload: {
-        publicName: "Customer Services",
-
-        bio: "Home repairs and maintenance.",
-
-        region: "Nairobi",
+        ...validProviderApplication,
       },
     })
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const response = await submit()
-
-    assert.equal(response.statusCode, 201)
-  }
-
-  const limited = await submit()
+  const limited = await withSignedStorageObject(async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await submit()
+      assert.equal(response.statusCode, 201)
+    }
+    return submit()
+  })
 
   assert.equal(limited.statusCode, 429)
 
@@ -1811,26 +1877,27 @@ test("supplier applications are rate limited", async () => {
   await app.close()
 })
 
-test("legacy job creation, provider discovery, and quote workflows are retired", async () => {
+test("customers can post jobs and providers can discover and quote open jobs", async () => {
   const app = await buildApp({ config, database: null, authVerifier, profileStore, marketplaceStore: createTestMarketplaceStore() })
   const unauthenticated = await app.inject({ method: "GET", url: "/v1/jobs" })
   assert.equal(unauthenticated.statusCode, 401)
   const created = await app.inject({ method: "POST", url: "/v1/jobs", headers: { authorization: "Bearer valid-token" }, payload: { title: "Repair a leaking tap", description: "The kitchen tap is leaking and needs repair.", category: "Plumbing", locationLabel: "Nairobi", budgetMinor: 250000, requestedFor: null } })
-  assert.equal(created.statusCode, 410)
+  assert.equal(created.statusCode, 201)
   const providerFeed = await app.inject({ method: "GET", url: "/v1/jobs?view=feed", headers: { authorization: "Bearer provider-token" } })
-  assert.equal(providerFeed.statusCode, 403)
-  const submitted = await app.inject({ method: "POST", url: "/v1/jobs/a1a1a1a1-0000-4000-8000-000000000001/quotes", headers: { authorization: "Bearer provider-token" }, payload: { amountMinor: 230000, message: "I can repair the tap tomorrow morning.", availability: "Tomorrow morning" } })
-  assert.equal(submitted.statusCode, 410)
+  assert.equal(providerFeed.statusCode, 200)
+  const submitted = await app.inject({ method: "POST", url: "/v1/jobs/c2cc0027-b466-45db-a190-c89f981e6328/quotes", headers: { authorization: "Bearer provider-token" }, payload: { amountMinor: 230000, message: "I can repair the tap tomorrow morning.", availability: "Tomorrow morning" } })
+  assert.equal(submitted.statusCode, 201)
   await app.close()
 })
 
-test("dual-role accounts cannot create customer-posted jobs", async () => {
+test("dual-role accounts can post jobs while retaining their provider role", async () => {
   const app = await buildApp({ config, database: null, authVerifier, profileStore, marketplaceStore: createTestMarketplaceStore() })
-  const response = await app.inject({ method: "POST", url: "/v1/jobs", headers: { authorization: "Bearer dual-role-token" }, payload: { title: "Cleaning work", description: "A job description long enough to be valid.", category: "Cleaning", locationLabel: "Nairobi" } })
-  assert.equal(response.statusCode, 410)
+  const response = await app.inject({ method: "POST", url: "/v1/jobs", headers: { authorization: "Bearer dual-role-token" }, payload: { title: "Cleaning work", description: "A job description long enough to be valid.", category: "Cleaning", locationLabel: "Nairobi", budgetMinor: 0 } })
+  assert.equal(response.statusCode, 201, response.body)
   await app.close()
 })
 test("marketplace activity is available to admins only and access is audited", async () => {
+  adminEvents.length = 0
   const app = await buildApp({
     config,
     database: null,

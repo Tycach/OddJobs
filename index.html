@@ -6,6 +6,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title><!-- figma:title --></title>
+    <script>
+      (() => {
+        if (!window.location.pathname.endsWith("/adminInviteAccept")) return
+        const params = new URLSearchParams(window.location.hash.slice(1))
+        const query = new URLSearchParams(window.location.search)
+        const invitationId = params.get("invitationId") ?? query.get("invitationId")
+        const token = params.get("token") ?? query.get("token")
+        if (!invitationId || !token) return
+        try {
+          window.localStorage.setItem("oddjobs.pendingAdminInvitation", JSON.stringify({
+            invitationId,
+            token,
+            email: params.get("email") ?? query.get("email") ?? "",
+          }))
+        } catch {
+          // The page can still attempt to use the invitation directly from the URL.
+        }
+      })()
+    </script>
     <!-- figma:head-end -->
   </head>
   <body>

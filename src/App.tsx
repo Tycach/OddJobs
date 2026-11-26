@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
   AuthProvider,
+  checkApiReadiness,
   useAuth,
   type AdminAccess,
 } from "./auth/AuthProvider"
@@ -52,7 +53,7 @@ import {
 function preloadPage(screen: Screen, role: Role) {
   const customerPage = ["home", "workFeed", "map", "post", "jobs", "bids", "checkout", "track", "chat", "review", "dispute", "history", "saved", "settings", "hiringAnalytics", "hiringGuide"]
   const providerPage = ["providerHome", "listingCreate", "onboarding", "providerVerification", "identityVerification", "feed", "jobDetail", "providerBids", "management", "wallet", "reputation", "training", "plans", "analytics", "ads"]
-  const adminPage = ["messages", "overview", "analytics", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "config", "team"]
+  const adminPage = ["messages", "overview", "actionCenter", "analytics", "monitoring", "users", "verification", "categories", "moderation", "adApprovals", "config", "team"]
   let load: (() => Promise<unknown>) | undefined
 
   if (screen === "welcome") load = loadLandingPage
@@ -312,30 +313,99 @@ function AppShell() {
   const [routeNotice, setRouteNotice] = useState("")
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [adminAccess, setAdminAccess] = useState<AdminAccess | null>(null)
+  const [adminAccessUserId, setAdminAccessUserId] = useState<string | null>(null)
+  const [adminAccessLoading, setAdminAccessLoading] = useState(false)
+  const [adminAccessError, setAdminAccessError] = useState("")
+  const [adminAccessErrorUserId, setAdminAccessErrorUserId] = useState<string | null>(null)
+  const [adminAccessReloadKey, setAdminAccessReloadKey] = useState(0)
+  const adminInviteRedeeming = useRef(false)
   const [signingOut, setSigningOut] = useState(false)
   const [store, setStore] = useState<DemoStore>(readDemoStore)
   const [storageError, setStorageError] = useState("")
-  const [online, setOnline] = useState(navigator.onLine)
-  const [offlineBannerDismissed, setOfflineBannerDismissed] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline" | "unavailable" | "reconnecting" | "restored">(() => navigator.onLine ? "checking" : "offline")
+  const [connectionRetry, setConnectionRetry] = useState(0)
+  const hadConnectionIssue = useRef(!navigator.onLine)
   const { role, screen } = route
-  const workspaceNavigation = role === "admin" && adminAccess
-    ? navigation.admin.filter((item) => adminAccess.screens.includes(item.screen))
+  const currentAdminAccess = adminAccessUserId === auth.profile?.id ? adminAccess : null
+  const currentAdminAccessError = !adminAccessLoading && adminAccessErrorUserId === auth.profile?.id ? adminAccessError : ""
+  const workspaceNavigation = role === "admin"
+    ? currentAdminAccess
+      ? navigation.admin.filter((item) => currentAdminAccess.screens.includes(item.screen))
+      : navigation.admin.filter((item) => item.screen === "overview")
     : navigation[role]
   useEffect(() => {
-    if (role !== "admin" || !auth.profile) { setAdminAccess(null); return }
+    if (role !== "admin" || !auth.profile) {
+      setAdminAccess(null)
+      setAdminAccessUserId(null)
+      setAdminAccessLoading(false)
+      setAdminAccessError("")
+      setAdminAccessErrorUserId(null)
+      return
+    }
     let active = true
-    void auth.getAdminAccess().then((access) => { if (active) setAdminAccess(access) }).catch((error: unknown) => {
+    setAdminAccess(null)
+    setAdminAccessUserId(null)
+    setAdminAccessLoading(true)
+    setAdminAccessError("")
+    setAdminAccessErrorUserId(null)
+    void auth.getAdminAccess().then((access) => {
+      if (active) {
+        setAdminAccess(access)
+        setAdminAccessUserId(auth.profile!.id)
+      }
+    }).catch((error: unknown) => {
       console.error("Unable to load admin access profile.", error)
+      if (active) {
+        setAdminAccessError(error instanceof Error ? error.message : "Your admin access could not be loaded.")
+        setAdminAccessErrorUserId(auth.profile!.id)
+      }
+    }).finally(() => {
+      if (active) setAdminAccessLoading(false)
     })
     return () => { active = false }
-  }, [role, auth.profile?.id, auth.getAdminAccess])
+  }, [role, auth.profile?.id, auth.getAdminAccess, adminAccessReloadKey])
+  useLayoutEffect(() => {
+    const redeemPendingInvitation = () => {
+      if (!auth.profile || adminInviteRedeeming.current) return
+      let invitation: { invitationId: string; token: string }
+      try {
+        const value = localStorage.getItem("oddjobs.pendingAdminInvitation")
+          ?? sessionStorage.getItem("oddjobs.pendingAdminInvitation")
+        if (!value) return
+        invitation = JSON.parse(value) as { invitationId: string; token: string }
+        if (!invitation.invitationId || !invitation.token) throw new Error("The saved admin access link is incomplete.")
+      } catch (error) {
+        localStorage.removeItem("oddjobs.pendingAdminInvitation")
+        sessionStorage.removeItem("oddjobs.pendingAdminInvitation")
+        setRouteNotice(error instanceof Error ? error.message : "The saved admin access link is invalid.")
+        return
+      }
+      adminInviteRedeeming.current = true
+      void auth.acceptAdminInvitation(invitation.invitationId, invitation.token).then(async () => {
+        localStorage.removeItem("oddjobs.pendingAdminInvitation")
+        sessionStorage.removeItem("oddjobs.pendingAdminInvitation")
+        await auth.refreshProfile()
+        const nextRoute: WorkspaceRoute = { role: "admin", screen: "overview" }
+        window.history.replaceState(null, "", workspacePath(nextRoute))
+        setRoute(nextRoute)
+        setRouteNotice("")
+      }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "This admin access link could not be redeemed."
+        setRouteNotice(message)
+        window.dispatchEvent(new CustomEvent("oddjobs:admin-invite-result", { detail: { error: message } }))
+      }).finally(() => { adminInviteRedeeming.current = false })
+    }
+    window.addEventListener("oddjobs:admin-invite-pending", redeemPendingInvitation)
+    redeemPendingInvitation()
+    return () => window.removeEventListener("oddjobs:admin-invite-pending", redeemPendingInvitation)
+  }, [auth.profile?.id, auth.acceptAdminInvitation, auth.refreshProfile, route.screen])
   useEffect(() => {
-    if (role !== "admin" || !adminAccess || route.screen === "login") return
-    if (adminAccess.screens.includes(route.screen)) return
+    if (role !== "admin" || !currentAdminAccess || route.screen === "login") return
+    if (currentAdminAccess.screens.includes(route.screen)) return
     const nextRoute = { role: "admin" as const, screen: "overview" as const }
     window.history.replaceState(null, "", workspacePath(nextRoute))
     setRoute(nextRoute)
-  }, [role, route.screen, adminAccess])
+  }, [role, route.screen, currentAdminAccess])
   useEffect(() => {
     if (role !== "provider" || screen !== "profile") return
     const nextRoute: WorkspaceRoute = { role: "provider", screen: "settings" }
@@ -504,22 +574,59 @@ function AppShell() {
       setStorageError("")
     } catch (error) {
       console.error("Unable to save OddJobs demo data.", error)
-      setStorageError("Demo changes could not be saved on this device.")
+      setStorageError("Some locally saved information could not be stored on this device.")
     }
   }, [store])
 
   useEffect(() => {
-    const setConnected = () => {
-      setOnline(navigator.onLine)
-      setOfflineBannerDismissed(false)
+    let active = true
+    let checking = false
+    let restoredTimer = 0
+    const checkConnection = async () => {
+      if (!navigator.onLine) {
+        setConnectionStatus("offline")
+        return
+      }
+      if (checking) return
+      checking = true
+      setConnectionStatus((current) => current === "offline" || current === "unavailable" ? "reconnecting" : current)
+      try {
+        const ready = await checkApiReadiness()
+        if (!active) return
+        if (!ready) {
+          hadConnectionIssue.current = true
+          setConnectionStatus("unavailable")
+          return
+        }
+        if (hadConnectionIssue.current) {
+          hadConnectionIssue.current = false
+          setConnectionStatus("restored")
+          window.clearTimeout(restoredTimer)
+          restoredTimer = window.setTimeout(() => active && setConnectionStatus("connected"), 4000)
+        } else setConnectionStatus("connected")
+      } catch {
+        if (active) {
+          hadConnectionIssue.current = true
+          setConnectionStatus(navigator.onLine ? "unavailable" : "offline")
+        }
+      } finally {
+        checking = false
+      }
     }
-    window.addEventListener("online", setConnected)
-    window.addEventListener("offline", setConnected)
+    const handleOffline = () => { hadConnectionIssue.current = true; setConnectionStatus("offline") }
+    const handleOnline = () => { setConnectionStatus("reconnecting"); void checkConnection() }
+    void checkConnection()
+    const interval = window.setInterval(() => void checkConnection(), 30000)
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
     return () => {
-      window.removeEventListener("online", setConnected)
-      window.removeEventListener("offline", setConnected)
+      active = false
+      window.clearInterval(interval)
+      window.clearTimeout(restoredTimer)
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
     }
-  }, [])
+  }, [connectionRetry])
 
   if (auth.loading) {
     return (
@@ -624,7 +731,7 @@ function AppShell() {
       case "workFeed":
         return <CustomerScreens screen="workFeed" go={go} onOpenProvider={openProvider} />
       case "search":
-        return <ProviderDirectory onOpenProvider={openProvider} />
+        return <ProviderDirectory />
       case "map":
         return <CustomerScreens screen="map" go={go} onOpenProvider={openProvider} />
       case "profile":
@@ -704,6 +811,8 @@ function AppShell() {
         return <AdminConsoleScreen screen="acceptInvite" />
       case "overview":
         return <AdminConsoleScreen screen="overview" />
+      case "actionCenter":
+        return <AdminConsoleScreen screen="actionCenter" />
       case "monitoring":
         return <AdminConsoleScreen screen="monitoring" />
       case "users":
@@ -761,6 +870,8 @@ function AppShell() {
         />
       </DemoContext.Provider>
     )
+  if (screen === "adminInviteAccept")
+    return <Suspense fallback={<p className="center-note" role="status">Loading secure invitation…</p>}><AdminConsoleScreen screen="acceptInvite" /></Suspense>
   return (
     <DemoContext.Provider value={{ store, updateStore }}>
       <div className={`app role-${role}`}>
@@ -887,18 +998,14 @@ function AppShell() {
             </aside>
           </>
         )}
-        {(!online || storageError) && !offlineBannerDismissed && (
-          <button
-            className="network-banner"
-            onClick={() => setOfflineBannerDismissed(true)}
-          >
-            <span>
-              <i /> {storageError ? "Storage warning" : "Offline mode"}
-            </span>
-            <b>{storageError || "Saved demo content is available"}</b>
-            <Icon name="close" size={16} />
-          </button>
+        {!['checking', 'connected'].includes(connectionStatus) && (
+          <div className={`network-banner network-banner-${connectionStatus}`} role="status" aria-live="polite">
+            <span><i />{connectionStatus === "offline" ? "You’re offline" : connectionStatus === "unavailable" ? "OddJobs is temporarily unavailable" : connectionStatus === "reconnecting" ? "Reconnecting…" : "Back online"}</span>
+            <b>{connectionStatus === "offline" ? "Live data may be out of date. Posting, payments, messages, and account changes need a connection; actions are not queued." : connectionStatus === "unavailable" ? "We can’t reach OddJobs right now. Your live data may be out of date." : connectionStatus === "reconnecting" ? "Checking your connection to OddJobs…" : "Connection restored. Refresh this page’s data if anything still looks out of date."}</b>
+            {connectionStatus !== "restored" && <button className="connection-retry" onClick={() => setConnectionRetry((value) => value + 1)} disabled={connectionStatus === "reconnecting"}>Try again</button>}
+          </div>
         )}
+        {storageError && <div className="network-banner network-banner-warning" role="alert"><span><i />Notice</span><b>{storageError}</b><button className="connection-retry" onClick={() => setStorageError("")} aria-label="Dismiss notice"><Icon name="close" size={16} /></button></div>}
         <aside className="sidebar">
           <div className="workspace-label">
             {role === "consumer" ? "HIRING WORKSPACE" : role === "provider" ? "WORKER WORKSPACE" : `${role} workspace`}
@@ -950,8 +1057,14 @@ function AppShell() {
               <button type="button" onClick={() => setRouteNotice("")}>Dismiss</button>
             </div>
           )}
+          {role === "admin" && auth.profile && !currentAdminAccess && (
+            <div className="content route-access-notice" role={currentAdminAccessError ? "alert" : "status"}>
+              <p>{currentAdminAccessError ? `Admin access could not be loaded: ${currentAdminAccessError}` : "Loading your admin pages..."}</p>
+              {currentAdminAccessError && <button type="button" onClick={() => setAdminAccessReloadKey((value) => value + 1)}>Try again</button>}
+            </div>
+          )}
           <Suspense fallback={<div className="page-loading-skeleton" role="status" aria-label="Loading page"><span /><span /><span /></div>}>
-            {renderScreen()}
+            {role === "admin" && auth.profile && !currentAdminAccess ? null : renderScreen()}
           </Suspense>
         </main>
       </div>

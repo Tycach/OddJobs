@@ -92,6 +92,7 @@ export type MarketplaceJob = {
   shareExactLocationWithProvider?: boolean
   distanceKm?: number | null
   completionNote?: string | null
+  completionMedia?: ServiceListingMedia[]
   revisionNote?: string | null
   media?: ServiceListingMedia[]
   createdAt: string
@@ -192,7 +193,9 @@ export type MarketplaceProviderQuote = MarketplaceQuote & {
 
 export type JobPaymentMethod = "cash" | "manual_transfer"
 export type JobPaymentStatus = "awaiting_payment" | "reported" | "paid" | "disputed" | "refunded"
-export type PlatformFeeStatus = "due" | "reported" | "received" | "disputed"
+export type PlatformFeeStatus = "due" | "reported" | "received" | "disputed" | "needs_correction"
+export type AdminCommissionFilter = PlatformFeeStatus | "overdue" | "all"
+export type JobPaymentHistoryEvent = { action: string; actorId: string | null; metadata: Record<string, string | number | boolean | null>; createdAt: string }
 export type JobPaymentRecord = {
   id: string
   paymentReference: string
@@ -223,6 +226,9 @@ export type JobPaymentRecord = {
   platformFeePaymentReference: string | null
   platformFeeReceivedAt: string | null
   platformFeeReceiptReference: string | null
+  platformFeeCorrectionReason: string | null
+  platformFeeReminderCycle: number
+  platformFeeEvents: JobPaymentHistoryEvent[]
   disputeReason: string | null
   resolutionNote: string | null
   resolvedAt: string | null
@@ -255,7 +261,7 @@ export type ProviderWalletPayment = {
 }
 
 export type AdminJobPaymentPage = AdminPage<JobPaymentRecord> & {
-  summary: { paidGrossMinor: number; commissionMinor: number; providerNetMinor: number; commissionDueMinor: number; disputedCount: number }
+  summary: { paidGrossMinor: number; providerNetMinor: number; commissionDueMinor: number; commissionReportedMinor: number; commissionReceivedMinor: number; commissionDisputedMinor: number; disputedCount: number }
   workers: Array<{ providerId: string; providerName: string; paidJobs: number; grossMinor: number; commissionMinor: number; netMinor: number; payoutHeld: boolean }>
 }
 
@@ -391,6 +397,7 @@ export class MarketplaceConflictError extends Error {
 }
 
 export interface MarketplaceStore {
+  getJobHirerSummary?(providerUserId: string, jobId: string): Promise<{ displayName: string; memberSince: string; verified: boolean; completedJobs: number } | null>
   hasActiveCommissionRestriction?(userId: string): Promise<boolean>
   listActiveServiceCategories?(): Promise<Array<{ name: string; slug: string }>>
   listMyJobPayments?(userId: string, role: "consumer" | "provider"): Promise<JobPaymentRecord[]>
@@ -484,7 +491,7 @@ export interface MarketplaceStore {
     jobId: string,
     transition: "start" | "submit_completion" | "confirm_completion" | "request_revision" | "cancel",
     requestId: string,
-    details?: { note: string },
+    details?: { note: string; media?: ServiceListingMedia[] },
   ): Promise<MarketplaceJob | null>
 }
 
@@ -553,6 +560,8 @@ export type AdminInvitationSummary = {
   invitedByName: string
   createdAt: string
   expiresAt: string
+  acceptedAt: string | null
+  revokedAt: string | null
 }
 
 export type AdminTeamSummary = {
@@ -701,6 +710,14 @@ export type AdminAdCampaign = {
   placement: string
   destinationUrl: string | null
   status: "pending" | "approved" | "rejected"
+  imageUrl?: string | null
+  startAt?: string | null
+  endAt?: string | null
+  priceMinor?: number | null
+  paymentStatus?: "pending" | "received"
+  paymentReference?: string | null
+  impressions?: number
+  clicks?: number
   decisionReason: string | null
   createdAt: string
 }
@@ -776,11 +793,13 @@ export interface AdminStore {
   listAdminSupportCaseMessages?(caseId: string): Promise<SupportCaseMessage[] | null>
   createAdminSupportCaseMessage?(adminUserId: string, caseId: string, body: string, requestId: string): Promise<SupportCaseMessage | null>
   setAdminSupportCaseStatus?(adminUserId: string, caseId: string, status: SupportCaseStatus, requestId: string): Promise<SupportCaseSummary | null>
-  listAdminJobPayments?(search: string, status: JobPaymentStatus | "all", limit: number, offset: number): Promise<AdminJobPaymentPage>
+  listAdminJobPayments?(search: string, status: JobPaymentStatus | "all", commissionStatus: AdminCommissionFilter, limit: number, offset: number): Promise<AdminJobPaymentPage>
   setAdminCommissionRestriction?(input: { actorUserId: string; userId: string; restricted: boolean; reason: string; requestId: string }): Promise<{ restricted: boolean; reason: string | null } | null>
   resolveAdminJobPayment?(input: { actorUserId: string; paymentId: string; resolution: "paid" | "refunded"; reason: string; requestId: string }): Promise<JobPaymentRecord | null>
   setAdminProviderPayoutHold?(input: { actorUserId: string; providerId: string; held: boolean; reason: string; requestId: string }): Promise<boolean>
   recordAdminPlatformFeeReceipt?(input: { actorUserId: string; paymentId: string; receiptReference: string; requestId: string }): Promise<JobPaymentRecord | null>
+  requestAdminPlatformFeeCorrection?(input: { actorUserId: string; paymentId: string; reason: string; requestId: string }): Promise<JobPaymentRecord | null>
+  sendAdminPlatformFeeReminder?(input: { actorUserId: string; paymentId: string; note: string; requestId: string }): Promise<JobPaymentRecord | null>
   getAdminOverview(): Promise<AdminOverview>
   getAdminAnalytics(filters: AdminAnalyticsFilters): Promise<AdminAnalyticsReport>
 
@@ -877,13 +896,21 @@ export interface AdminStore {
   listAdminAdCampaigns(status: "all" | "pending" | "approved" | "rejected"): Promise<AdminAdCampaign[]>
 
   createAdCampaign(input: {
-    advertiserId: string
+    advertiserId: string | null
     advertiserName: string
     title: string
     description: string
     placement: string
     destinationUrl: string | null
+    imageUrl?: string | null
+    startAt?: Date | null
+    endAt?: Date | null
+    priceMinor?: bigint | null
   }): Promise<AdminAdCampaign>
+
+  listLiveAds?(placement: string): Promise<Array<{ id: string; title: string; description: string; advertiserName: string; imageUrl: string | null; destinationUrl: string | null }>>
+  recordAdCampaignEvent?(campaignId: string, eventType: "impression" | "click"): Promise<boolean>
+  markAdCampaignPaid?(input: { actorUserId: string; campaignId: string; reference: string; requestId: string }): Promise<AdminAdCampaign | null>
 
   decideAdminAdCampaign(input: {
     actorUserId: string

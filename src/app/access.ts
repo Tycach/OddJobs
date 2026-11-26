@@ -37,15 +37,16 @@ export const roleScreens: Record<Role, readonly Screen[]> = {
   consumer: [
     "workspace", "login", "providerApply", "identityVerification", "home", "workFeed", "post", "jobs", "payments", "bids", "profile", "chat",
     "dispute", "history", "saved", "training", "analytics", "hiringAnalytics", "hiringGuide", "notifications", "settings",
+    "adminInviteAccept",
   ],
   provider: [
     "login", "providerHome", "providerVerification", "profile", "feed", "jobDetail", "providerBids",
     "management", "wallet", "reputation",
-    "notifications", "chat", "settings",
+    "notifications", "chat", "settings", "adminInviteAccept",
   ],
   admin: [
-    "login", "overview", "team", "users", "verification", "categories", "moderation",
-    "adApprovals", "audit", "payments", "operations", "config", "monitoring", "messages", "settings", "analytics",
+    "login", "overview", "actionCenter", "team", "users", "verification", "categories", "moderation",
+    "adApprovals", "audit", "payments", "operations", "config", "monitoring", "messages", "settings", "analytics", "adminInviteAccept",
   ],
   support: ["login", "disputes", "inbox", "knowledgeBase", "settings"],
   partner: ["login", "programmes", "impact", "builder", "settings"],
@@ -53,7 +54,6 @@ export const roleScreens: Record<Role, readonly Screen[]> = {
 
 export const navigation: Record<Role, { label: string; icon: string; screen: Screen }[]> = {
   consumer: [
-    "adminInviteAccept",
     { label: "Dashboard", icon: "grid", screen: "home" },
     { label: "Find workers", icon: "search", screen: "workFeed" },
     { label: "Saved workers", icon: "star", screen: "saved" },
@@ -82,6 +82,7 @@ export const navigation: Record<Role, { label: string; icon: string; screen: Scr
   ],
   admin: [
     { label: "Overview", icon: "grid", screen: "overview" },
+    { label: "Action center", icon: "flag", screen: "actionCenter" },
     { label: "Admin team", icon: "users", screen: "team" },
     { label: "Analytics", icon: "chart", screen: "analytics" },
     { label: "Monitoring", icon: "chart", screen: "monitoring" },
@@ -137,7 +138,7 @@ export function getAuthenticatedRoute(
       : { role: requested.role, screen: "login" }
   }
 
-  if (!authenticatedRoles.includes(requested.role)) {
+  if (!authenticatedRoles.includes(requested.role) && requested.screen !== "adminInviteAccept") {
     // Keep a workspace-specific login page open so it can explain the role mismatch.
     // Do not silently sign a customer into the provider (or other) dashboard.
     if (requested.screen === "login") return requested
@@ -146,6 +147,7 @@ export function getAuthenticatedRoute(
   }
 
   if (requested.screen === "workspace") return requested
+  if (requested.screen === "adminInviteAccept") return requested
   if (isPublicScreen) return { role: requested.role, screen: roleHomes[requested.role] }
   return requested
 }
